@@ -1,0 +1,23 @@
+# Build output and local runtime data (contains your Apple ID / session — never commit)
+dist/
+build/
+data/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Generated
+skyfold.ico
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+selftest*.txt

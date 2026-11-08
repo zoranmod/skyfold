@@ -1,0 +1,218 @@
+"""Apple ID sign-in. The password is never stored; only Apple's session cookies are kept, in %LOCALAPPDATA%/Skyfold/session."""
+
+from __future__ import annotations
+
+import logging
+import shutil
+import threading
+from dataclasses import dataclass
+from typing import Any
+
+from .config import SESSION_DIR
+from .i18n import t
+
+log = logging.getLogger(__name__)
+
+
+class LoginError(Exception):
+    pass
+
+
+class Offline(Exception):
+    """Apple could not be reached; the saved session may still be fine."""
+
+
+_SAVE_LOCK = threading.Lock()
+_CURRENT: Any = None  # the PyiCloudSession whose state belongs on disk (None: any)
+TIMEOUT = (20, 300)  # connect, read (per chunk): a stalled connection must not hang a thread forever
+
+
+def make_current(api: Any) -> None:
+    """This sign-in is the one in use: from now on only its session is saved to disk. An older
+    session object that is still finishing a request must not overwrite the new token with its
+    old one (the next start would then restore a stale sign-in)."""
+    global _CURRENT
+    session = getattr(api, "session", None)
+    _CURRENT = session
+    if session is not None:
+        try:
+            session._save_session_data()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Couldn't save the session: %s", exc)
+
+
+def _serialize_session_saves() -> None:
+    """pyicloud rewrites the session files after every request. Drive downloads run several
+    requests at once, so those writes must take turns or the saved sign-in could be corrupted."""
+    from pyicloud.session import PyiCloudSession
+
+    original = PyiCloudSession._save_session_data
+    if getattr(original, "_skyfold_locked", False):
+        return
+
+    def save(self: Any) -> None:
+        import os
+
+        if _CURRENT is not None and self is not _CURRENT:
+            return  # a replaced sign-in: never write its old token over the new one
+        with _SAVE_LOCK:
+            folder = getattr(self, "_cookie_directory", None)
+            if folder and not os.path.isdir(folder):
+                return  # signed out meanwhile: don't bring the session back
+            original(self)
+
+    save._skyfold_locked = True  # type: ignore[attr-defined]
+    PyiCloudSession._save_session_data = save  # type: ignore[method-assign]
+
+    original_request = PyiCloudSession._request
+
+    def request(self: Any, method: str, url: str, **kwargs: Any) -> Any:
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = TIMEOUT
+        return original_request(self, method, url, **kwargs)
+
+    PyiCloudSession._request = request  # type: ignore[method-assign]
+
+
+@dataclass
+class LoginStep:
+    api: Any
+    needs_code: bool
+    notice: str = ""
+
+
+def restore(apple_id: str) -> Any | None:
+    """Reuse the saved session. Returns None when the user has to sign in again."""
+    from pyicloud import PyiCloudService
+
+    if not apple_id or not SESSION_DIR.exists():
+        return None
+    from pyicloud.exceptions import PyiCloudConnectionException
+    from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout
+
+    try:
+        # authenticate=False skips pyicloud's Windows Credential Manager lookup (we never store
+        # the password there); the saved session token is then validated explicitly.
+        _serialize_session_saves()
+        api = PyiCloudService(apple_id, None, cookie_directory=str(SESSION_DIR), authenticate=False,
+                              refresh_interval=None)  # no background Find My polling
+        api.authenticate()
+    except (PyiCloudConnectionException, RequestsConnectionError, Timeout) as exc:
+        raise Offline(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - anything else means "sign in again"
+        if _server_trouble(exc):
+            log.warning("Session restore: Apple's servers answered with an error; trying again later")
+            raise Offline(str(exc)) from exc
+        log.warning("Session restore failed (%s): %s", type(exc).__name__, exc)
+        return None
+    if api.requires_2fa or api.requires_2sa:
+        log.warning("Session restore: Apple asks for two-factor authentication again (trusted=%s)",
+                    getattr(api, "is_trusted_session", "?"))
+        return None
+    make_current(api)
+    return api
+
+
+def _server_trouble(exc: BaseException) -> bool:
+    """An Apple 5xx or a connection problem anywhere in the exception chain."""
+    from pyicloud.exceptions import PyiCloudAPIResponseException, PyiCloudConnectionException
+    from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout
+
+    seen: set[int] = set()
+    e: BaseException | None = exc
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if isinstance(e, (PyiCloudConnectionException, RequestsConnectionError, Timeout)):
+            return True
+        code = getattr(e, "code", None)
+        if isinstance(e, PyiCloudAPIResponseException) and isinstance(code, int) and code >= 500:
+            return True
+        e = e.__cause__ or e.__context__
+    return False
+
+
+def start_login(apple_id: str, password: str) -> LoginStep:
+    from pyicloud import PyiCloudService
+    from pyicloud import exceptions as ex
+
+    SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    log.info("Sign-in started")
+    try:
+        _serialize_session_saves()
+        api = PyiCloudService(apple_id, password, cookie_directory=str(SESSION_DIR), authenticate=False,
+                              refresh_interval=None)
+        # Always check the password with Apple. pyicloud would otherwise reuse the saved session
+        # token (even with force_refresh) and never look at the password: a wrong one "succeeded",
+        # and services that want a fresh sign-in (Find My after a restart) kept refusing. The trust
+        # token stays, so a trusted PC isn't asked for a 2FA code again.
+        api.session.data.pop("session_token", None)
+        api.authenticate(force_refresh=True)
+    except ex.PyiCloudAcceptTermsException as exc:
+        log.warning("Sign-in: Apple's new terms must be accepted first")
+        raise LoginError(t("Apple has updated its terms. Accept them on your iPhone (Settings) or at "
+                           "icloud.com, then sign in here again.")) from exc
+    except ex.PyiCloudAccountLockedException as exc:
+        log.warning("Sign-in: account locked")
+        raise LoginError(t("This Apple account is locked. Unlock it at iforgot.apple.com.")) from exc
+    except ex.PyiCloudFailedLoginException as exc:
+        if _server_trouble(exc):  # an Apple outage, not a wrong password
+            log.warning("Sign-in: Apple's servers failed: %s", exc)
+            raise LoginError(t("Can't reach Apple's servers. Check your internet connection.")) from exc
+        log.warning("Sign-in rejected: %s", exc)
+        raise LoginError(t("Wrong Apple ID or password.")) from exc
+    except ex.PyiCloudConnectionException as exc:
+        log.warning("Sign-in: Apple unreachable: %s", exc)
+        raise LoginError(t("Can't reach Apple's servers. Check your internet connection.")) from exc
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Sign-in failed")
+        raise LoginError(t("Sign-in failed: {error}", error=exc)) from exc
+
+    log.info("Sign-in: password accepted (2FA required=%s, 2SA=%s, trusted=%s)",
+             api.requires_2fa, api.requires_2sa, getattr(api, "is_trusted_session", "?"))
+    if api.requires_2sa and not api.requires_2fa:
+        raise LoginError(t("This account uses the old two-step verification, which isn't supported."))
+    if not api.requires_2fa:
+        make_current(api)  # this sign-in replaces the old one on disk
+        return LoginStep(api, needs_code=False)
+
+    # A security key is a property of the Apple account (not of USB devices plugged into this PC).
+    if getattr(api, "security_key_names", None):
+        log.warning("Sign-in: account uses security keys")
+        raise LoginError(t("This account requires a security key (FIDO), which isn't supported yet."))
+    notice = t("Enter the 6-digit code shown on your iPhone, iPad or Mac.")
+    try:
+        sent = api.request_2fa_code()
+        log.info("Sign-in: code requested (sent=%s, via %s)", sent,
+                 getattr(api, "two_factor_delivery_method", "?"))
+        if not sent:
+            # Apple usually shows the code on trusted devices on its own; ask for it anyway.
+            api.use_existing_trusted_device_code()
+        elif getattr(api, "two_factor_delivery_method", "") == "sms":
+            notice = t("We sent a code by SMS to your phone number. Enter it below.")
+    except Exception as exc:  # noqa: BLE001 - the code may still arrive on a trusted device
+        log.warning("Sign-in: requesting the code failed (%s): %s", type(exc).__name__, exc)
+        try:
+            api.use_existing_trusted_device_code()
+        except Exception:  # noqa: BLE001
+            pass
+    return LoginStep(api, needs_code=True, notice=notice)
+
+
+def submit_code(api: Any, code: str) -> None:
+    from pyicloud import exceptions as ex
+
+    try:
+        ok = api.validate_2fa_code(code.strip().replace(" ", ""))
+    except ex.PyiCloudException as exc:
+        log.warning("Sign-in: code check failed: %s", exc)
+        raise LoginError(t("Code check failed: {error}", error=exc)) from exc
+    log.info("Sign-in: code accepted=%s", ok)
+    if not ok:
+        raise LoginError(t("That code isn't right. Try again."))
+    if not api.is_trusted_session:
+        api.trust_session()
+    make_current(api)
+
+
+def logout() -> None:
+    shutil.rmtree(SESSION_DIR, ignore_errors=True)

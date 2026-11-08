@@ -1,0 +1,18 @@
+name: Feature request
+description: Suggest an idea
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check the **Limitations** section of the README first. Some things (online-only placeholders, Messages, Lost Mode) are out of scope or not possible through iCloud's web services.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like Skyfold to do, and why?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: How do you handle it today?

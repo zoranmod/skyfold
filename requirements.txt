@@ -1,0 +1,5 @@
+# Exact versions the app was built and tested with (full tree in requirements.lock.txt).
+pyicloud==2026.10.1
+PySide6==6.12.0
+watchdog==7.1.0
+Send2Trash==2.1.0
