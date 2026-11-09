@@ -71,6 +71,10 @@ def test_worker_signals_reach_ui_on_ui_thread(qapp, tmp_path, monkeypatch):
         ctl.thread.quit()
         ctl.thread.wait(2000)
         ctl.tray.hide()
+        ctl.flyout.close()
+        for obj in (ctl.flyout, ctl.tray, ctl.worker):
+            obj.deleteLater()
+        qapp.processEvents()
 
 
 def test_drive_size_estimate_uses_docs_category(qapp):
