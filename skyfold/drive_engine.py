@@ -907,7 +907,7 @@ class DriveSyncer:
             tmp_path = Path(tmp)
             try:
                 self.remote.download(item, tmp_path, on_bytes)
-                if tmp_path.stat().st_size != item.size:
+                if item.size >= 0 and tmp_path.stat().st_size != item.size:
                     with open(tmp_path, "rb") as fh:
                         zipped = fh.read(4) == b"PK"
                     if zipped and not item.path.lower().endswith(".zip"):
@@ -1131,11 +1131,19 @@ def _parent(path: str) -> str:
 
 def _collapse(paths: list[str]) -> list[str]:
     """Keep only top-most entries: deleting 'A' already covers 'A/b.txt'."""
+    kept: set[str] = set()
     out: list[str] = []
-    for p in sorted(paths):
-        if not any(p.startswith(q + "/") for q in out):
+    for p in sorted(paths, key=lambda x: x.count("/")):  # parents before their contents
+        q, covered = p, False
+        while "/" in q:
+            q = q.rsplit("/", 1)[0]
+            if q in kept:
+                covered = True
+                break
+        if not covered:
+            kept.add(p)
             out.append(p)
-    return out
+    return sorted(out)
 
 
 ProgressFn = Callable[[int], None]

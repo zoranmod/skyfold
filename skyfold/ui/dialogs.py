@@ -400,6 +400,8 @@ class LoginDialog(_Dialog):
         self._busy(True, t("Signing in…"))
 
         def done(step: auth.LoginStep) -> None:
+            if not self.isVisible():
+                return  # cancelled meanwhile: this sign-in is not used
             self.password.clear()
             self.api = step.api
             if step.needs_code:
@@ -439,6 +441,8 @@ class LoginDialog(_Dialog):
         self._task = run_async(lambda: auth.submit_code(self.api, code), lambda _r: self._finish(), fail)
 
     def _finish(self) -> None:
+        if not self.isVisible():
+            return  # the dialog was cancelled while Apple was still answering
         self.loggedIn.emit(self.api, self.email.text().strip())
         self.accept()
 
@@ -1461,6 +1465,7 @@ class DeviceRow(QFrame):
         lay.addWidget(icon, 0, Qt.AlignVCenter)
         lay.addLayout(col, 1)
         self.map_btn = QPushButton(t("Map"))
+        self.map_btn.setToolTip(t("Opens Google Maps in your browser with the device's last location."))
         self.map_btn.setObjectName("Link")
         self.map_btn.setCursor(Qt.PointingHandCursor)
         self.map_btn.setEnabled(dev.lat is not None)

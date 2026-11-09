@@ -96,6 +96,16 @@ def _mtime(value: str | None) -> float | None:
     return dt.replace(tzinfo=timezone.utc).timestamp() if dt else None
 
 
+def _size(data: dict[str, Any], is_dir: bool) -> int:
+    """Bytes, or -1 when iCloud didn't say (never mistaken for an empty file)."""
+    if is_dir:
+        return 0
+    try:
+        return int(data["size"])
+    except (KeyError, TypeError, ValueError):
+        return -1
+
+
 def item_name(data: dict[str, Any]) -> str:
     name = data.get("name") or data.get("drivewsid", "?")
     ext = data.get("extension")
@@ -187,7 +197,7 @@ class ICloudDrive:
                                     zone=it.get("zone", "com.apple.CloudDocs"),
                                     etag=it.get("etag"),
                                     is_dir=is_dir,
-                                    size=int(it.get("size") or 0),
+                                    size=_size(it, is_dir),
                                     mtime=_mtime(it.get("dateModified")),
                                 )
                                 if is_dir and recursive and (want is None or want(path)):

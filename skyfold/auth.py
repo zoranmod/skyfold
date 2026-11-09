@@ -215,4 +215,13 @@ def submit_code(api: Any, code: str) -> None:
 
 
 def logout() -> None:
-    shutil.rmtree(SESSION_DIR, ignore_errors=True)
+    global _CURRENT
+    _CURRENT = object()  # no session object may save itself again after this
+    for _ in range(3):
+        shutil.rmtree(SESSION_DIR, ignore_errors=True)
+        if not SESSION_DIR.exists():
+            return
+        import time
+
+        time.sleep(0.5)  # a file was still open (e.g. a request finishing): try again
+    log.warning("Sign-out: couldn't delete all session files in %s", SESSION_DIR)

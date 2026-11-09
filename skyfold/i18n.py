@@ -150,6 +150,8 @@ BS: dict[str, str] = {
     "Choose a folder.": "Izaberi folder.",
     "Enter the full folder path.": "Unesi punu putanju foldera.",
     "Clear": "Očisti",
+    "Opens Google Maps in your browser with the device's last location.":
+        "Otvara Google Maps u pregledniku s posljednjom lokacijom uređaja.",
     "After a restart, Apple asks for your password once more before it shows your devices. Photos, Drive and Notes keep syncing without it, and the password still isn't stored.":
         "Nakon ponovnog pokretanja Apple još jednom traži lozinku prije nego što pokaže tvoje uređaje. Slike, Drive i bilješke se i bez toga sinhronizuju, a lozinka se i dalje ne čuva.",
     "You signed in with another Apple ID. Turned off: {services}. Their folders hold the other account's files; choose a new, empty folder in Settings to turn them on again.":

@@ -570,6 +570,9 @@ class Syncer:
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
                 if target.exists():
+                    if rel not in links:  # not one of our links: someone's own file, leave it alone
+                        log.info("Album folder: %s exists and isn't Skyfold's; left as it is", rel)
+                        continue
                     target.unlink()
                 try:
                     os.link(src, target)  # same file, no extra space

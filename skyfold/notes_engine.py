@@ -410,6 +410,8 @@ def upgrade_sketches(page: Path, fallbacks: dict[str, str], download) -> int:
         if not url or src.startswith(("http:", "https:", "data:")):
             return tag
         current = (note_dir / urllib.parse.unquote(src).replace("\\", "/")).resolve()
+        if ASSETS not in current.parts:
+            return tag  # only our own attachment files are ever replaced
         new: Path | None = None
         try:
             new = Path(download(url, current.parent))
@@ -458,7 +460,7 @@ def pdfs_to_images(page: str, note_dir: Path, open_text: str) -> str:
     def swap(m: re.Match) -> str:
         src = m.group(1) or m.group(2)
         pdf = (note_dir / urllib.parse.unquote(src)).resolve()
-        if not pdf.exists():
+        if ASSETS not in pdf.parts or not pdf.exists():
             return m.group(0)
         images = render_pdf_pages(pdf)
         if not images:
@@ -661,9 +663,14 @@ class NotesSyncer:
             last_page = rel
 
         if res.full and not res.more:  # notes that vanished entirely (e.g. purged) since the last full read
-            for nid, row in known.items():
-                if nid not in seen:
-                    self._remove(row, res)
+            gone = [nid for nid in known if nid not in seen]
+            if len(gone) > max(10, len(known) // 2):
+                log.warning("Notes: a full read misses %d of %d notes; not removing them (looks incomplete)",
+                            len(gone), len(known))
+                res.errors += 1  # the cursor isn't advanced; the next full read decides again
+            else:
+                for nid in gone:
+                    self._remove(known[nid], res)
                     self.state.drop(nid)
         if not res.more and not res.errors and (res.full or self.state.get("orphan_sweep") != "1"):
             self._remove_leftover_pages(res)
@@ -720,7 +727,7 @@ class NotesSyncer:
         if old and old[1] and old[1].lower() == cand.lower():
             return cand
         k = 2
-        while cand.lower() in taken:
+        while cand.lower() in taken or ((self.root / cand).exists() and not _is_our_page(self.root / cand)):
             cand = f"{base} ({k}).html"
             k += 1
         return cand
