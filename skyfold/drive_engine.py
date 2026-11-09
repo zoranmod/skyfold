@@ -447,6 +447,11 @@ class DriveSyncer:
                 else:
                     remote_changed = r.etag != b.etag
                 local_changed = (lo.size, round(lo.mtime, 2)) != (b.lsize, round(b.lmtime or 0, 2))
+                if remote_changed and not local_changed and same and r.mtime is not None and r.size == b.size:
+                    # Only iCloud's version tag changed (e.g. the file was opened on the iPhone, which
+                    # records "last opened"): same size and same modified time = same content.
+                    self.state.put(Base(path, False, r.etag, r.size, b.lmtime, b.lsize, False))
+                    continue
                 if remote_changed and local_changed and same:
                     # already the iCloud version (e.g. downloaded just before a crash): remember it
                     self.state.put(Base(path, False, r.etag, r.size, lo.mtime, lo.size, False))

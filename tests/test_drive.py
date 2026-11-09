@@ -630,3 +630,17 @@ def test_dot_files_are_hidden_like_on_a_mac(env):
     assert hidden(root / "Shortcuts/.WorkflowHiddenFile") and not hidden(root / "Shortcuts/visible.txt")
     r = s.run()  # an attribute isn't a change: nothing to sync
     assert (r.uploaded, r.downloaded) == (0, 0) and d.trashed == []
+
+
+def test_file_opened_on_the_phone_is_not_downloaded_again(env):
+    """Opening a file in the Files app changes its iCloud version tag, not its content."""
+    s, d, root, _ = env
+    d.put("Photos/old.jpg", b"jpeg")
+    s.run()
+    d.items["Photos/old.jpg"]["etag"] = "opened-on-iphone"
+    d.downloads = getattr(d, "downloads", 0)
+    r = s.run()
+    assert (r.downloaded, r.uploaded, r.conflicts) == (0, 0, 0)
+    d.items["Photos/old.jpg"]["etag"] = "edited"
+    d.items["Photos/old.jpg"]["data"] = b"edited jpeg"
+    assert s.run().downloaded == 1  # a real edit still comes down
