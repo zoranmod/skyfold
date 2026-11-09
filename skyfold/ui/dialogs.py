@@ -1203,12 +1203,14 @@ class PendingDialog(_Dialog):
         drive = getattr(pending, "service", "photos") == "drive"
         if pending.to_pc:
             self._section(lay, pending, pending.to_pc,
-                          t("{n} files or folders were deleted in iCloud Drive", n=len(pending.to_pc)) if drive
+                          t("{n} files or folders were deleted in iCloud Drive",
+                            n=getattr(pending, "files_to_pc", 0) or len(pending.to_pc)) if drive
                           else t("{n} photos were deleted in iCloud", n=len(pending.to_pc)),
                           t("Delete on this PC too"), t("Keep on this PC"))
         if pending.to_cloud:
             self._section(lay, pending, pending.to_cloud,
-                          t("{n} files or folders were deleted on this PC", n=len(pending.to_cloud)) if drive
+                          t("{n} files or folders were deleted on this PC",
+                            n=getattr(pending, "files_to_cloud", 0) or len(pending.to_cloud)) if drive
                           else t("{n} photos were deleted on this PC", n=len(pending.to_cloud)),
                           t("Delete in iCloud too"), t("Bring them back to this PC"))
 

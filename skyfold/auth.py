@@ -8,7 +8,9 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
-from .config import SESSION_DIR
+from .config import PRIVATE_DIR, SESSION_DIR
+
+SIGNED_OUT = PRIVATE_DIR / "signed-out"  # set by Sign out; a session left behind is then never used
 from .i18n import t
 
 log = logging.getLogger(__name__)
@@ -85,7 +87,7 @@ def restore(apple_id: str) -> Any | None:
     """Reuse the saved session. Returns None when the user has to sign in again."""
     from pyicloud import PyiCloudService
 
-    if not apple_id or not SESSION_DIR.exists():
+    if not apple_id or not SESSION_DIR.exists() or SIGNED_OUT.exists():
         return None
     from pyicloud.exceptions import PyiCloudConnectionException
     from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout
@@ -172,6 +174,7 @@ def start_login(apple_id: str, password: str) -> LoginStep:
     if api.requires_2sa and not api.requires_2fa:
         raise LoginError(t("This account uses the old two-step verification, which isn't supported."))
     if not api.requires_2fa:
+        SIGNED_OUT.unlink(missing_ok=True)
         make_current(api)  # this sign-in replaces the old one on disk
         return LoginStep(api, needs_code=False)
 
@@ -211,12 +214,18 @@ def submit_code(api: Any, code: str) -> None:
         raise LoginError(t("That code isn't right. Try again."))
     if not api.is_trusted_session:
         api.trust_session()
+    SIGNED_OUT.unlink(missing_ok=True)
     make_current(api)
 
 
 def logout() -> None:
     global _CURRENT
     _CURRENT = object()  # no session object may save itself again after this
+    try:
+        SIGNED_OUT.parent.mkdir(parents=True, exist_ok=True)
+        SIGNED_OUT.write_text("", encoding="utf-8")  # even if a session file can't be deleted, it's never used
+    except OSError as exc:
+        log.warning("Sign-out: couldn't record it: %s", exc)
     for _ in range(3):
         shutil.rmtree(SESSION_DIR, ignore_errors=True)
         if not SESSION_DIR.exists():

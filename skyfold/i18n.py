@@ -150,6 +150,11 @@ BS: dict[str, str] = {
     "Choose a folder.": "Izaberi folder.",
     "Enter the full folder path.": "Unesi punu putanju foldera.",
     "Clear": "Očisti",
+    "Couldn't read the Drive folder's sync marker: {error}": "Oznaka Drive foldera se ne može pročitati: {error}",
+    "This Drive folder was used before and it isn't clear by which Apple ID. Choose a new, empty folder for iCloud Drive in Settings.":
+        "Ovaj Drive folder je ranije korišten i nije jasno s kojim Apple ID-om. U Postavkama izaberi novi, prazan folder za iCloud Drive.",
+    "{name} leads outside the photos folder; left alone": "{name} vodi izvan foldera za slike; ostavljeno kako jeste",
+    "{name} leads outside the notes folder; left alone": "{name} vodi izvan foldera za bilješke; ostavljeno kako jeste",
     "The Notes folder already has a Notes.html that isn't from Skyfold. Choose an empty folder for Notes in Settings.":
         "Folder za bilješke već ima Notes.html koji nije od Skyfolda. U Postavkama izaberi prazan folder za bilješke.",
     "This Drive folder belongs to another Apple ID. Choose a new, empty folder for iCloud Drive in Settings.":

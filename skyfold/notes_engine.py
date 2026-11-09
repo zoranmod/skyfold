@@ -13,6 +13,7 @@ import html
 import json
 import logging
 import os
+import tempfile
 import re
 import sqlite3
 import threading
@@ -21,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
-from .engine import Callbacks, Cancelled, SyncError, now_iso
+from .engine import Callbacks, Cancelled, SyncError, inside_root, now_iso
 from .i18n import t
 from .remote import AuthRequired, RemoteUnavailable, _translate
 
@@ -526,11 +527,16 @@ class NotesResult:
 
 
 def _is_our_index(p: Path) -> bool:
+    """Ours = the owner mark near the top (since 1.0.7), or an index from an earlier Skyfold (its exact
+    script line and style block, anywhere in the file)."""
     try:
         with open(p, encoding="utf-8", errors="replace") as fh:
-            return "skyfold-collapsed" in fh.read(500_000)
+            text = fh.read()
     except OSError:
         return False
+    if INDEX_MARK in text[:4096]:
+        return True
+    return "const KEY='skyfold-collapsed'" in text and "skyfold-theme" in text
 
 
 def _is_our_page(p: Path) -> bool:
@@ -646,6 +652,8 @@ class NotesSyncer:
             rel = self._path_for(n, folder, old, taken)
             try:
                 out_dir = (self.root / rel).parent
+                if not inside_root(self.root, out_dir):
+                    raise SyncError(t("{name} leads outside the notes folder; left alone", name=out_dir))
                 out_dir.mkdir(parents=True, exist_ok=True)
                 self.remote.export(n.id, out_dir, Path(rel).name, self.root / ASSETS)
                 self._polish(rel, n)
@@ -671,7 +679,12 @@ class NotesSyncer:
             last_page = rel
 
         if res.full and not res.more:  # notes that vanished entirely (e.g. purged) since the last full read
-            gone = [nid for nid in known if nid not in seen]
+            for nid in seen:
+                self.state.set(f"missing:{nid}", None)
+            missing_now = [nid for nid in known if nid not in seen]
+            gone = [nid for nid in missing_now if self.state.get(f"missing:{nid}")]  # missing twice in a row
+            for nid in missing_now:
+                self.state.set(f"missing:{nid}", "1")
             if gone and (not seen or len(gone) > max(10, len(known) // 2)):
                 log.warning("Notes: a full read misses %d of %d notes; not removing them (looks incomplete)",
                             len(gone), len(known))
@@ -680,6 +693,7 @@ class NotesSyncer:
                 for nid in gone:
                     self._remove(known[nid], res)
                     self.state.drop(nid)
+                    self.state.set(f"missing:{nid}", None)
         if not res.more and not res.errors and (res.full or self.state.get("orphan_sweep") != "1"):
             self._remove_leftover_pages(res)
             self.state.set("orphan_sweep", "1")
@@ -775,13 +789,15 @@ class NotesSyncer:
         if target.exists() and not _is_our_index(target):
             raise SyncError(t("The Notes folder already has a Notes.html that isn't from Skyfold. Choose an empty "
                               "folder for Notes in Settings."))
-        tmp = self.root / (INDEX + ".tmp")
-        tmp.write_text(page, encoding="utf-8")
+        fd, tmp = tempfile.mkstemp(prefix=".skyfold-index-", suffix=".tmp", dir=self.root)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(page)
         os.replace(tmp, target)
 
 
+INDEX_MARK = '<meta name="generator" content="Skyfold notes index">'
 INDEX_TEMPLATE = """<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html><head><meta charset="utf-8">""" + INDEX_MARK + """<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
 {theme_script}
 <style>{theme_vars}

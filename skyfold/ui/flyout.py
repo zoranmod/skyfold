@@ -282,6 +282,8 @@ class ActivityRow(QFrame):
         self.title_text, self.detail_text = split_activity(text, kind)
         self.text = QLabel()  # the file name (or the whole message when it isn't about one file)
         self.text.setObjectName("RowTitle")
+        self.text.setMinimumWidth(0)
+        self.text.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.text.setWordWrap(not self.detail_text)
         from PySide6.QtGui import QFontMetrics
 
@@ -290,6 +292,7 @@ class ActivityRow(QFrame):
         self.detail.setText(QFontMetrics(self.detail.font()).elidedText(self.detail_text, Qt.ElideMiddle, 290))
         self.detail.setToolTip(self.detail_text)
         self.detail.setMinimumWidth(0)
+        self.detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.detail.setVisible(bool(self.detail_text))
         self.when = QLabel(fmt_time(ts))
         self.when.setObjectName("Hint")
@@ -482,6 +485,7 @@ class Flyout(QWidget):
         # services
         services = QFrame()
         services.setObjectName("Card")
+        self.services_card = services
         sl = QVBoxLayout(services)
         sl.setContentsMargins(4, 4, 4, 4)
         sl.setSpacing(0)
@@ -657,7 +661,8 @@ class Flyout(QWidget):
                        "auth": ("cloud", t("Sign in"))}.get(
             state, ("sync", t("Sync")))
         self.sync_btn.setText(label)
-        self.sync_btn.setIcon(glyph(name, self.c["accent_fg"]))
+        self.sync_btn.setIcon(glyph(name, self.c["accent_fg"] if state != "paused" else self.c["disabled"]))
+        self.sync_btn.setEnabled(state != "paused")  # one way to continue: Resume
         self._status_line()
         self._fit()
 
@@ -844,11 +849,14 @@ class Flyout(QWidget):
             lay = row.layout()
             lay.activate()
             height += (lay.totalHeightForWidth(width) if lay.hasHeightForWidth() else row.sizeHint().height()) + 1
+        self.services_card.show()
         self.list.setFixedHeight(max(height, self.MIN_LIST_HEIGHT if rows else 1) + 2)
         room = self._limit() - (self._needed_height() - self.list.height())
         if self.list.height() > room:
             if room < 60:
                 self.list.setFixedHeight(0)  # no room at all: the buttons matter more than the list
+                if self._needed_height() > self._limit():
+                    self.services_card.hide()
             else:
                 self.list.setFixedHeight(room)
         self._fit()

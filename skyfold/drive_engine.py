@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from .drive_remote import WORKERS, DriveItem, DriveRemote, MacPackage
-from .engine import Callbacks, Cancelled, SyncError, check_free_space, now_iso, transfer_text, THROTTLE
+from .engine import Callbacks, Cancelled, SyncError, check_free_space, inside_root, now_iso, transfer_text, THROTTLE
 from .i18n import t
 from .remote import AuthRequired, RemoteUnavailable
 
@@ -226,10 +226,15 @@ class DriveSyncer:
             return
         try:
             text = marker.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return
+        except OSError as exc:
+            raise SyncError(t("Couldn't read the Drive folder's sync marker: {error}", error=exc)) from exc
         owner = next((ln.split(":", 1)[1].strip() for ln in text.splitlines() if ln.startswith("account:")), None)
-        if owner is None:  # made by an older version: it belongs to the account syncing it now
+        if owner is None and not has_base:
+            # made by an older version, and this sync database never synced it (e.g. another Apple ID
+            # signed in since): it can't be told whose files these are
+            raise SyncError(t("This Drive folder was used before and it isn't clear by which Apple ID. Choose a "
+                              "new, empty folder for iCloud Drive in Settings."))
+        if owner is None:  # made by an older version and synced by this database: it is this account's
             try:
                 with open(marker, "a", encoding="utf-8") as fh:
                     fh.write(account_line + "\n")
@@ -278,9 +283,7 @@ class DriveSyncer:
 
     def _check_inside(self, p: Path) -> None:
         """The real location (links and junctions resolved) must be inside the Drive folder."""
-        real_root = Path(os.path.realpath(self.root))
-        real = Path(os.path.realpath(p))
-        if real != real_root and real_root not in real.parents:
+        if not inside_root(self.root, p):
             raise SyncError(t("{name} leads outside the Drive folder; left alone", name=p))
 
     def _trash_local(self, p: Path) -> None:
@@ -338,6 +341,9 @@ class DriveSyncer:
         self.unreadable = set()
         for rel_dir in folders:
             d = self._abs(rel_dir) if rel_dir else self.root
+            if rel_dir and (_is_link(d) or not inside_root(self.root, d)):
+                self.unreadable.add(rel_dir)  # a link/junction may point anywhere: never sync through it
+                continue
             try:
                 entries = list(os.scandir(d))
             except FileNotFoundError:
@@ -420,6 +426,13 @@ class DriveSyncer:
         to_pc: list[str] = []  # delete on PC
         mkdir_local: list[DriveItem] = []  # new folders in iCloud
 
+        twins = self._case_twins(remote)
+        if twins:
+            def in_twin(p: str) -> bool:
+                return any(p == q or p.startswith(q + "/") for q in twins)
+
+            remote = {p: r for p, r in remote.items() if not in_twin(p)}
+            base = {p: b for p, b in base.items() if not in_twin(p)}
         partial = set(getattr(self.remote, "incomplete", set()) or ())
         if partial:
             log.warning("Drive: iCloud listed %d folders only partly; no deletions decided there", len(partial))
@@ -505,6 +518,13 @@ class DriveSyncer:
                 else:
                     remote_changed = r.etag != b.etag
                 local_changed = (lo.size, round(lo.mtime, 2)) != (b.lsize, round(b.lmtime or 0, 2))
+                if remote_changed and b.etag is not None and r.size == b.size and r.mtime is not None                         and b.lmtime is not None and abs(r.mtime - b.lmtime) < 2.5:
+                    # only iCloud's version tag moved (opened on a phone, folder renamed): content as before
+                    self.state.put(Base(path, False, r.etag, r.size, b.lmtime, b.lsize, False))
+                    remote_changed = False
+                    if local_changed and settled:
+                        uploads.append(path)
+                    continue
                 if remote_changed and not local_changed and same and r.mtime is not None and r.size == b.size:
                     # Only iCloud's version tag changed (e.g. the file was opened on the iPhone, which
                     # records "last opened"): same size and same modified time = same content.
@@ -571,6 +591,13 @@ class DriveSyncer:
                 continue
             self.state.put(Base(r.path, True, r.etag, None, None, None, False))
 
+        if partial:
+            def touches_partial(p: str) -> bool:
+                return any(q == p or q.startswith(p + "/") for q in partial) or listed_partly(p)
+
+            for lst in (to_cloud, to_pc):
+                for p in [p for p in lst if base.get(p) is not None and base[p].is_dir and touches_partial(p)]:
+                    lst.remove(p)  # iCloud didn't list everything inside: never delete it as a whole
         if self.folders:
             def leads_to_chosen(p: str) -> bool:
                 return any(f.startswith(p + "/") for f in self.folders)
@@ -623,6 +650,26 @@ class DriveSyncer:
                              else t("Drive: uploaded {n} files", n=res.uploaded), res.last_up)
         self.state_set_last_sync()
         return res
+
+    def _case_twins(self, remote: dict[str, DriveItem]) -> list[str]:
+        """iCloud paths that Windows would merge with another spelling (Docs/ and docs/): the first
+        spelling syncs, the others are left in iCloud with a message."""
+        first: dict[str, str] = {}
+        twins: list[str] = []
+        for p in sorted(remote, key=lambda x: (x.count("/"), x)):
+            if not p or any(p.startswith(q + "/") for q in twins):
+                continue
+            key = p.lower()
+            if key in first and first[key] != p:
+                twins.append(p)
+                if p not in self.unsupported:
+                    self.unsupported.add(p)
+                    self.cb.activity("info", t("Left in iCloud, {reason}: {name}",
+                                               reason=t("another item has the same name in different letter case"),
+                                               name=p))
+            else:
+                first.setdefault(key, p)
+        return twins
 
     def _without_case_twins(self, downloads: list[DriveItem], local: dict[str, Local]) -> list[DriveItem]:
         """Windows sees "Report.txt" and "report.txt" as one file: download only the first of such
@@ -688,15 +735,25 @@ class DriveSyncer:
                               base: dict[str, Base]) -> list[str]:
         """A folder deleted on this PC that holds new or edited files in iCloud: those come back
         down; only what is unchanged since the last sync goes to Recently Deleted."""
+        import bisect
+
         out: list[str] = []
         known = self.state.all() if to_cloud else {}
+        ordered = sorted(remote)
+
+        def below(p: str) -> list[str]:
+            lo = bisect.bisect_left(ordered, p + "/")
+            hi = bisect.bisect_left(ordered, p + "0")  # "0" sorts right after "/"
+            return ordered[lo:hi]
+
         for p in to_cloud:
             b = base.get(p)
             if b is None or not b.is_dir:
                 out.append(p)
                 continue
-            inside = [q for q in remote if q.startswith(p + "/") and not remote[q].is_dir]
-            if not inside and not any(q.startswith(p + "/") for q in remote):
+            all_below = below(p)
+            inside = [q for q in all_below if not remote[q].is_dir]
+            if not all_below:
                 out.append(p)  # nothing inside listed (e.g. a quick pass): judged by its files' rows
                 continue
             changed = [q for q in inside if known.get(q) is None
@@ -878,8 +935,8 @@ class DriveSyncer:
             if b.is_dir:
                 self.state.put(Base(q, True, etag, None, None, None, False))
             else:
-                if keep_etags and b.etag is not None and remote and q in remote and remote[q].size != b.size:
-                    etag = b.etag  # changed in iCloud too: the next pass sees it as a change
+                if keep_etags and b.etag is not None:
+                    etag = b.etag  # compared next pass: unchanged content is recognised, changes come down
                 self.state.put(Base(q, False, etag, b.size, b.lmtime, b.lsize, False))
 
     def apply_approved_deletions(self) -> None:
@@ -939,6 +996,9 @@ class DriveSyncer:
             else:
                 for p in to_cloud:
                     self._check_cancel()
+                    if self._abs(p).exists():  # back on this PC since the question: not deleted any more
+                        self.state.drop(p)
+                        continue
                     try:
                         self.remote.trash(remote[p])
                     except (AuthRequired, RemoteUnavailable):
@@ -965,6 +1025,9 @@ class DriveSyncer:
                     self._check_cancel()
                     target = self._abs(p)
                     b = base.get(p)
+                    if b is not None and not b.is_dir and target.is_dir():
+                        self.state.drop(p)  # was a file, is a folder now: not what was approved
+                        continue
                     if b is not None and not b.is_dir and target.is_file():
                         try:
                             st = target.stat()
@@ -1077,7 +1140,7 @@ class DriveSyncer:
                     st = target.stat()
                     self.state.put(Base(item.path, False, item.etag, item.size, st.st_mtime, st.st_size, False))
                     res.downloaded += 1
-                    res.last_down = res.last_down or str(target)
+                    res.last_down = str(target) if not res.downloaded - 1 else str(self.root)
                 if fatal is not None:
                     raise fatal
                 self.apply_approved_deletions()
@@ -1106,6 +1169,7 @@ class DriveSyncer:
             existing = remote.get(path)
             lo = local[path]
             try:
+                self._check_inside(self._abs(path))
                 data = self._abs(path).read_bytes()  # locked or unreadable: fail before touching iCloud
                 if existing is not None:
                     # Replacing a file: move the old iCloud version to Recently Deleted first.

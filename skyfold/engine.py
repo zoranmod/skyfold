@@ -40,6 +40,17 @@ class SyncError(Exception):
 DISK_RESERVE = 2 * 1024**3  # always leave this much free on the disk
 
 
+def inside_root(root: Path, p: Path) -> bool:
+    """Is p really inside root once links/junctions are followed? (p may not exist yet: its nearest
+    existing parent is checked.)"""
+    q = Path(p)
+    while not q.exists() and q.parent != q:
+        q = q.parent
+    real_root = Path(os.path.realpath(root))
+    real = Path(os.path.realpath(q))
+    return real == real_root or real_root in real.parents
+
+
 def check_free_space(folder: Path, needed: int) -> None:
     """Refuse to start downloads that would fill the disk (keeps a 2 GB reserve)."""
     import shutil
@@ -289,6 +300,7 @@ class Syncer:
     # main entry -----------------------------------------------------------
     def run(self, force_full: bool = False) -> Result:
         self.cancel_flag.clear()
+        self._verify: set[str] = set()  # paths whose existing file is compared with the download first
         result = Result()
         self._check_root()
 
@@ -465,6 +477,8 @@ class Syncer:
                     if rel is None:  # an identical file already existed and was adopted
                         continue
                     target = self._abs(rel)
+                    if not inside_root(self.root, target.parent):
+                        raise SyncError(t("{name} leads outside the photos folder; left alone", name=target.parent))
                     target.parent.mkdir(parents=True, exist_ok=True)
                     fd, tmp = tempfile.mkstemp(prefix=TMP_PREFIX, dir=target.parent)
                     os.close(fd)
@@ -481,6 +495,19 @@ class Syncer:
                         self.remote.download(res, tmp_path, on_bytes)
                         if res.size and tmp_path.stat().st_size != res.size:
                             raise SyncError(t("file size doesn't match"))
+                        if rel in self._verify:  # a file is already there: adopt it only if it's identical
+                            self._verify.discard(rel)
+                            import filecmp
+
+                            if filecmp.cmp(tmp_path, target, shallow=False):
+                                self.state.add_file(FileRow(a.id, res.key, rel, res.size, res.is_video,
+                                                            a.date.isoformat()), now_iso())
+                                taken.add(rel.lower())
+                                continue
+                            taken.add(rel.lower())  # someone else's file: the photo gets the next free name
+                            rel = self._place(a, res, taken) or rel
+                            self._verify.discard(rel)
+                            target = self._abs(rel)
                         os.replace(tmp_path, target)  # watcher ignores it: the source is a temp file
                         ts = a.date.timestamp()
                         os.utime(target, (ts, ts))
@@ -632,11 +659,9 @@ class Syncer:
                     same = res.size is not None and st.st_size == res.size                         and abs(st.st_mtime - a.date.timestamp()) < 2.5
                 except OSError:
                     same = False
-                if same:  # this very file is already here (e.g. sync database was rebuilt): adopt it
-                    self.state.add_file(FileRow(a.id, res.key, cand, res.size, res.is_video, a.date.isoformat()),
-                                        now_iso())
-                    taken.add(cand.lower())
-                    return None
+                if same:  # looks like this very photo (e.g. the database was rebuilt): compare after download
+                    self._verify.add(cand)
+                    return cand
             n += 1
 
     def _forget_local_only(self, asset_id: str, rows: list[FileRow]) -> None:

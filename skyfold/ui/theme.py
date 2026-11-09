@@ -132,6 +132,7 @@ QToolButton#Bar {{ background: transparent; border: none; border-radius: 8px; pa
 QToolButton#Bar:hover {{ background: {c['hover']}; }}
 QToolButton#Bar:pressed {{ background: {c['border']}; }}
 QToolButton#Bar:disabled {{ color: {c['disabled']}; }}
+QToolButton#Bar:focus {{ border: 2px solid {c['btn_hover']}; }}
 QToolButton#Bar[primary="true"] {{ color: {c['accent_fg']}; font-weight: 600; }}
 QFrame#FileTile {{ background: {c['surface2']}; border: 1px solid {c['border']}; border-radius: 8px; }}
 QLabel#RowTitle {{ font-size: 9.5pt; font-weight: 600; }}

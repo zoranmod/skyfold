@@ -19,6 +19,16 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
 - Notes: an existing Notes.html that isn't Skyfold's is never replaced; an empty answer from Apple never removes notes, however few.
 - Photos: a file already in place is adopted only when name, size and the photo's date all match.
 
+- Follow-up review of the 1.0.6 candidate (tests in tests/test_review3_fixes.py):
+  - Links/junctions are never followed by Photos, Notes or a quick Drive check, and nothing is uploaded from outside the Drive folder.
+  - A Drive folder whose sync marker can't be read, or an old folder that this sync database never synced, is refused instead of claimed by the signed-in Apple ID.
+  - An approved deletion is skipped when the file became a folder, or came back on the PC, since the question.
+  - A folder renamed in iCloud brings changes made to files inside it; a folder that iCloud lists only partly is never deleted in iCloud as a whole; folders whose names differ only in letter case stay apart.
+  - Photos: a file already in place is compared byte for byte with the photo before it is adopted; otherwise the photo gets its own name.
+  - Notes: a note missing from Apple's answer is removed only when the next full read confirms it; the index page is recognised by a mark at its top and is written through a uniquely named temporary file.
+  - Sign out is remembered even if a session file can't be deleted, so a leftover session is never used.
+  - Planning many folder deletions is fast.
+
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.
 - Deletion dialog and Find My fit small screens (long paths shortened, many devices scroll).
