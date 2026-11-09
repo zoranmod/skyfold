@@ -4,6 +4,11 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-09
+
+### Fixed
+- iCloud Drive: a file that was only opened on an iPhone or iPad (which changes its iCloud version tag, not its content) is no longer downloaded again.
+
 ## [1.0.0] - 2026-11-08
 
 First public release.
@@ -21,5 +26,6 @@ First public release.
 - English and Bosnian.
 - Portable build (`Skyfold-windows.zip`) from GitHub Actions, with a packaged self-test (`--selftest`).
 
-[Unreleased]: https://github.com/zoranmod/skyfold/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/zoranmod/skyfold/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/zoranmod/skyfold/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/zoranmod/skyfold/releases/tag/v1.0.0
