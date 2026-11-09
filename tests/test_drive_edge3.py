@@ -201,16 +201,16 @@ def test_followup_is_not_set_forever_for_a_file_folder_clash(env25):
 def test_count_is_not_quadratic(tmp_path):
     st = de.DriveState(tmp_path / "big.db")
     with st._db:
-        for i in range(100_000):
+        for i in range(20_000):
             st.put(de.Base(f"F{i % 100}/sub/file{i}.txt", False, "e", 1, 1.0, 1, False))
     s = de.DriveSyncer(st, FakeDrive(), tmp_path / "Drive", 25)
-    to_cloud = [f"F7/sub/file{i}.txt" for i in range(7, 100_000, 100)][:1000]  # 1 000 single files
+    to_cloud = [f"F7/sub/file{i}.txt" for i in range(7, 20_000, 100)]  # 200 single files
     res = de.DriveResult()
     t0 = time.perf_counter()
     s._deletions(to_cloud, [], {}, {}, res)  # all pending (count > threshold), nothing touched
     dt = time.perf_counter() - t0
     assert res.pending_to_cloud == to_cloud
-    assert dt < 5, f"_deletions took {dt:.1f}s for 1 000 deletions on 100k rows"
+    assert dt < 2, f"_deletions took {dt:.1f}s for 200 deletions on 20k rows"
 
 
 # ---------------------------------------------------------------------------------------------

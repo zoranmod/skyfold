@@ -116,9 +116,9 @@ def test_pc_delete_goes_to_icloud_without_pressing_sync(qt):
     app, w, th, d, remote, root, states, pend, notes = qt
     assert not root.exists()
     th.start()
-    assert pump(lambda: states and states[-1][0] == "idle"), states
     target = root / "2025/11/IMG_0001.HEIC"
-    assert target.exists()
+    assert pump(target.exists, 30), states  # the first sync downloads it (slow CI machines need time)
+    assert pump(lambda: states and states[-1][0] == "idle", 30), states
     assert pump(lambda: "photos" in w._watchers and w._watchers["photos"].alive(), 5)
     target.unlink()
     assert pump(lambda: remote.deleted == ["A1"], 15), (remote.deleted, states[-3:])
