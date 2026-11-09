@@ -291,6 +291,21 @@ def glyph(name: str, color: str, size: int = 20) -> QIcon:
         p.drawPoint(QPointF(s / 2, s * 0.34))
     elif name == "check":
         p.drawPolyline([QPointF(s * 0.24, s * 0.52), QPointF(s * 0.42, s * 0.7), QPointF(s * 0.76, s * 0.32)])
+    elif name == "globe":
+        r = QRectF(m, m, s - 2 * m, s - 2 * m)
+        p.drawEllipse(r)
+        p.drawEllipse(QRectF(s * 0.38, m, s * 0.24, s - 2 * m))
+        p.drawLine(QPointF(m, s / 2), QPointF(s - m, s / 2))
+    elif name == "file":
+        path = QPainterPath()
+        path.moveTo(s * 0.26, s * 0.12)
+        path.lineTo(s * 0.58, s * 0.12)
+        path.lineTo(s * 0.76, s * 0.3)
+        path.lineTo(s * 0.76, s * 0.88)
+        path.lineTo(s * 0.26, s * 0.88)
+        path.closeSubpath()
+        p.drawPath(path)
+        p.drawPolyline([QPointF(s * 0.58, s * 0.12), QPointF(s * 0.58, s * 0.3), QPointF(s * 0.76, s * 0.3)])
     elif name == "close":
         p.drawLine(QPointF(s * 0.3, s * 0.3), QPointF(s * 0.7, s * 0.7))
         p.drawLine(QPointF(s * 0.7, s * 0.3), QPointF(s * 0.3, s * 0.7))

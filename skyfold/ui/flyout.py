@@ -47,6 +47,50 @@ ACTIVITY_GLYPH = {
 }
 
 
+_IMAGE = {".heic", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff", ".webp", ".bmp", ".dng", ".raw"}
+_VIDEO = {".mov", ".mp4", ".m4v", ".avi", ".mkv"}
+
+
+def _open_url(url: str) -> None:
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+
+    QDesktopServices.openUrl(QUrl(url))
+
+
+def split_activity(text: str, kind: str = "") -> tuple[str, str]:
+    """"Deleted in iCloud: 2026/11/IMG_1.HEIC" -> ("IMG_1.HEIC", "Deleted in iCloud · 2026/11").
+    "Drive: uploaded: Work/Budget.xlsx" -> ("Budget.xlsx", "Uploaded · iCloud Drive/Work").
+    Errors and messages that aren't about one file stay whole (title only)."""
+    if kind in ("error", "info"):
+        return text, ""
+    head, sep, tail = text.rpartition(": ")
+    tail = tail.strip()
+    if not sep or not head or chr(10) in tail or len(tail) > 260 or " → " in tail:
+        return text, ""
+    name = tail.rsplit("/", 1)[-1]
+    if "." not in name and "/" not in tail:
+        return text, ""
+    folder = tail.rsplit("/", 1)[0] if "/" in tail else ""
+    drive = head.startswith("Drive: ")
+    if drive:
+        head = head[len("Drive: "):]
+        head = head[:1].upper() + head[1:]
+        folder = t("iCloud Drive") + (f"/{folder}" if folder else "")
+    return name, head + (f" · {folder}" if folder else "")
+
+
+def file_glyph(name: str, kind: str) -> str:
+    ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+    if ext in _IMAGE or ext in _VIDEO:
+        return "photo"
+    if ext == ".html":
+        return "note"
+    if ext:
+        return "file"
+    return ACTIVITY_GLYPH.get(kind, "info")
+
+
 def short_text(text: str, limit: int = 140) -> str:
     """At most about three lines in the panel; the rest is in the details/tooltip."""
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
@@ -223,26 +267,50 @@ class ActivityRow(QFrame):
             self.setCursor(Qt.PointingHandCursor)
             self.setToolTip(target or t("Click for details"))
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(2, 6, 2, 6)
-        lay.setSpacing(10)
+        lay.setContentsMargins(4, 8, 4, 8)
+        lay.setSpacing(12)
+        self.tile = QFrame()
+        self.tile.setObjectName("FileTile")
+        self.tile.setFixedSize(36, 36)
+        tl = QVBoxLayout(self.tile)
+        tl.setContentsMargins(0, 0, 0, 0)
         self.icon = QLabel()
-        self.icon.setFixedSize(16, 16)
+        self.icon.setAlignment(Qt.AlignCenter)
+        tl.addWidget(self.icon)
         col = QVBoxLayout()
         col.setSpacing(1)
-        self.text = QLabel(short_text(text))
-        self.text.setObjectName("Small")
-        self.text.setWordWrap(True)
+        self.title_text, self.detail_text = split_activity(text, kind)
+        self.text = QLabel()  # the file name (or the whole message when it isn't about one file)
+        self.text.setObjectName("RowTitle")
+        self.text.setWordWrap(not self.detail_text)
+        self.detail = QLabel(self.detail_text)
+        self.detail.setObjectName("Muted")
+        self.detail.setVisible(bool(self.detail_text))
         self.when = QLabel(fmt_time(ts))
         self.when.setObjectName("Hint")
         col.addWidget(self.text)
+        col.addWidget(self.detail)
         col.addWidget(self.when)
-        lay.addWidget(self.icon, 0, Qt.AlignTop)
+        lay.addWidget(self.tile, 0, Qt.AlignTop)
         lay.addLayout(col, 1)
+        self._set_title()
         self.apply_palette(palette)
 
+    def _set_title(self) -> None:
+        from PySide6.QtGui import QFontMetrics
+
+        title = self.title_text + (f"  (×{self.count})" if self.count > 1 else "")
+        if self.detail_text:  # one line: a file name, shortened in the middle like Explorer does
+            self.text.setText(QFontMetrics(self.text.font()).elidedText(title, Qt.ElideMiddle, 300))
+        else:
+            self.text.setText(short_text(title, 110))
+
     def apply_palette(self, palette: dict[str, str]) -> None:
-        color = palette["err_text"] if self.kind == "error" else palette["muted"]
-        self.icon.setPixmap(glyph(ACTIVITY_GLYPH.get(self.kind, "info"), color, 16).pixmap(QSize(16, 16)))
+        if self.kind == "error":
+            name, color = "error", palette["err_text"]
+        else:
+            name, color = file_glyph(self.title_text if self.detail_text else "", self.kind), palette["accent_fg"]
+        self.icon.setPixmap(glyph(name, color, 20).pixmap(QSize(20, 20)))
 
     def refresh(self) -> None:
         self.when.setText(fmt_time(self.ts))
@@ -254,7 +322,7 @@ class ActivityRow(QFrame):
         self.count += 1
         self.ts = ts
         self.target = target or self.target
-        self.text.setText(f"{short_text(self.message)}  (×{self.count})")
+        self._set_title()
         self.setToolTip(self.target or (t("Click for details") if self.kind == "error" else ""))
         self.refresh()
 
@@ -298,7 +366,7 @@ class Flyout(QWidget):
     serviceClicked = Signal(str)  # "photos" | "drive" | "notes"
     quitApp = Signal()
 
-    WIDTH = 360
+    WIDTH = 400
 
     def __init__(self, palette: dict[str, str]) -> None:
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -309,8 +377,14 @@ class Flyout(QWidget):
         self.state = "idle"
         self.paused = False
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(14, 14, 14, 12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        body = QWidget()
+        body.setObjectName("Root")
+        outer.addWidget(body, 1)
+        root = QVBoxLayout(body)
+        root.setContentsMargins(16, 16, 16, 8)
         root.setSpacing(10)
 
         # header
@@ -327,10 +401,20 @@ class Flyout(QWidget):
         titles.setSpacing(0)
         app_title = QLabel(APP_NAME)
         app_title.setObjectName("Title")
-        self.account = QLabel(t("Not signed in"))
+        self.account = QLabel(t("Not signed in"))  # shown as the title's tooltip and in Settings
         self.account.setObjectName("Muted")
+        self.account.hide()
+        self._app_title = app_title
+        status = QHBoxLayout()
+        status.setSpacing(5)
+        self.status_icon = QLabel()
+        self.status_icon.setFixedSize(14, 14)
+        self.status_line = QLabel("")
+        self.status_line.setObjectName("StatusLine")
+        status.addWidget(self.status_icon, 0, Qt.AlignVCenter)
+        status.addWidget(self.status_line, 1)
         titles.addWidget(app_title)
-        titles.addWidget(self.account)
+        titles.addLayout(status)
         self.gear = QToolButton()
         self.gear.setIcon(glyph("gear", palette["muted"]))
         self.gear.setIconSize(QSize(18, 18))
@@ -344,8 +428,7 @@ class Flyout(QWidget):
         head.addWidget(logo)
         head.addSpacing(4)
         head.addLayout(titles, 1)
-        head.addWidget(self.dot, 0, Qt.AlignVCenter)
-        head.addSpacing(4)
+        self.dot.hide()  # the status line under the title says it now (kept for its state logic)
         head.addWidget(self.storage_ring, 0, Qt.AlignVCenter)
         head.addWidget(self.gear, 0, Qt.AlignVCenter)
         root.addLayout(head)
@@ -446,31 +529,60 @@ class Flyout(QWidget):
         root.addWidget(self.empty)
         self.list.hide()
 
-        # actions
-        actions = QHBoxLayout()
-        actions.setSpacing(8)
-        self.sync_btn = QPushButton("  " + t("Sync now"))
-        self.sync_btn.setObjectName("Primary")
-        self.sync_btn.setIcon(glyph("sync", palette["accent_text"]))
-        self.sync_btn.setCursor(Qt.PointingHandCursor)
-        self.sync_btn.clicked.connect(self._on_sync_clicked)
-        self.sync_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.folder_btn = QToolButton()  # Find My (folders open from the service rows above)
-        self.folder_btn.setIcon(glyph("device", palette["text"]))
-        self.folder_btn.setIconSize(QSize(18, 18))
+        # bottom bar: icon + label buttons, like the OneDrive panel
+        bar = QFrame()
+        bar.setObjectName("BottomBar")
+        bl = QHBoxLayout(bar)
+        bl.setContentsMargins(8, 6, 8, 8)
+        bl.setSpacing(2)
+
+        def bar_button(text: str, slot) -> QToolButton:
+            b = QToolButton()
+            b.setObjectName("Bar")
+            b.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            b.setIconSize(QSize(20, 20))
+            b.setText(text)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            b.clicked.connect(slot)
+            bl.addWidget(b)
+            return b
+
+        self.sync_btn = bar_button(t("Sync"), self._on_sync_clicked)
+        self.sync_btn.setToolTip(t("Sync now"))
+        self.sync_btn.setProperty("primary", True)
+        self.open_btn = bar_button(t("Open folder"), self._open_folder_menu)
+        self.web_btn = bar_button(t("iCloud.com"), lambda: _open_url("https://www.icloud.com"))
+        self.folder_btn = bar_button(t("Find My"), self.findMy)  # (name kept: other code refers to it)
         self.folder_btn.setToolTip(t("Find My devices…"))
-        self.folder_btn.setCursor(Qt.PointingHandCursor)
-        self.folder_btn.clicked.connect(self.findMy)
         self.folder_btn.setAccessibleName(t("Find My devices…"))
-        self.pause_btn = QToolButton()
-        self.pause_btn.setIconSize(QSize(18, 18))
-        self.pause_btn.setCursor(Qt.PointingHandCursor)
-        self.pause_btn.clicked.connect(self.togglePause)
-        actions.addWidget(self.sync_btn, 1)
-        actions.addWidget(self.folder_btn)
-        actions.addWidget(self.pause_btn)
-        root.addLayout(actions)
+        self.pause_btn = bar_button(t("Pause"), self.togglePause)
+        outer.addWidget(bar)
+        self._bar_icons()
         self.set_paused(False)
+
+    def _bar_icons(self) -> None:
+        self.open_btn.setIcon(glyph("folder", self.c["text"]))
+        self.web_btn.setIcon(glyph("globe", self.c["text"]))
+        self.folder_btn.setIcon(glyph("device", self.c["text"]))
+
+    def _open_folder_menu(self) -> None:
+        """One folder per synced service: open it straight away, or choose when there are several."""
+        from PySide6.QtWidgets import QMenu
+
+        s = getattr(self, "_stats", {}) or {}
+        choices = [("photos", t("Photos"))]
+        if s.get("drive_enabled"):
+            choices.append(("drive", t("iCloud Drive")))
+        if s.get("notes_enabled"):
+            choices.append(("notes", t("Notes")))
+        if len(choices) == 1:
+            self.serviceClicked.emit("photos")
+            return
+        menu = QMenu(self)
+        for key, label in choices:
+            menu.addAction(label, lambda k=key: self.serviceClicked.emit(k))
+        menu.exec(self.open_btn.mapToGlobal(self.open_btn.rect().topLeft()) - QPoint(0, menu.sizeHint().height()))
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         """Called when Windows switches light/dark: re-tint the hand-drawn icons."""
@@ -478,7 +590,7 @@ class Flyout(QWidget):
         self.gear.setIcon(glyph("gear", palette["muted"]))
         self.storage_ring.c = palette
         self.storage_ring.update()
-        self.folder_btn.setIcon(glyph("device", palette["text"]))
+        self._bar_icons()
         self.set_paused(self.paused)
         self.set_state(self.state, self.status_text.text())
         for w in self._activity_rows():
@@ -506,10 +618,12 @@ class Flyout(QWidget):
         text = apple_id or t("Not signed in")
         self.account.setText(QFontMetrics(self.account.font()).elidedText(text, Qt.ElideMiddle, 170))
         self.account.setToolTip(apple_id)
+        self._app_title.setToolTip(apple_id or text)
 
     def set_paused(self, paused: bool) -> None:
         self.paused = paused
         self.pause_btn.setIcon(glyph("play" if paused else "pause", self.c["text"]))
+        self.pause_btn.setText(t("Resume") if paused else t("Pause"))
         self.pause_btn.setToolTip(t("Resume syncing") if paused else t("Pause syncing"))
         self.pause_btn.setAccessibleName(self.pause_btn.toolTip())
 
@@ -533,22 +647,24 @@ class Flyout(QWidget):
         self.auth_banner.hide()  # the status card and the main button already say "Sign in"
         if state == "auth":
             self.auth_banner.text.setText(t("Signing in to iCloud is required to sync."))
-        if syncing:
-            self.sync_btn.setText("  " + t("Stop"))
-            self.sync_btn.setIcon(glyph("close", self.c["accent_text"]))
-        elif state == "setup":
-            self.sync_btn.setText("  " + t("Choose folder"))
-            self.sync_btn.setIcon(glyph("folder", self.c["accent_text"]))
-        elif state == "auth":
-            self.sync_btn.setText("  " + t("Sign in"))
-            self.sync_btn.setIcon(glyph("cloud", self.c["accent_text"]))
-        elif state == "paused":
-            self.sync_btn.setText("  " + t("Resume"))
-            self.sync_btn.setIcon(glyph("play", self.c["accent_text"]))
-        else:
-            self.sync_btn.setText("  " + t("Sync now"))
-            self.sync_btn.setIcon(glyph("sync", self.c["accent_text"]))
+        name, label = {"syncing": ("close", t("Stop")), "setup": ("folder", t("Set up")),
+                       "auth": ("cloud", t("Sign in")), "paused": ("play", t("Resume"))}.get(
+            state, ("sync", t("Sync")))
+        self.sync_btn.setText(label)
+        self.sync_btn.setIcon(glyph(name, self.c["accent_fg"]))
+        self._status_line()
         self._fit()
+
+    def _status_line(self) -> None:
+        state = self._dot_state()
+        title = STATE_TITLES.get(self.state, self.state)
+        if state == "attention":
+            title = t("Waiting for your OK")
+        icon = {"idle": "check", "syncing": "sync", "paused": "pause", "error": "error", "auth": "error",
+                "offline": "cloud", "setup": "folder", "attention": "error"}.get(state, "check")
+        color = STATE_COLORS.get(state, "#16a34a")
+        self.status_icon.setPixmap(glyph(icon, color, 14).pixmap(QSize(14, 14)))
+        self.status_line.setText(title)
 
     def set_progress(self, done: int, total: int, text: str) -> None:
         if self.state != "syncing" or total <= 0:
@@ -646,9 +762,11 @@ class Flyout(QWidget):
             self.pending_banner.show()
         self.dot.set_state(self._dot_state())
         self._dot_tip()
+        self._status_line()
         self._fit()
 
-    MAX_ROWS_VISIBLE = 4
+    MAX_ROWS_VISIBLE = 6
+    MIN_LIST_HEIGHT = 300  # the panel keeps a calm, steady height instead of jumping with each entry
 
     def _activity_rows(self) -> list["ActivityRow"]:
         return [self._rows.itemAt(i).widget() for i in range(self._rows.count() - 1)]
@@ -710,19 +828,16 @@ class Flyout(QWidget):
 
     def _size_list(self) -> None:
         """Show up to four entries without empty space; scroll for older ones."""
-        width = self.WIDTH - 2 * 14 - 12  # panel margins and room for the scroll bar
-        text_width = width - 16 - 10 - 4  # the text label sits beside the icon
+        width = self.WIDTH - 2 * 16 - 12  # panel margins and room for the scroll bar
         rows = self._activity_rows()[: self.MAX_ROWS_VISIBLE]
         height = 0
         for row in rows:
             row.ensurePolished()
             row.text.ensurePolished()
-            text_h = row.text.heightForWidth(text_width)
-            if text_h > 0:  # margins 12 + spacing 1 + the time line
-                height += text_h + 13 + row.when.sizeHint().height() + 1
-            else:
-                height += row.sizeHint().height()
-        self.list.setFixedHeight(max(height, 1) + 2)
+            lay = row.layout()
+            lay.activate()
+            height += (lay.totalHeightForWidth(width) if lay.hasHeightForWidth() else row.sizeHint().height()) + 1
+        self.list.setFixedHeight(max(height, self.MIN_LIST_HEIGHT if rows else 1) + 2)
         room = self._limit() - (self._needed_height() - self.list.height())
         if self.list.height() > room:
             self.list.setFixedHeight(max(60, room))

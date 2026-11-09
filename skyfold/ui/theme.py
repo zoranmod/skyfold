@@ -125,6 +125,17 @@ QWidget#NavPane {{ background: {c['surface']}; border-right: 1px solid {c['borde
 QFrame#Card, QFrame#Tile {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 12px; }}
 QFrame#Row {{ background: transparent; border: none; border-radius: 8px; }}
 QFrame#Row:hover {{ background: {c['hover']}; }}
+QFrame#BottomBar {{ background: {c['surface']}; border: none; border-top: 1px solid {c['border']};
+    border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }}
+QToolButton#Bar {{ background: transparent; border: none; border-radius: 8px; padding: 6px 2px 4px 2px;
+    min-width: 64px; min-height: 52px; font-size: 8.5pt; color: {c['text']}; }}
+QToolButton#Bar:hover {{ background: {c['hover']}; }}
+QToolButton#Bar:pressed {{ background: {c['border']}; }}
+QToolButton#Bar:disabled {{ color: {c['disabled']}; }}
+QToolButton#Bar[primary="true"] {{ color: {c['accent_fg']}; font-weight: 600; }}
+QFrame#FileTile {{ background: {c['surface2']}; border: 1px solid {c['border']}; border-radius: 8px; }}
+QLabel#RowTitle {{ font-size: 9.5pt; font-weight: 600; }}
+QLabel#StatusLine {{ font-size: 9pt; color: {c['muted']}; }}
 QFrame#Sep {{ background: {c['border']}; border: none; max-height: 1px; min-height: 1px; }}
 QFrame#Warn {{ background: {c['warn_bg']}; border: 1px solid {c['warn_border']}; border-radius: 12px; }}
 QFrame#Err  {{ background: {c['err_bg']};  border: 1px solid {c['err_border']};  border-radius: 12px; }}
