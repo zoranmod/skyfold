@@ -209,10 +209,25 @@ def test_adopts_existing_identical_file(env):
     s, r, root, _ = env
     (root / "2025/11").mkdir(parents=True)
     (root / "2025/11/IMG_0001.JPG").write_bytes(b"same")
+    ts = datetime(2025, 11, 3, 10, tzinfo=timezone.utc).timestamp()  # Skyfold dates each photo like this
+    os.utime(root / "2025/11/IMG_0001.JPG", (ts, ts))
     r.add("A1", "IMG_0001.JPG", b"same")
     res = s.run()
     assert res.downloaded == 0
     assert len(list((root / "2025/11").iterdir())) == 1
+
+
+def test_same_name_and_size_but_other_date_is_not_adopted(env):
+    """Someone's own file that happens to share name and size is never taken for the photo."""
+    s, r, root, trashed = env
+    (root / "2025/11").mkdir(parents=True)
+    (root / "2025/11/IMG_0001.JPG").write_bytes(b"PC!")
+    r.add("A1", "IMG_0001.JPG", b"WEB")
+    s.run()
+    assert (root / "2025/11/IMG_0001.JPG").read_bytes() == b"PC!"
+    r.assets.pop("A1", None)
+    s.run(force_full=True)
+    assert (root / "2025/11/IMG_0001.JPG").read_bytes() == b"PC!" and "IMG_0001.JPG" not in trashed
 
 
 def test_pc_delete_disabled_keeps_icloud(env):

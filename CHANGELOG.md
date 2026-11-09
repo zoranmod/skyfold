@@ -4,6 +4,25 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-11-10
+
+Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has a regression test that fails on 1.0.5.
+
+### Fixed
+- iCloud Drive: when only some sub-folders are chosen, their parent folders are never deleted as a whole (they can hold folders that aren't synced).
+- iCloud Drive: junctions and links inside the Drive folder are never followed, so nothing is written outside it.
+- iCloud Drive: a Drive folder remembers which Apple ID it belongs to; another account can't sync into it.
+- iCloud Drive: a deletion approved later is checked again first; a file edited after the question stays.
+- iCloud Drive: a deleted folder and a new look-alike folder in iCloud are no longer taken for a rename (iCloud's item identity is checked).
+- iCloud Drive: a folder that iCloud lists only partly never counts as "deleted in iCloud".
+- iCloud Drive: two iCloud names that differ only in letter case no longer overwrite each other on Windows.
+- Notes: an existing Notes.html that isn't Skyfold's is never replaced; an empty answer from Apple never removes notes, however few.
+- Photos: a file already in place is adopted only when name, size and the photo's date all match.
+
+### Changed
+- Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.
+- Deletion dialog and Find My fit small screens (long paths shortened, many devices scroll).
+
 ## [1.0.5] - 2026-11-09
 
 ### Changed
@@ -47,7 +66,8 @@ First public release.
 - English and Bosnian.
 - Portable build (`Skyfold-windows.zip`) from GitHub Actions, with a packaged self-test (`--selftest`).
 
-[Unreleased]: https://github.com/zoranmod/skyfold/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/zoranmod/skyfold/compare/v1.0.6...HEAD
+[1.0.6]: https://github.com/zoranmod/skyfold/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/zoranmod/skyfold/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/zoranmod/skyfold/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/zoranmod/skyfold/compare/v1.0.0...v1.0.3

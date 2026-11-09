@@ -116,6 +116,7 @@ class ICloudDrive:
     def __init__(self, api: Any) -> None:
         self._api = api
         self._drive: Any = None
+        self.incomplete: set[str] = set()  # folders iCloud answered with fewer items than it holds
 
     @property
     def drive(self) -> Any:
@@ -177,6 +178,9 @@ class ICloudDrive:
                             base = paths.get(folder.get("drivewsid"), None)
                             if base is None:
                                 continue
+                            listed, count = folder.get("items"), folder.get("numberOfItems")
+                            if isinstance(listed, list) and isinstance(count, int) and len(listed) < count:
+                                self.incomplete.add(base)  # fewer items than iCloud says it holds
                             if base == "" and folder.get("docwsid"):
                                 root.docwsid = folder["docwsid"]
                                 root.zone = folder.get("zone", root.zone)

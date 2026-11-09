@@ -150,6 +150,12 @@ BS: dict[str, str] = {
     "Choose a folder.": "Izaberi folder.",
     "Enter the full folder path.": "Unesi punu putanju foldera.",
     "Clear": "Očisti",
+    "The Notes folder already has a Notes.html that isn't from Skyfold. Choose an empty folder for Notes in Settings.":
+        "Folder za bilješke već ima Notes.html koji nije od Skyfolda. U Postavkama izaberi prazan folder za bilješke.",
+    "This Drive folder belongs to another Apple ID. Choose a new, empty folder for iCloud Drive in Settings.":
+        "Ovaj Drive folder pripada drugom Apple ID-u. U Postavkama izaberi novi, prazan folder za iCloud Drive.",
+    "{name} leads outside the Drive folder; left alone": "{name} vodi izvan Drive foldera; ostavljeno kako jeste",
+    "another item has the same name in different letter case": "druga stavka ima isto ime s drugačijim velikim/malim slovima",
     "Open folder": "Otvori folder",
     "Sync": "Sinhronizuj",
     "Set up": "Podesi",

@@ -296,6 +296,10 @@ class SyncWorker(QObject):
                                      s.delete_threshold, _Bridge(self, "drive"),
                                      cache_file=STATE_DB.parent / "drive_cache.json")
             self.drive.on_pending = self._drivePendingSeen.emit
+            import hashlib
+
+            self.drive.account = hashlib.sha256(s.apple_id.strip().lower().encode()).hexdigest()[:16] \
+                if s.apple_id else ""
             self._drive_last = 0.0
         self.drive.delete_threshold = s.delete_threshold
         self.drive.folders = list(s.drive_folders) if s.drive_folders is not None else None
@@ -704,6 +708,23 @@ class SyncWorker(QObject):
         if to_cloud or to_pc:
             pend = Pending(to_cloud=list(to_cloud), to_pc=list(to_pc), names={p: p for p in [*to_cloud, *to_pc]})
             pend.service = "drive"
+            if self.drive_state is not None:  # a folder counts with all the files inside it
+                rows = self.drive_state.all()
+
+                def files(tops: list[str]) -> int:
+                    top = set(tops)
+
+                    def under(p: str) -> bool:
+                        while True:
+                            if p in top:
+                                return True
+                            if "/" not in p:
+                                return False
+                            p = p.rsplit("/", 1)[0]
+
+                    return sum(1 for p, b in rows.items() if not b.is_dir and under(p)) or len(tops)
+
+                pend.files_to_pc, pend.files_to_cloud = files(pend.to_pc), files(pend.to_cloud)
         if pend != self._drive_pending:
             self._drive_pending = pend
             if pend:

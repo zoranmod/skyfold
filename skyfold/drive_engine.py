@@ -113,6 +113,11 @@ class DriveState:
                 self._db.execute("DELETE FROM drive_files WHERE path=? OR substr(path, 1, ?)=?",
                                  (path, len(prefix), prefix))
 
+    def drop_one(self, path: str) -> None:
+        """Forget only this row, not what is below it."""
+        with self._lock:
+            self._db.execute("DELETE FROM drive_files WHERE path=?", (path,))
+
     def stats(self) -> dict[str, int]:
         with self._lock:
             files, size = self._db.execute(
@@ -157,6 +162,8 @@ class DriveSyncer:
         self.approved: set[str] = set()
         self.own_paths: dict[str, float] = {}
         self.cache: dict[str, DriveItem] = {}  # iCloud tree as of the last read
+        self.account = ""  # short fingerprint of the Apple ID this folder belongs to (set by the worker)
+        self._prev: dict[str, DriveItem] = {}
         self.cache_file = cache_file  # kept on disk so quick passes work right after a restart
         self._load_cache()
 
@@ -202,16 +209,35 @@ class DriveSyncer:
                 raise SyncError(t("Drive folder is not available: {path}", path=self.root))
             self.root.mkdir(parents=True, exist_ok=True)
         marker = self.root / MARKER
+        account_line = f"account: {self.account}" if self.account else ""
         if not marker.exists():
             if has_base:
                 raise SyncError(t(
                     "The Drive folder doesn't look like before (its sync marker is missing). "
                     "Syncing has stopped so nothing gets deleted by mistake."))
-            marker.write_text(t("This folder is synced by Skyfold. Don't delete this file.\n"), encoding="utf-8")
+            marker.write_text(t("This folder is synced by Skyfold. Don't delete this file.\n")
+                              + (account_line + "\n" if account_line else ""), encoding="utf-8")
             if os.name == "nt":
                 import ctypes
 
                 ctypes.windll.kernel32.SetFileAttributesW(str(marker), 0x2)
+            return
+        if not account_line:
+            return
+        try:
+            text = marker.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        owner = next((ln.split(":", 1)[1].strip() for ln in text.splitlines() if ln.startswith("account:")), None)
+        if owner is None:  # made by an older version: it belongs to the account syncing it now
+            try:
+                with open(marker, "a", encoding="utf-8") as fh:
+                    fh.write(account_line + "\n")
+            except OSError:
+                pass
+        elif owner != self.account:
+            raise SyncError(t("This Drive folder belongs to another Apple ID. Choose a new, empty folder for "
+                              "iCloud Drive in Settings."))
 
     def _unreadable_add(self, full: str | Path) -> None:
         try:
@@ -225,6 +251,10 @@ class DriveSyncer:
         self.unreadable = set()
         for dirpath, dirs, files in os.walk(self.root, onerror=lambda e: self._unreadable_add(e.filename or "")):
             dirs[:] = [d for d in dirs if not ignored(d)]
+            for d in [d for d in dirs if _is_link(Path(dirpath) / d)]:
+                dirs.remove(d)  # a junction or link may point anywhere: never sync through it
+                self._unreadable_add(Path(dirpath) / d)
+                log.warning("Drive: %s is a link/junction; left alone", Path(dirpath) / d)
             rel_dir = Path(dirpath).relative_to(self.root).as_posix()
             rel_dir = "" if rel_dir == "." else rel_dir
             for d in dirs:
@@ -246,9 +276,17 @@ class DriveSyncer:
                     hide_like_mac(Path(dirpath) / f, getattr(st, "st_file_attributes", None))
         return out
 
+    def _check_inside(self, p: Path) -> None:
+        """The real location (links and junctions resolved) must be inside the Drive folder."""
+        real_root = Path(os.path.realpath(self.root))
+        real = Path(os.path.realpath(p))
+        if real != real_root and real_root not in real.parents:
+            raise SyncError(t("{name} leads outside the Drive folder; left alone", name=p))
+
     def _trash_local(self, p: Path) -> None:
         from send2trash import send2trash
 
+        self._check_inside(p.parent)
         self._touch_own(p)
         send2trash(str(p))
 
@@ -312,6 +350,9 @@ class DriveSyncer:
                     continue
                 rel = f"{rel_dir}/{e.name}" if rel_dir else e.name
                 try:
+                    if e.is_dir() and _is_link(Path(e.path)):
+                        self.unreadable.add(rel)
+                        continue
                     if e.is_dir():
                         out[rel] = Local(True, 0, 0.0)
                     else:
@@ -326,6 +367,9 @@ class DriveSyncer:
         """Full sync, or a quick one limited to the folders around `changed` local paths."""
         self.cancel_flag.clear()
         self._late = None
+        self._prev = dict(self.cache)  # iCloud as of the last read: identities for rename detection
+        if hasattr(self.remote, "incomplete"):
+            self.remote.incomplete = set()
         res = DriveResult()
         base = self.state.all()
         self._check_root(bool(base))
@@ -376,6 +420,18 @@ class DriveSyncer:
         to_pc: list[str] = []  # delete on PC
         mkdir_local: list[DriveItem] = []  # new folders in iCloud
 
+        partial = set(getattr(self.remote, "incomplete", set()) or ())
+        if partial:
+            log.warning("Drive: iCloud listed %d folders only partly; no deletions decided there", len(partial))
+
+        def listed_partly(path: str) -> bool:
+            q = path
+            while "/" in q:
+                q = q.rsplit("/", 1)[0]
+                if q in partial:
+                    return True
+            return "" in partial
+
         paths = sorted(set(remote) | set(local) | set(base))
         paths = [p for p in paths if p]  # never the root itself
         if self.unreadable:  # couldn't be read on this PC (access denied, disk hiccup): leave alone
@@ -416,7 +472,9 @@ class DriveSyncer:
                     else:
                         mkdir_local.append(r)
                 elif lo and not r:
-                    if b and b.etag is not None:
+                    if b and b.etag is not None and listed_partly(path):
+                        pass  # iCloud's answer for its folder was incomplete: decide next time
+                    elif b and b.etag is not None:
                         to_pc.append(path)  # folder deleted in iCloud
                     elif not b:
                         mkdir_remote.append(path)
@@ -469,6 +527,8 @@ class DriveSyncer:
                     to_cloud.append(path)  # deleted on PC
                 else:
                     downloads.append(r)  # new in iCloud
+            elif lo and not r and b and listed_partly(path):
+                pass  # iCloud's answer for its folder was incomplete: never read that as "deleted"
             elif lo and not r:
                 if b and b.pending:
                     if settled:
@@ -511,6 +571,14 @@ class DriveSyncer:
                 continue
             self.state.put(Base(r.path, True, r.etag, None, None, None, False))
 
+        if self.folders:
+            def leads_to_chosen(p: str) -> bool:
+                return any(f.startswith(p + "/") for f in self.folders)
+
+            for lst in (to_cloud, to_pc):
+                for p in [p for p in lst if base.get(p) is not None and base[p].is_dir and leads_to_chosen(p)]:
+                    lst.remove(p)  # holds folders that aren't synced: never deleted as a whole
+                    self.state.drop_one(p)  # it is re-created on the side where it went missing
         # Deleting a folder also covers everything inside it.
         to_cloud = _collapse(to_cloud)
         to_pc = _collapse(to_pc)
@@ -539,6 +607,7 @@ class DriveSyncer:
                 res.errors += 1
                 self.cb.activity("error", t("Couldn't create folder in iCloud ({name}): {error}", name=path, error=exc))
 
+        downloads = self._without_case_twins(downloads, local)
         self._downloads(downloads, base, res)
         self.apply_approved_deletions()
         self._uploads(uploads, remote, base, local, res)
@@ -554,6 +623,26 @@ class DriveSyncer:
                              else t("Drive: uploaded {n} files", n=res.uploaded), res.last_up)
         self.state_set_last_sync()
         return res
+
+    def _without_case_twins(self, downloads: list[DriveItem], local: dict[str, Local]) -> list[DriveItem]:
+        """Windows sees "Report.txt" and "report.txt" as one file: download only the first of such
+        names, and never one that would land on a differently-spelled file already here."""
+        here = {p.lower(): p for p in local}
+        seen: dict[str, str] = {}
+        out: list[DriveItem] = []
+        for r in downloads:
+            key = r.path.lower()
+            other = seen.get(key) or (here.get(key) if here.get(key) != r.path else None)
+            if other:
+                if r.path not in self.unsupported:
+                    self.unsupported.add(r.path)
+                    self.cb.activity("info", t("Left in iCloud, {reason}: {name}",
+                                               reason=t("another item has the same name in different letter case"),
+                                               name=r.path))
+                continue
+            seen[key] = r.path
+            out.append(r)
+        return out
 
     def _keep_unsynced_local(self, to_pc: list[str], base: dict[str, Base]) -> list[str]:
         """A folder deleted in iCloud that holds new or edited files on this PC: those files stay
@@ -682,8 +771,8 @@ class DriveSyncer:
             sig_new = {n: _signature({p[len(n) + 1:]: remote[p].size for p in under(remote, n) if not remote[p].is_dir})
                        for n in new}
             for g, n in _pairs(sig_old, sig_new):
-                if not self._local_move(g, n, res):
-                    continue
+                if not self._same_item(g, n, remote) or not self._local_move(g, n, res):
+                    continue  # not provably the same folder (e.g. deleted and a look-alike created)
                 self._rebase(base, g, n, keep_etags=True, remote=remote)
                 drop_under(to_pc, g)
                 drop_under(mkdir_local, n, key=lambda r: r.path)
@@ -713,7 +802,7 @@ class DriveSyncer:
             key_old = {g: (base[g].size, round(base[g].lmtime or 0)) for g in gone}
             key_new = {r.path: (r.size, round(r.mtime or 0)) for r in new}
             for g, n in _pairs(key_old, key_new):
-                if not self._local_move(g, n, res):
+                if not self._same_item(g, n, remote) or not self._local_move(g, n, res):
                     continue
                 r = remote[n]
                 st = self._abs(n).stat()
@@ -721,6 +810,12 @@ class DriveSyncer:
                 self.state.put(Base(n, False, r.etag, r.size, st.st_mtime, st.st_size, False))
                 to_pc.remove(g)
                 downloads[:] = [d for d in downloads if d.path != n]
+
+    def _same_item(self, old: str, new: str, remote: dict[str, DriveItem]) -> bool:
+        """iCloud keeps an item's id when it is renamed or moved; a deleted and re-created look-alike
+        gets a new one."""
+        before, now = self._prev.get(old), remote.get(new)
+        return bool(before and now and before.docwsid and before.docwsid == now.docwsid)
 
     def _remote_move(self, remote: dict[str, DriveItem], old: str, new: str, res: DriveResult) -> bool:
         item = remote.get(old)
@@ -863,9 +958,21 @@ class DriveSyncer:
             elif count(to_pc, base) > threshold and not set(to_pc) <= self.approved:
                 res.pending_to_pc = to_pc
             else:
+                approved_now = set(to_pc) & self.approved
+                if approved_now:  # time has passed since the question: changed files stay
+                    to_pc = self._keep_unsynced_local(to_pc, base)
                 for p in to_pc:
                     self._check_cancel()
                     target = self._abs(p)
+                    b = base.get(p)
+                    if b is not None and not b.is_dir and target.is_file():
+                        try:
+                            st = target.stat()
+                            if (st.st_size, round(st.st_mtime, 2)) != (b.lsize, round(b.lmtime or 0, 2)):
+                                self.state.drop(p)  # edited on this PC meanwhile: keep it (it goes up)
+                                continue
+                        except OSError:
+                            continue
                     try:
                         if target.exists():
                             self._trash_local(target)
@@ -902,6 +1009,7 @@ class DriveSyncer:
                 raise Cancelled()
             target = self._abs(item.path)
             target.parent.mkdir(parents=True, exist_ok=True)
+            self._check_inside(target.parent)
             fd, tmp = tempfile.mkstemp(prefix=TMP_PREFIX, dir=target.parent)
             os.close(fd)
             tmp_path = Path(tmp)
@@ -1052,6 +1160,13 @@ def hide_like_mac(p: Path, attrs: int | None = None) -> None:
             ctypes.windll.kernel32.SetFileAttributesW(str(p), attrs | _HIDDEN)
     except (OSError, AttributeError):
         pass
+
+
+def _is_link(p: Path) -> bool:
+    try:
+        return p.is_symlink() or (hasattr(os.path, "isjunction") and os.path.isjunction(p))
+    except OSError:
+        return True
 
 
 def _ignored_path(path: str) -> bool:

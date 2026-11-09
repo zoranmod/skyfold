@@ -283,8 +283,13 @@ class ActivityRow(QFrame):
         self.text = QLabel()  # the file name (or the whole message when it isn't about one file)
         self.text.setObjectName("RowTitle")
         self.text.setWordWrap(not self.detail_text)
-        self.detail = QLabel(self.detail_text)
+        from PySide6.QtGui import QFontMetrics
+
+        self.detail = QLabel()
         self.detail.setObjectName("Muted")
+        self.detail.setText(QFontMetrics(self.detail.font()).elidedText(self.detail_text, Qt.ElideMiddle, 290))
+        self.detail.setToolTip(self.detail_text)
+        self.detail.setMinimumWidth(0)
         self.detail.setVisible(bool(self.detail_text))
         self.when = QLabel(fmt_time(ts))
         self.when.setObjectName("Hint")
@@ -315,8 +320,8 @@ class ActivityRow(QFrame):
     def refresh(self) -> None:
         self.when.setText(fmt_time(self.ts))
 
-    def same_as(self, kind: str, text: str) -> bool:
-        return self.kind == kind and self.message == text
+    def same_as(self, kind: str, text: str, target: str = "") -> bool:
+        return self.kind == kind and self.message == text and (target or "") == (self.target or "")
 
     def bump(self, ts: str, target: str = "") -> None:
         self.count += 1
@@ -374,6 +379,7 @@ class Flyout(QWidget):
         self.setObjectName("Root")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFixedWidth(self.WIDTH)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.state = "idle"
         self.paused = False
 
@@ -648,7 +654,7 @@ class Flyout(QWidget):
         if state == "auth":
             self.auth_banner.text.setText(t("Signing in to iCloud is required to sync."))
         name, label = {"syncing": ("close", t("Stop")), "setup": ("folder", t("Set up")),
-                       "auth": ("cloud", t("Sign in")), "paused": ("play", t("Resume"))}.get(
+                       "auth": ("cloud", t("Sign in"))}.get(
             state, ("sync", t("Sync")))
         self.sync_btn.setText(label)
         self.sync_btn.setIcon(glyph(name, self.c["accent_fg"]))
@@ -754,9 +760,10 @@ class Flyout(QWidget):
         else:
             parts = []
             if pending.to_pc:
-                parts.append(t("{n} deleted in iCloud", n=len(pending.to_pc)))
+                parts.append(t("{n} deleted in iCloud", n=getattr(pending, "files_to_pc", 0) or len(pending.to_pc)))
             if pending.to_cloud:
-                parts.append(t("{n} deleted on this PC", n=len(pending.to_cloud)))
+                parts.append(t("{n} deleted on this PC",
+                               n=getattr(pending, "files_to_cloud", 0) or len(pending.to_cloud)))
             self._pending_text = t("A large deletion is waiting for your OK: {what}.", what=t(" and ").join(parts))
             self.pending_banner.text.setText(self._pending_text)
             self.pending_banner.show()
@@ -773,7 +780,7 @@ class Flyout(QWidget):
 
     def add_activity(self, ts: str, kind: str, text: str, target: str = "") -> None:
         rows = self._activity_rows()
-        if rows and rows[0].same_as(kind, text):
+        if rows and rows[0].same_as(kind, text, target):
             rows[0].bump(ts, target)
             QTimer.singleShot(0, self._size_list)
             return
@@ -840,7 +847,10 @@ class Flyout(QWidget):
         self.list.setFixedHeight(max(height, self.MIN_LIST_HEIGHT if rows else 1) + 2)
         room = self._limit() - (self._needed_height() - self.list.height())
         if self.list.height() > room:
-            self.list.setFixedHeight(max(60, room))
+            if room < 60:
+                self.list.setFixedHeight(0)  # no room at all: the buttons matter more than the list
+            else:
+                self.list.setFixedHeight(room)
         self._fit()
 
     def refresh_activity_times(self) -> None:
@@ -910,6 +920,7 @@ class Flyout(QWidget):
         round_corners(self)
         self.raise_()
         self.activateWindow()
+        self.setFocus(Qt.OtherFocusReason)  # the panel itself, not its first button
 
     def event(self, e) -> bool:  # noqa: N802
         if e.type() == QEvent.WindowDeactivate:

@@ -1185,7 +1185,8 @@ class PendingDialog(_Dialog):
 
     def __init__(self, pending, palette: dict[str, str]) -> None:
         super().__init__(t("Confirm deletion – {app}", app=APP_NAME))
-        self.setMinimumSize(480, 460)
+        self.setMinimumSize(*_fit_screen(480, 360))
+        self.resize(*_fit_screen(560, 520))
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 20, 22, 18)
         lay.setSpacing(10)
@@ -1226,6 +1227,11 @@ class PendingDialog(_Dialog):
             lst.addItem(pending.names.get(i, i))
         if len(ids) > 500:
             lst.addItem(t("… and {n} more", n=len(ids) - 500))
+        lst.setTextElideMode(Qt.ElideMiddle)
+        lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        lst.setMinimumHeight(80)
+        for k in range(lst.count()):
+            lst.item(k).setToolTip(lst.item(k).text())
         lay.addWidget(lst, 1)
         row = QHBoxLayout()
         if self._sections == 1:  # one "Decide later" for the whole window, in the first row
@@ -1535,7 +1541,14 @@ class FindMyDialog(_Dialog):
         self.rows.setContentsMargins(6, 6, 6, 6)
         self.rows.setSpacing(0)
         self.card.hide()
-        lay.addWidget(self.card)
+        self._devices_scroll = QScrollArea()
+        self._devices_scroll.setWidgetResizable(True)
+        self._devices_scroll.setFrameShape(QFrame.NoFrame)
+        self._devices_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._devices_scroll.setWidget(self.card)
+        self._devices_scroll.setMaximumHeight(_fit_screen(10_000, 600)[1] - 220)
+        self._devices_scroll.hide()
+        lay.addWidget(self._devices_scroll)
         lay.addWidget(_label(t("The location opens in Google Maps in your browser. "
                                "Lost device? Use iCloud.com for Lost Mode or erasing."), "Hint", True))
         close = QPushButton(t("Close"))
@@ -1574,6 +1587,7 @@ class FindMyDialog(_Dialog):
                     self.rows.addWidget(sep)
                 self.rows.addWidget(DeviceRow(d, self.c, self.get_api))
             self.card.setVisible(bool(devs))
+            self._devices_scroll.setVisible(bool(devs))
             self.info.setVisible(not devs)
             self.info.setText(t("No devices found."))
             self.adjustSize()

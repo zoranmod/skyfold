@@ -10,12 +10,12 @@ from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath
 STATE_COLORS = {
     "idle": "#16a34a",
     "syncing": "#2563eb",
-    "paused": "#d97706",
+    "paused": "#b45309",
     "offline": "#64748b",
     "error": "#dc2626",
     "auth": "#dc2626",
-    "setup": "#d97706",
-    "attention": "#d97706",  # all synced, but a large deletion waits for the user's OK
+    "setup": "#b45309",
+    "attention": "#b45309",  # all synced, but a large deletion waits for the user's OK
 }
 
 

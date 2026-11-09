@@ -30,12 +30,18 @@ class FakeDrive:
         parts = PurePosixPath(path).parts
         for i in range(1, len(parts)):
             d = "/".join(parts[:i])
-            self.items.setdefault(d, {"data": None, "etag": self._etag(), "dir": True})
-        self.items[path] = {"data": data, "etag": self._etag(), "dir": data is None}
+            if d not in self.items:
+                self.n_ids = getattr(self, "n_ids", 0) + 1
+                self.items[d] = {"data": None, "etag": self._etag(), "dir": True, "id": f"id{self.n_ids}"}
+        old = self.items.get(path)
+        self.n_ids = getattr(self, "n_ids", 0) + 1
+        self.items[path] = {"data": data, "etag": self._etag(), "dir": data is None,
+                            "id": old.get("id") if old and old.get("id") else f"id{self.n_ids}"}
 
     def _item(self, p):
         it = self.items[p]
-        return DriveItem(p, p, p, "z", it["etag"], it["dir"], len(it["data"] or b""), 1_600_000_000.0)
+        ident = it.get("id", p)  # like iCloud: an item keeps its id when renamed or moved
+        return DriveItem(p, ident, ident, "z", it["etag"], it["dir"], len(it["data"] or b""), 1_600_000_000.0)
 
     def walk(self, on_progress=None, folders=None, want=None):
         if folders is None:

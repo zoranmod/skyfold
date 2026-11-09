@@ -627,7 +627,9 @@ class Syncer:
                 if not target.exists():
                     return cand
                 try:
-                    same = res.size is not None and target.stat().st_size == res.size
+                    st = target.stat()
+                    # Skyfold gives each photo the photo's own date: same size + same date = same photo
+                    same = res.size is not None and st.st_size == res.size                         and abs(st.st_mtime - a.date.timestamp()) < 2.5
                 except OSError:
                     same = False
                 if same:  # this very file is already here (e.g. sync database was rebuilt): adopt it

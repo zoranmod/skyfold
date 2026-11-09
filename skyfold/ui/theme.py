@@ -34,7 +34,7 @@ DARK = {  # true black for OLED screens
     "border": "#232327", "border_strong": "#3a3a41",
     "text": "#f3f4f6", "muted": "#9ca3af", "disabled": "#55555c",
     "accent": ACCENT, "accent_hover": "#4f8ff7", "accent_pressed": "#2563eb",
-    "btn": "#2563eb", "btn_hover": "#3b82f6", "btn_pressed": "#1d4ed8", "focus": "#ffffff",
+    "btn": "#2563eb", "btn_hover": "#1d4ed8", "btn_pressed": "#1e40af", "focus": "#ffffff",
     "accent_fg": "#60a5fa",
     "accent_text": "#ffffff", "accent_soft": "#0d1a30", "accent_soft_border": "#1e3a6b",
     "warn_bg": "#1c1505", "warn_border": "#a16207", "warn_text": "#fcd34d",

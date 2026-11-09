@@ -525,6 +525,14 @@ class NotesResult:
     more: bool = False  # stopped at the per-run limit; the next run continues
 
 
+def _is_our_index(p: Path) -> bool:
+    try:
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            return "skyfold-collapsed" in fh.read(500_000)
+    except OSError:
+        return False
+
+
 def _is_our_page(p: Path) -> bool:
     """Only pages Skyfold wrote (they carry its style block) are ever removed: an .html file the
     user keeps in the same folder is left alone."""
@@ -664,7 +672,7 @@ class NotesSyncer:
 
         if res.full and not res.more:  # notes that vanished entirely (e.g. purged) since the last full read
             gone = [nid for nid in known if nid not in seen]
-            if len(gone) > max(10, len(known) // 2):
+            if gone and (not seen or len(gone) > max(10, len(known) // 2)):
                 log.warning("Notes: a full read misses %d of %d notes; not removing them (looks incomplete)",
                             len(gone), len(known))
                 res.errors += 1  # the cursor isn't advanced; the next full read decides again
@@ -763,9 +771,13 @@ class NotesSyncer:
             expand_all=json.dumps(t("Expand all"), ensure_ascii=False),
             data=json.dumps(data, ensure_ascii=False).replace("</", "<\\/"),
         )
+        target = self.root / INDEX
+        if target.exists() and not _is_our_index(target):
+            raise SyncError(t("The Notes folder already has a Notes.html that isn't from Skyfold. Choose an empty "
+                              "folder for Notes in Settings."))
         tmp = self.root / (INDEX + ".tmp")
         tmp.write_text(page, encoding="utf-8")
-        os.replace(tmp, self.root / INDEX)
+        os.replace(tmp, target)
 
 
 INDEX_TEMPLATE = """<!doctype html>
