@@ -4,6 +4,11 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-11-09
+
+### Changed
+- New tray panel layout, inspired by the OneDrive panel: the sync status sits right under the title, recent activity reads like a file list (file name, what happened and where, when), the panel is taller, and a bottom bar holds Sync, Open folder, iCloud.com, Find My and Pause.
+
 ## [1.0.4] - 2026-11-09
 
 Fixes from an independent code review (OpenAI Codex), each with a regression test.
@@ -42,7 +47,8 @@ First public release.
 - English and Bosnian.
 - Portable build (`Skyfold-windows.zip`) from GitHub Actions, with a packaged self-test (`--selftest`).
 
-[Unreleased]: https://github.com/zoranmod/skyfold/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/zoranmod/skyfold/compare/v1.0.5...HEAD
+[1.0.5]: https://github.com/zoranmod/skyfold/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/zoranmod/skyfold/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/zoranmod/skyfold/compare/v1.0.0...v1.0.3
 [1.0.0]: https://github.com/zoranmod/skyfold/releases/tag/v1.0.0
