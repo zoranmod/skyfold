@@ -279,7 +279,9 @@ class ICloudDrive:
         extension itself, and a name without one would silently drop it (checked live)."""
         try:
             resp = self.drive.rename_items(item.drivewsid, item.etag, new_name)
-            return ((resp or {}).get("items") or [{}])[0].get("etag")
+            first = ((resp or {}).get("items") or [{}])[0]
+            _check_item(first, "rename")
+            return first.get("etag")
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
 
@@ -292,7 +294,9 @@ class ICloudDrive:
                 "items": [{"drivewsid": item.drivewsid, "etag": item.etag, "clientId": item.drivewsid}],
             }, timeout=120)
             d._raise_if_error(resp)
-            return (resp.json().get("items") or [{}])[0].get("etag")
+            first = (resp.json().get("items") or [{}])[0]
+            _check_item(first, "move")
+            return first.get("etag")
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
 
@@ -301,6 +305,13 @@ class ICloudDrive:
             self.drive.move_items_to_trash(item.drivewsid, item.etag)
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
+
+
+def _check_item(item: dict[str, Any], what: str) -> None:
+    """Apple answers 200 for the whole request and may still refuse the one item: never take that as done."""
+    status = str(item.get("status") or "").upper()
+    if item.get("errorCode") or item.get("error") or any(w in status for w in ("ERROR", "FAIL", "EXIST", "CONFLICT")):
+        raise RuntimeError(f"iCloud refused the {what}: {item.get('errorCode') or item.get('error') or status}")
 
 
 def local_mtime(p: Path) -> float:

@@ -206,7 +206,10 @@ class DriveSyncer:
         return self.root / Path(rel)
 
     def _touch_own(self, p: Path) -> None:
-        self.own_paths[str(p).lower()] = time.monotonic()
+        now = time.monotonic()
+        if len(self.own_paths) > 2000:
+            self.own_paths = {k: v for k, v in self.own_paths.items() if now - v < 10}
+        self.own_paths[str(p).lower()] = now
 
     def is_own_path(self, p: str) -> bool:
         ts = self.own_paths.get(str(Path(p)).lower())
@@ -301,6 +304,12 @@ class DriveSyncer:
             for f in files:
                 if f.startswith(ASIDE_PREFIX):
                     self._recover_aside(Path(dirpath) / f)
+                elif f.startswith(TMP_PREFIX):
+                    try:
+                        if time.time() - os.stat(Path(dirpath) / f).st_mtime > 86400:
+                            os.unlink(Path(dirpath) / f)  # an unfinished download from a crash
+                    except OSError:
+                        pass
                 if ignored(f):
                     continue
                 rel = f"{rel_dir}/{f}" if rel_dir else f
@@ -320,11 +329,11 @@ class DriveSyncer:
             raise SyncError(t("{name} leads outside the Drive folder; left alone", name=p))
 
     def _trash_local(self, p: Path) -> None:
-        from send2trash import send2trash
+        from .engine import recycle
 
         self._check_inside(p.parent)
         self._touch_own(p)
-        send2trash(str(p))
+        recycle(p)
 
     def _wanted_dir(self, path: str) -> bool:
         return in_scope(path, True, self.folders)
@@ -364,6 +373,8 @@ class DriveSyncer:
         folders: dict[str, DriveItem] = {}
         for path in wanted:
             while path not in self.cache or not self.cache[path].is_dir:  # new local folder: use its parent
+                if path == "":
+                    return None  # nothing known to start from: read everything
                 path = str(PurePosixPath(path).parent) if "/" in path else ""
             folders[path] = self.cache[path]
         return list(folders.values())
@@ -402,7 +413,7 @@ class DriveSyncer:
                     continue
         return out
 
-    def run(self, changed: set[str] | None = None) -> DriveResult:
+    def run(self, changed: set[str] | None = None, _prev: dict | None = None) -> DriveResult:
         """Full sync, or a quick one limited to the folders around `changed` local paths."""
         self.cancel_flag.clear()
         self._late = None
@@ -423,7 +434,8 @@ class DriveSyncer:
             self.state.reset()  # what it remembers is about the other folder
             self.cache = {}
         self.state.set_meta("root", root_id)
-        self._prev = dict(self.cache)  # iCloud as of the last read: identities for rename detection
+        self._prev = _prev if _prev is not None else dict(self.cache)  # iCloud as of the last read: identities for rename detection
+        prev_before = self._prev
         if hasattr(self.remote, "incomplete"):
             self.remote.incomplete = set()
         res = DriveResult()
@@ -531,6 +543,10 @@ class DriveSyncer:
                 continue  # iCloud didn't list this folder completely: nothing is done in it this pass
             if r and not lo and not b and self._skip_unsupported(path):
                 continue
+            if b and r and b.is_dir != r.is_dir:
+                self.state.drop(path)  # replaced in iCloud by the other kind: what is there now is new
+                base.pop(path, None)
+                b = None
             if r and lo and r.is_dir != lo.is_dir:
                 res.errors += 1
                 self.cb.activity("error", t("File/folder clash, skipped: {name}", name=path))
@@ -548,11 +564,15 @@ class DriveSyncer:
                 elif lo and not r:
                     if b and b.etag is not None and listed_partly(path):
                         pass  # iCloud's answer for its folder was incomplete: decide next time
+                    elif b and b.etag == "":
+                        if scope is None:  # made by us, still not listed by a second full read: gone in iCloud
+                            to_pc.append(path)  # (files never sent up stay, and the folder is made again)
                     elif b and b.etag is not None:
                         to_pc.append(path)  # folder deleted in iCloud
                     elif not b:
                         mkdir_remote.append(path)
-                    # else: we created it last pass and iCloud hasn't listed it yet: wait
+                    elif scope is None:  # made by us, not listed by this full read: one more full read decides
+                        self.state.put(Base(path, True, "", None, None, None, False))
                 elif b:
                     self.state.drop(path)
                 continue
@@ -637,7 +657,7 @@ class DriveSyncer:
             # A folder went away on one side. A quick pass doesn't see what is inside it (or where it
             # went, if it was renamed): only a full read can decide safely.
             log.info("Drive: a folder was removed or renamed; doing a full read instead of a quick one")
-            return self.run()
+            return self.run(_prev=prev_before)
         self._partial = partial
         # A rename or move looks like "one deleted + one new": do it as a rename instead.
         self._moves(remote, local, base, downloads, uploads, mkdir_remote, mkdir_local, to_cloud, to_pc, res)
@@ -700,6 +720,15 @@ class DriveSyncer:
                 self.remote.mkdir(parent, PurePosixPath(path).name)
                 self.state.put(Base(path, True, None, None, None, None, False))
                 res.followup = True
+                try:
+                    made = self.remote.walk(folders=[parent]).get(path)
+                except (AuthRequired, RemoteUnavailable):
+                    raise
+                except Exception:  # noqa: BLE001 - the next pass finds it
+                    made = None
+                if made is not None and made.is_dir:  # its contents (and sub-folders) follow in this pass
+                    remote[path] = made
+                    self.cache[path] = made
             except (AuthRequired, RemoteUnavailable):
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -976,6 +1005,29 @@ class DriveSyncer:
         parent = remote.get(_parent(new))
         if item is None or parent is None or not parent.is_dir:
             return False  # the new place doesn't exist in iCloud yet: sync as add + delete
+        old_name, new_name = PurePosixPath(old).name, PurePosixPath(new).name
+        if _parent(old) != _parent(new) and old_name != new_name:
+            via_target = f"{_parent(new)}/{old_name}" if _parent(new) else old_name
+            via_source = f"{_parent(old)}/{new_name}" if _parent(old) else new_name
+            if via_target in remote or via_target.lower() in {p.lower() for p in remote}:
+                if via_source in remote or via_source.lower() in {p.lower() for p in remote}:
+                    return False  # both ways pass through a taken name: sync as add + delete
+                try:  # rename where it is first, then move (the target folder has the old name)
+                    etag = self.remote.rename(item, new_name)
+                    item = DriveItem(via_source, item.drivewsid, item.docwsid, item.zone, etag or item.etag,
+                                     item.is_dir, item.size, item.mtime)
+                    self.remote.move(item, parent)
+                except (AuthRequired, RemoteUnavailable):
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Rename in iCloud failed (%s -> %s): %s", old, new, exc)
+                    return False
+                self._forget_cached(old)
+                res.moved += 1
+                res.followup = True
+                self.cb.activity("upload", t("Drive: renamed/moved in iCloud: {old} → {new}", old=old, new=new),
+                                 str(self._abs(new)))
+                return True
         try:
             if _parent(old) != _parent(new):
                 etag = self.remote.move(item, parent)
@@ -1139,6 +1191,8 @@ class DriveSyncer:
             else:
                 for p in to_cloud:
                     self._check_cancel()
+                    if p in remote and base.get(p) is not None and remote[p].is_dir != base[p].is_dir:
+                        continue  # iCloud has something else there now: not what was deleted on this PC
                     if self._abs(p).exists():  # back on this PC since the question: not deleted any more
                         self.state.drop(p)
                         continue
@@ -1234,11 +1288,13 @@ class DriveSyncer:
                     if zipped and not item.path.lower().endswith(".zip"):
                         raise MacPackage(item.path)  # iCloud zipped a Mac package (e.g. .xcodeproj) for us
                     raise SyncError(t("file size doesn't match"))
+                if item.mtime:
+                    os.utime(tmp_path, (item.mtime, item.mtime))  # kept by the rename below
                 self._touch_own(target)
                 b = base.get(item.path)
                 aside = None
                 if target.exists() and target.is_file():
-                    aside = target.with_name(f"{ASIDE_PREFIX}{os.getpid()}-{threading.get_ident()}-{target.name}")
+                    aside = target.with_name(_aside_name(target))
                     os.rename(target, aside)  # moved, never overwritten (whatever is saved there right now)
                 try:
                     try:
@@ -1259,8 +1315,6 @@ class DriveSyncer:
                             replaced.append((aside, item.path))
                     else:  # changed on this PC since the scan: keep that version under a conflict name
                         self._release_aside(aside, item.path, restore=False)
-                if item.mtime:
-                    os.utime(target, (item.mtime, item.mtime))
                 hide_like_mac(target)
                 return target
             finally:
@@ -1359,13 +1413,21 @@ class DriveSyncer:
 
     def _recover_aside(self, p: Path) -> None:
         """Left behind by an interrupted download (crash, power cut): shown again as a conflict copy."""
-        parts = p.name[len(ASIDE_PREFIX):].split("-", 2)
-        name = parts[2] if len(parts) == 3 and parts[2] else "file"
+        name = _aside_original(p.name)
         try:
             rel = (p.parent / name).relative_to(self.root).as_posix()
         except ValueError:
             return
         log.info("Drive: recovering %s left by an interrupted download", rel)
+        b = self.state.all().get(rel)
+        try:
+            st = p.stat()
+            if b is not None and self._abs(rel).exists() and \
+                    (st.st_size, round(st.st_mtime, 2)) == (b.lsize, round(b.lmtime or 0, 2)):
+                self._recycle_previous(p, rel)  # just the version both sides had: to the Recycle Bin
+                return
+        except OSError:
+            pass
         self._release_aside(p, rel, restore=False)
 
     def _uploads(self, paths: list[str], remote: dict[str, DriveItem], base: dict[str, Base],
@@ -1515,6 +1577,28 @@ def _pairs(old: dict, new: dict) -> list[tuple[str, str]]:
     c_new = Counter(v for v in new.values() if v is not None)
     by_key = {v: k for k, v in new.items() if v is not None and c_new[v] == 1}
     return [(k, by_key[v]) for k, v in old.items() if v is not None and c_old[v] == 1 and v in by_key]
+
+
+def _aside_name(target: Path) -> str:
+    """`.skyfold-tmp-old-<8 hex>-<name>`, the name shortened when the full path would get too long."""
+    import uuid
+
+    tag = f"{ASIDE_PREFIX}{uuid.uuid4().hex[:8]}-"
+    name = target.name
+    room = min(255, 259 - len(str(target.parent)) - 1) - len(tag)
+    if len(name) > room:
+        stem, suffix = os.path.splitext(name)
+        name = stem[: max(1, room - len(suffix))] + suffix
+    return tag + name
+
+
+def _aside_original(name: str) -> str:
+    """The file name an aside name was made from (both the current and the 1.0.6-candidate format)."""
+    import re
+
+    rest = name[len(ASIDE_PREFIX):]
+    m = re.match(r"(?:\d+-\d+-|[0-9a-f]{8}-)(.+)", rest)
+    return m.group(1) if m else (rest or "file")
 
 
 def _parent(path: str) -> str:

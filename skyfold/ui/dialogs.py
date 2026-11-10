@@ -594,7 +594,14 @@ class SettingsDialog(_Dialog):
         row = QHBoxLayout()
         who = QVBoxLayout()
         who.setSpacing(2)
-        who.addWidget(_label(self.s.apple_id or t("Not signed in"), "H2"))
+        from PySide6.QtGui import QFontMetrics
+
+        ident = _label(self.s.apple_id or t("Not signed in"), "H2")
+        ident.setText(QFontMetrics(ident.font()).elidedText(ident.text(), Qt.ElideMiddle, 300))
+        ident.setToolTip(self.s.apple_id or "")
+        ident.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        ident.setMinimumWidth(0)
+        who.addWidget(ident)
         who.addWidget(_label("iCloud", "Muted"))
         row.addLayout(who, 1)
         out = QPushButton(t("Sign out"))
@@ -1273,6 +1280,8 @@ class LayoutOption(QFrame):
         super().__init__()
         self.setObjectName("Option")
         self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)  # Tab reaches it; Space or Enter chooses it
+        self.setAccessibleName(f"{title}: {example}")
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 9, 12, 9)
         row.setSpacing(12)
@@ -1296,6 +1305,12 @@ class LayoutOption(QFrame):
     def mousePressEvent(self, e) -> None:  # noqa: N802
         self.clicked.emit()
         super().mousePressEvent(e)
+
+    def keyPressEvent(self, e) -> None:  # noqa: N802
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.clicked.emit()
+            return
+        super().keyPressEvent(e)
 
 
 class FolderSetupDialog(_Dialog):
@@ -1447,7 +1462,7 @@ class FolderSetupDialog(_Dialog):
 class DeviceRow(QFrame):
     def __init__(self, dev, palette: dict[str, str], get_api) -> None:
         super().__init__()
-        self.setObjectName("Row")
+        self.setObjectName("Device")
         self.dev, self.c, self.get_api = dev, palette, get_api
         lay = QHBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)

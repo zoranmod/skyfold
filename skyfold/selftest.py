@@ -62,6 +62,14 @@ def main(report: str) -> int:
 
     check("keyring lookup", keyring_lookup)
 
+    def trash_backend() -> str:
+        from send2trash import send2trash
+
+        assert send2trash.__module__ == "send2trash.win.modern", send2trash.__module__
+        return "modern (fails instead of deleting for good)"
+
+    check("Recycle Bin backend", trash_backend)
+
     def trash() -> str:
         from send2trash import send2trash
 

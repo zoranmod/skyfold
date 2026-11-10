@@ -238,6 +238,9 @@ class SyncWorker(QObject):
             self._set_state("offline", t("Can't reach iCloud. Will retry shortly."))
             return
         if api is None:
+            if auth.SIGNED_OUT.exists():  # signed out on purpose: nothing has expired
+                self._set_state("auth", t("You are signed out. Sign in to continue."))
+                return
             self._set_state("auth", t("Your session has expired. Please sign in again."))
             self.notify.emit(t("Sign-in required"), t("Your iCloud session has expired. Click to sign in again."))
             return
@@ -265,6 +268,7 @@ class SyncWorker(QObject):
     def set_api(self, api: Any) -> None:
         self._serialize_requests(api)
         auth.make_current(api)
+        self._check_account()
         self.api = api
         for old in (self.drive, self.notes):  # they hold the previous session
             if old is not None:
@@ -280,6 +284,25 @@ class SyncWorker(QObject):
             self._set_state("paused", t("Syncing is paused."))
         else:
             self.sync_now(False)
+
+    def _check_account(self) -> None:
+        """The sync databases belong to one Apple ID. If they were written for another one (e.g. the
+        settings were lost and someone else signed in), Photos and Notes start afresh: nothing of the
+        other account is ever taken for a deletion."""
+        import hashlib
+
+        if not self.settings.apple_id or self.state is None:
+            return
+        fp = hashlib.sha256(self.settings.apple_id.strip().lower().encode()).hexdigest()[:16]
+        known = self.state.get("account")
+        if known and known != fp:
+            log.warning("The sync database belongs to another Apple ID; Photos and Notes start afresh")
+            self.state.reset()
+            self._pending = None
+            self.pendingChanged.emit(self._drive_pending)
+            if self.notes_state is not None:
+                self.notes_state.reset()
+        self.state.set("account", fp)
 
     def _make_drive(self) -> None:
         s = self.settings
@@ -329,7 +352,8 @@ class SyncWorker(QObject):
         self.syncer = None
         self.drive = None
         self.notes = None
-        auth.logout()
+        # (the session files were removed by the window side at once; doing it here, later, could
+        # remove a sign-in made meanwhile)
         self._set_state("auth", t("You are signed out. Sign in to continue."))
 
     # settings ---------------------------------------------------------------
@@ -504,8 +528,8 @@ class SyncWorker(QObject):
         """Apple rejected a request. Often that's a short-lived web token that just needs renewing
         (HTTP 421/450), not an expired sign-in: renew it quietly from the saved session first and
         only ask the user to sign in when that fails."""
-        if failed_api is not None and failed_api is not self.api:
-            return  # about a session that was already replaced (e.g. Photos and Drive failed together)
+        if failed_api is None or failed_api is not self.api:
+            return  # about a session that was already replaced or signed out (e.g. Photos and Drive failed together)
         for s in (self.syncer, self.drive, self.notes):
             if s:
                 s.cancel_flag.set()
@@ -575,8 +599,11 @@ class SyncWorker(QObject):
         else:
             self._set_state("idle", t("Everything is in sync."))
 
-    def _handle(self, exc: Exception, problems: list[str], service: str, svc: str = "app") -> bool:
-        """Shared error handling. Returns False if the whole cycle must stop."""
+    def _handle(self, exc: Exception, problems: list[str], service: str, svc: str = "app",
+                api: Any = None) -> bool:
+        """Shared error handling. Returns False if the whole cycle must stop. `api` is the session the
+        failing pass used (a pass may still finish after a new sign-in replaced it)."""
+        failed_api = api if api is not None else self.api
         if isinstance(exc, Cancelled):
             self._set_state("idle", t("Sync stopped."), svc)
             return False
@@ -586,11 +613,11 @@ class SyncWorker(QObject):
             log.warning("Sign-in lost during %s (%s, cause %s)", service, type(exc).__name__,
                         type(cause).__name__ if cause else "-")
         if isinstance(exc, AuthRequired) and svc == "drive":
-            self._authLost.emit(self.api)  # session objects are owned by the worker thread
+            self._authLost.emit(failed_api)  # session objects are owned by the worker thread
             return False
         if isinstance(exc, AuthRequired):
             # Defer: we may be inside a sync cycle; renewing replaces the session objects.
-            self._authLost.emit(self.api)
+            self._authLost.emit(failed_api)
             return False
         text = str(exc)
         if isinstance(exc, (RemoteUnavailable, SyncError)):
@@ -663,19 +690,23 @@ class SyncWorker(QObject):
     def _run_drive(self, problems: list[str], changed: set[str] | None = None) -> bool:
         assert self.drive is not None and self.state is not None
         first = not self.state.get("drive_last_sync")
+        used_api = getattr(getattr(self.drive, "remote", None), "_api", None)  # the session this pass runs with
+        covered: set[str] = set()
+        if changed is None:  # a full pass covers what is waiting now; changes made while it runs still count
+            with self._drive_lock:
+                covered, self._drive_changes = self._drive_changes, set()
         try:
             res = self.drive.run(changed=changed)
         except Exception as exc:  # noqa: BLE001
-            if changed:
+            if changed or covered:
                 with self._drive_lock:
-                    self._drive_retry |= changed  # tried again with the next change or the next full read
-            self._handle(exc, problems, t("iCloud Drive"), "drive")
+                    self._drive_retry |= (changed or set()) | covered  # tried again with the next change or full read
+            self._handle(exc, problems, t("iCloud Drive"), "drive", used_api)
             return False  # never straight into another attempt
         if res.full:
             self._drive_last = time.monotonic()
             with self._drive_lock:
-                self._drive_changes.clear()  # a full pass covered them
-                self._drive_retry.clear()
+                self._drive_retry.clear()  # (changes saved during the pass stay queued for a quick one)
         if res.followup and changed:  # a folder was just created: send its contents next
             with self._drive_lock:
                 self._drive_changes |= changed

@@ -49,17 +49,43 @@ class _RedactEmails(logging.Filter):
     import re as _re
 
     _EMAIL = _re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
-    # X-APPLE-WEBAUTH-…=value, scnt/session/token headers, and any long token-like run of characters
-    _SECRET = _re.compile(r"(?i)((?:x-apple-[\w-]+|scnt|session[\w-]*|[\w-]*token[\w-]*|cookie|dsid)"
-                          r"[\"']?\s*[=:]\s*[\"']?)[^\s;,\"'&]+")
-    _LONG = _re.compile(r"(?=[\w+=-]*\d)(?=[\w+=-]*[A-Za-z])[\w+=-]{40,}")  # letters and digits mixed
+    _PHONE = _re.compile(r"\+\d[\d ]{7,16}\d")  # an Apple ID can be a phone number
+    # whole header lines: every cookie on it, and bearer tokens
+    _HEADER = _re.compile(r"(?im)\b((?:set-)?cookie\s*:|authorization\s*:)[^\r\n]*")
+    # key=value, or "key": "value" (only as a key: "the session: disk full" stays readable)
+    _KEYED = _re.compile(r"""(?i)(\b(?:x-apple-[\w-]{1,40}|scnt|(?:\w{1,20}[_-]){0,3}token|session[_-]?id|password"""
+                         r"""|dsid)["']?\s*(?:=|:\s*["']))[^\s;,"'&]+""")
+    _NAMES = _re.compile(r"""(?i)(\b(?:full|first|last|display)_?name["']?\s*[:=]\s*["'])[^"']*""")  # people's names
+    _SESSION_FILE = _re.compile(r"(?i)([\\/]session[\\/])[^\\/\s'\"]+")
+    _LONG = _re.compile(r"[\w+/=-]{80,}")  # a long token-like run of characters
+    known: set[str] = set()  # the Apple ID as typed and as pyicloud spells it in file names
+
+    @classmethod
+    def remember(cls, apple_id: str) -> None:
+        if apple_id:
+            cls.known = {apple_id, "".join(ch for ch in apple_id if ch.isalnum() or ch == "_")}
 
     @classmethod
     def clean(cls, text: str) -> str:
+        if len(text) > 20_000:
+            text = text[:20_000] + " …"
+        for word in cls.known:
+            if len(word) >= 5 and word in text:
+                text = text.replace(word, "<apple-id>")
         if "@" in text:
             text = cls._EMAIL.sub("<apple-id>", text)
-        text = cls._SECRET.sub(r"\1<redacted>", text)
-        return cls._LONG.sub("<redacted>", text)
+        text = cls._PHONE.sub("<apple-id>", text)
+        text = cls._HEADER.sub(r"\1 <redacted>", text)
+        text = cls._KEYED.sub(r"\1<redacted>", text)
+        text = cls._NAMES.sub(r"\1<redacted>", text)
+        text = cls._SESSION_FILE.sub(r"\1<redacted>", text)
+
+        def long(m):
+            s = m.group(0)
+            mixed = any(c.isdigit() for c in s) and any(c.islower() for c in s) and any(c.isupper() for c in s)
+            return "<redacted>" if mixed else s
+
+        return cls._LONG.sub(long, text)
 
     def filter(self, record: logging.LogRecord) -> bool:
         text = record.getMessage()
@@ -71,6 +97,24 @@ class _RedactEmails(logging.Filter):
         if record.exc_text:
             record.exc_text = self.clean(record.exc_text)
         return True
+
+
+_MUTEX = None
+
+
+def _single_instance_mutex(name: str):
+    """A named mutex per Windows user: the one sure "already running" signal (two quick launches can
+    both open the pipe). Returns the handle, None where unavailable, or False if another one holds it."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateMutexW.restype = ctypes.c_void_p
+    handle = k32.CreateMutexW(None, False, "Local\\" + name.replace("\\", "-"))
+    if handle and ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        return False
+    return handle
 
 
 def _instance_name() -> str:
@@ -134,6 +178,7 @@ class Controller(QObject):
 
         # UI
         self.flyout = Flyout(self.c)
+        _RedactEmails.remember(self.settings.apple_id)  # kept out of the log in every spelling
         self.flyout.set_account(self.settings.apple_id)
         self.flyout.set_paused(self.settings.paused)
         self.tray = QSystemTrayIcon(tray_icon("idle"))
@@ -307,6 +352,7 @@ class Controller(QObject):
         dlg = LoginDialog(self.settings.apple_id)
 
         def logged_in(api, apple_id: str) -> None:
+            _RedactEmails.remember(apple_id)
             if self.settings.apple_id and apple_id.lower() != self.settings.apple_id.lower():
                 turned_off = [name for on, name in ((self.settings.drive_enabled, t("iCloud Drive")),
                                                     (self.settings.notes_enabled, t("Notes"))) if on]
@@ -377,6 +423,8 @@ class Controller(QObject):
     def sign_out(self) -> None:
         self._login_api = None
         self.worker.cancel()  # stop the running pass now; the rest happens on the worker thread
+        # Right now, not queued: a sign-in made while the worker is still busy must never be undone by it.
+        auth.logout()
         self.req.signOut.emit()
         self.flyout.set_account("")
 
@@ -486,13 +534,23 @@ def main() -> int:
         return 0
     if "--quit" in sys.argv:
         return 0  # nothing running
+    global _MUTEX
+    _MUTEX = _single_instance_mutex(instance)
+    if _MUTEX is False:
+        return 0  # another Skyfold of this user is just starting: it will show itself
     QLocalServer.removeServer(instance)
     server = QLocalServer()
-    if not server.listen(instance):
-        logging.getLogger(__name__).warning("Single-instance server: %s", server.errorString())
+    listen_error = "" if server.listen(instance) else server.errorString()
 
     setup_logging()
-    log.info("Starting %s %s from %s (exe %s)", APP_NAME, VERSION, os.getcwd(), sys.executable)
+
+    def _log_uncaught(kind, value, tb) -> None:
+        log.error("Unexpected error", exc_info=(kind, value, tb))
+
+    sys.excepthook = _log_uncaught
+    if listen_error:
+        log.warning("Single-instance server: %s", listen_error)
+    log.info("Starting %s %s (%s)", APP_NAME, VERSION, "packaged" if getattr(sys, "frozen", False) else "from source")
     if not QSystemTrayIcon.isSystemTrayAvailable():
         QMessageBox.critical(None, APP_NAME, t("The system tray is not available."))
         return 1

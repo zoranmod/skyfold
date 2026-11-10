@@ -3,3 +3,4 @@ pyicloud==2026.10.1
 PySide6==6.12.0
 watchdog==7.1.0
 Send2Trash==2.1.0
+pywin32==311  # Send2Trash's modern backend: never deletes for good when an item can't be recycled

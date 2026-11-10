@@ -17,13 +17,14 @@ import tempfile
 import re
 import sqlite3
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
-from .engine import Callbacks, Cancelled, SyncError, inside_root, now_iso
+from .engine import Callbacks, Cancelled, SyncError, _is_link, inside_root, now_iso
 from .i18n import t
 from .remote import AuthRequired, RemoteUnavailable, _translate
 
@@ -115,7 +116,8 @@ class ICloudNotes:
             exporter = NoteExporter(self.svc._raw, config=ExportConfig(assets_dir=str(assets_dir), full_page=True))
             _SKETCH_FALLBACKS.clear()
             _SKETCH_INFO.clear()
-            _CURRENT_NOTE[0] = str(out_dir.name + "/" + filename)
+            if not filename.startswith(STAGE_PREFIX):
+                _CURRENT_NOTE[0] = str(out_dir.name + "/" + filename)
             if not exporter.export(record, output_dir=str(out_dir), filename=filename):
                 raise SyncError(t("Note has no content"))
             if _SKETCH_FALLBACKS:
@@ -476,7 +478,7 @@ def pdfs_to_images(page: str, note_dir: Path, open_text: str) -> str:
 
 def _safe(name: str, fallback: str) -> str:
     name = UNSAFE.sub("_", name).strip(" .")
-    return (name or fallback)[:120]
+    return (name or fallback)[:120].rstrip(" .") or fallback  # Windows drops a trailing space or dot
 
 
 class NotesState:
@@ -525,6 +527,7 @@ class NotesResult:
     errors: int = 0
     full: bool = False
     more: bool = False  # stopped at the per-run limit; the next run continues
+    held: bool = False  # a note failed again (reported before): the cursor waits so it is tried again
 
 
 def _is_our_index(p: Path) -> bool:
@@ -541,6 +544,8 @@ def _is_our_index(p: Path) -> bool:
 
 
 STAGE_PREFIX = ".skyfold-tmp-note-"
+# pyicloud leaves an attachment's iCloud web address in the page when its download failed
+_MISSING_ATTACHMENT = re.compile(r"""(?i)\b(?:src|data|poster)\s*=\s*["']?https?://[^"'\s>]*icloud-content\.com""")
 
 
 def _digest(p: Path) -> str:
@@ -604,15 +609,38 @@ class NotesSyncer:
         return out
 
     def _trash(self, p: Path) -> None:
-        from send2trash import send2trash
+        from .engine import recycle
 
-        send2trash(str(p))
+        recycle(p)
+
+    def _tidy_leftovers(self) -> None:
+        """Private files left by a crash: unfinished exports are removed, a moved-aside page goes to the
+        Recycle Bin, and a moved-aside index comes back if Notes.html is missing."""
+        cutoff = time.time() - 3600
+        for dirpath, dirs, files in os.walk(self.root):
+            dirs[:] = [d for d in dirs if d != ASSETS and not _is_link(Path(dirpath) / d)]
+            for f in files:
+                if not (f.startswith(STAGE_PREFIX) or (f.startswith(".skyfold-index-") and f.endswith(".tmp"))):
+                    continue
+                p = Path(dirpath) / f
+                try:
+                    if p.stat().st_mtime > cutoff or not inside_root(self.root, p):
+                        continue  # may belong to a run that is still going
+                    if f.startswith(STAGE_PREFIX + "index-") and not (self.root / INDEX).exists():
+                        os.rename(p, self.root / INDEX)
+                    elif f.startswith((STAGE_PREFIX + "old-", STAGE_PREFIX + "index-")):
+                        self._trash(p)
+                    else:
+                        p.unlink()
+                except OSError as exc:
+                    log.info("Notes: couldn't tidy %s: %s", f, exc)
 
     def run(self, full: bool = False) -> NotesResult:
         self.cancel_flag.clear()
         res = NotesResult()
         last_page = INDEX
         self._check_root()
+        self._tidy_leftovers()
         if self.state.get("format") != FORMAT:  # nicer pages / sharper drawings: export all again
             for nid, row in self.state.all().items():
                 self.state.put(nid, row[1], row[2], row[3], None, bool(row[5]))
@@ -670,12 +698,16 @@ class NotesSyncer:
                 # Exported under a private name first, then put in place without overwriting anything.
                 staged_rel = f"{PurePosixPath(rel).parent.as_posix()}/{STAGE_PREFIX}{uuid.uuid4().hex}.html"
                 try:
+                    _CURRENT_NOTE[0] = rel
                     self.remote.export(n.id, out_dir, PurePosixPath(staged_rel).name, self.root / ASSETS)
+                    if _MISSING_ATTACHMENT.search((self.root / staged_rel).read_text(encoding="utf-8",
+                                                                                     errors="replace")):
+                        raise SyncError(t("an attachment couldn't be downloaded; tried again next time"))
                     self._polish(staged_rel, n)
                     if n.modified:
                         ts = n.modified.timestamp()
                         os.utime(self.root / staged_rel, (ts, ts))
-                    self._publish_page(self.root / staged_rel, self.root / rel, n.id, old)
+                    self._publish_page(self.root / staged_rel, self.root / rel, n.id, old, n.modified)
                 finally:
                     (self.root / staged_rel).unlink(missing_ok=True)
             except (Cancelled, AuthRequired, RemoteUnavailable):
@@ -683,7 +715,8 @@ class NotesSyncer:
             except Exception as exc:  # noqa: BLE001
                 key = f"failed:{n.id}"
                 if self.state.get(key) == (modified or "?") and not full:
-                    continue  # failed before in this same version: reported already, retried on a full read
+                    res.held = True  # reported already; the cursor doesn't move, so it is tried again
+                    continue
                 self.state.set(key, modified or "?")
                 res.errors += 1
                 self.cb.activity("error", t("Couldn't export note ({name}): {error}", name=n.title or n.id, error=exc))
@@ -716,7 +749,7 @@ class NotesSyncer:
             self._remove_leftover_pages(res)
             self.state.set("orphan_sweep", "1")
         self.write_index()
-        if not res.errors and not res.more:
+        if not res.errors and not res.more and not res.held:
             self.state.set("cursor", cursor)
         self.state.set("last_sync", now_iso())
         if res.exported:
@@ -735,12 +768,20 @@ class NotesSyncer:
         tracked = {r[1].lower() for r in rows.values() if r[1]}
         if not tracked or any(r[4] is None and not r[5] for r in rows.values()):
             return  # nothing known yet, or notes still waiting to be downloaded
+        note_dirs = {str(PurePosixPath(r).parent).lower() for r in tracked}
         leftovers = []
-        for p in self.root.rglob("*.html"):
-            if p.name == INDEX or ASSETS in p.relative_to(self.root).parts:
-                continue
-            if p.relative_to(self.root).as_posix().lower() not in tracked and _is_our_page(p):
-                leftovers.append(p)
+        for dirpath, dirs, files in os.walk(self.root):
+            dirs[:] = [d for d in dirs if d != ASSETS and not _is_link(Path(dirpath) / d)]  # never through a link
+            rel_dir = Path(dirpath).relative_to(self.root).as_posix()
+            if rel_dir.lower() not in note_dirs:
+                continue  # only the notes' own folders: copies kept elsewhere are the user's
+            for f in files:
+                if not f.lower().endswith(".html") or f == INDEX:
+                    continue
+                p = Path(dirpath) / f
+                rel = p.relative_to(self.root).as_posix()
+                if rel.lower() not in tracked and inside_root(self.root, p) and _is_our_page(p):
+                    leftovers.append(p)
         if len(leftovers) > max(10, len(tracked) // 2):
             log.warning("Not removing %d untracked note pages: too many, looks wrong", len(leftovers))
             return
@@ -761,7 +802,7 @@ class NotesSyncer:
         page = pdfs_to_images(page, p.parent, t("Open the original PDF"))
         p.write_text(polish_note_html(page, back, t("All notes"), updated, t("Light / dark")), encoding="utf-8")
 
-    def _publish_page(self, staged: Path, target: Path, nid: str, old: tuple | None) -> None:
+    def _publish_page(self, staged: Path, target: Path, nid: str, old: tuple | None, modified=None) -> None:
         """Put a freshly exported page in place. A file there is first moved aside (so nothing saved at
         this moment is overwritten); someone else's file is given back, and our previous page is only
         deleted when it is exactly what Skyfold wrote, otherwise it goes to the Recycle Bin."""
@@ -778,7 +819,7 @@ class NotesSyncer:
             os.rename(staged, target)  # refuses if a file was saved there meanwhile
         except FileExistsError:
             if aside is not None:
-                self._let_go(aside, target, nid, old)
+                self._let_go(aside, target, nid, old, modified)
             raise SyncError(t("{name} changed while it was downloading; tried again next time",
                               name=target.name)) from None
         except BaseException:
@@ -786,21 +827,24 @@ class NotesSyncer:
                 try:
                     os.rename(aside, target)
                 except OSError:
-                    self._let_go(aside, target, nid, old)
+                    self._let_go(aside, target, nid, old, modified)
             raise
         if aside is not None:
-            self._let_go(aside, target, nid, old)
+            self._let_go(aside, target, nid, old, modified)
         self.state.set(f"page:{nid}", digest)
 
-    def _let_go(self, aside: Path, target: Path, nid: str, old: tuple | None) -> None:
+    def _let_go(self, aside: Path, target: Path, nid: str, old: tuple | None, modified=None) -> None:
         """Our previous page: deleted when unchanged since Skyfold wrote it, else to the Recycle Bin."""
         recorded = self.state.get(f"page:{nid}")
         try:
             if recorded:
                 unchanged = _digest(aside) == recorded
-            else:  # written before 1.0.6: it carries the note's own modified time, edits change that
-                when = datetime.fromisoformat(old[4]).timestamp() if old and old[4] else None
-                unchanged = when is not None and abs(aside.stat().st_mtime - when) < 2
+            else:  # written before 1.0.6: it carries the note's modified time (as last exported), edits change that
+                times = [datetime.fromisoformat(old[4]).timestamp()] if old and old[4] else []
+                if modified is not None:
+                    times.append(modified.timestamp())
+                mtime = aside.stat().st_mtime
+                unchanged = any(abs(mtime - w) < 2 for w in times)
         except (OSError, ValueError):
             unchanged = False
         if unchanged:

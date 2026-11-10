@@ -300,7 +300,6 @@ class ActivityRow(QFrame):
         self.detail.setToolTip(self.detail_text)
         self.detail.setMinimumWidth(0)
         self.detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.detail.setVisible(bool(self.detail_text))
         self.when = QLabel(fmt_time(ts))
         self.when.setObjectName("Hint")
         col.addWidget(self.text)
@@ -308,8 +307,12 @@ class ActivityRow(QFrame):
         col.addWidget(self.when)
         lay.addWidget(self.tile, 0, Qt.AlignTop)
         lay.addLayout(col, 1)
+        self.detail.setVisible(bool(self.detail_text))  # only now: it has a parent (never a window of its own)
+        if target or kind == "error":
+            self.setFocusPolicy(Qt.StrongFocus)  # Tab reaches it; Enter or Space opens it
         self._set_title()
         self.apply_palette(palette)
+        self.refresh()
 
     def _set_title(self) -> None:
         from PySide6.QtGui import QFontMetrics
@@ -331,6 +334,19 @@ class ActivityRow(QFrame):
 
     def refresh(self) -> None:
         self.when.setText(fmt_time(self.ts))
+        self.setAccessibleName(", ".join(x for x in (self.title_text, self.detail_text, self.when.text()) if x))
+
+    def _activate(self) -> None:
+        if self.target:
+            reveal(self.target)
+        elif self.kind == "error":
+            self.errorClicked.emit(self)
+
+    def keyPressEvent(self, e) -> None:  # noqa: N802
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space) and (self.target or self.kind == "error"):
+            self._activate()
+            return
+        super().keyPressEvent(e)
 
     def same_as(self, kind: str, text: str, target: str = "") -> bool:
         return self.kind == kind and self.message == text and (target or "") == (self.target or "")
@@ -345,10 +361,7 @@ class ActivityRow(QFrame):
 
     def mouseReleaseEvent(self, e) -> None:  # noqa: N802 - Qt naming
         if e.button() == Qt.LeftButton and self.rect().contains(e.position().toPoint()):
-            if self.target:
-                reveal(self.target)
-            elif self.kind == "error":
-                self.errorClicked.emit(self)
+            self._activate()
         super().mouseReleaseEvent(e)
 
 
@@ -389,6 +402,8 @@ class Flyout(QWidget):
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.c = palette
         self.setObjectName("Root")
+        self.setWindowTitle(APP_NAME)
+        self.setAccessibleName(APP_NAME)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFixedWidth(self.WIDTH)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -405,6 +420,8 @@ class Flyout(QWidget):
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        body.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Ignored)  # as tall as the panel's own sizing says
+        self._scroll.setFocusPolicy(Qt.NoFocus)
         self._scroll.setWidget(body)
         outer.addWidget(self._scroll, 1)
         root = QVBoxLayout(body)
@@ -542,6 +559,7 @@ class Flyout(QWidget):
         self.list.setWidgetResizable(True)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.setFrameShape(QFrame.NoFrame)
+        self.list.setFocusPolicy(Qt.NoFocus)  # its rows take the focus themselves
         self._rows_box = QWidget()
         self._rows_box.setObjectName("Root")
         self._rows = QVBoxLayout(self._rows_box)
@@ -701,8 +719,11 @@ class Flyout(QWidget):
         self.bar.setValue(int(1000 * min(done, total) / total))
         text = break_at_dots(text) if text else text
         if text and text != self.status_text.text():
+            lines_before = self.status_text.heightForWidth(max(1, self.status_text.width()))
             self.status_text.setText(text)  # one line of text: the status line itself
             self.status_text.show()
+            if self.isVisible() and self.status_text.heightForWidth(max(1, self.status_text.width())) != lines_before:
+                QTimer.singleShot(0, self._size_list)  # wraps to more or fewer lines: fit again
             self.dot.setToolTip(STATE_TITLES.get(self.state, self.state) + "\n" + text.replace(chr(0xA0), " "))
         if self.bar.isHidden():
             self.bar.show()
@@ -895,6 +916,11 @@ class Flyout(QWidget):
         if w != self.WIDTH or self.width() != w:
             self.WIDTH = w
             self.setFixedWidth(w)
+            style = Qt.ToolButtonTextUnderIcon if w >= 390 else Qt.ToolButtonIconOnly
+            for b in (self.sync_btn, self.open_btn, self.web_btn, self.folder_btn, self.pause_btn):
+                b.setToolButtonStyle(style)
+                if not b.toolTip():
+                    b.setToolTip(b.text())
 
     def _needed_height(self) -> int:
         lay = self._body.layout()
@@ -918,8 +944,7 @@ class Flyout(QWidget):
         if anchor is not None:
             self._anchor = anchor
         anchor = getattr(self, "_anchor", None)
-        screen = QGuiApplication.screenAt(anchor.center()) if anchor else None
-        screen = screen or QGuiApplication.primaryScreen()
+        screen = self._screen()
         avail = screen.availableGeometry()
         full = screen.geometry()
         if self.height() > avail.height() - 24:  # (adjustSize() would undo the exact size _fit() set)

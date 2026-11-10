@@ -40,6 +40,23 @@ class SyncError(Exception):
 DISK_RESERVE = 2 * 1024**3  # always leave this much free on the disk
 
 
+def recycle(path: Path) -> None:
+    """Move to the Windows Recycle Bin, and never anything less: on a drive without a Recycle Bin
+    (network share, many USB sticks) Windows would delete for good, so nothing is deleted there."""
+    from send2trash import send2trash
+
+    if os.name == "nt":
+        import ctypes
+
+        p = os.path.abspath(str(path))
+        if p.startswith("\\\\"):
+            raise OSError(t("{name} is on a network drive without a Recycle Bin; not deleted", name=p))
+        drive_type = ctypes.windll.kernel32.GetDriveTypeW(os.path.splitdrive(p)[0] + "\\")
+        if drive_type in (2, 4, 5):  # removable, network, CD: no Recycle Bin
+            raise OSError(t("{name} is on a drive without a Recycle Bin; not deleted", name=p))
+    send2trash(str(path))  # (with pywin32: fails instead of deleting when an item can't be recycled)
+
+
 def _is_link(p: Path) -> bool:
     try:
         return p.is_symlink() or (hasattr(os.path, "isjunction") and os.path.isjunction(p))
@@ -262,17 +279,16 @@ class Syncer:
 
         # The user may have moved files around inside the folder: follow them by name + size.
         tracked = {r.rel_path.lower() for r in rows}
+        album_entries = {rel.lower() for rel in self.state.album_links()}  # same name and size as the originals
         index: dict[tuple[str, int], str] = {}
         for dirpath, dirs, files in os.walk(self.root):
             dirs[:] = [d for d in dirs if not _is_link(Path(dirpath) / d)]  # a junction may lead anywhere
-            if Path(dirpath) == self.root and ALBUMS_DIR in dirs:
-                dirs.remove(ALBUMS_DIR)  # album links share name and size with the originals
             for fn in files:
                 if fn.startswith(TMP_PREFIX) or fn == MARKER:
                     continue
                 full = Path(dirpath) / fn
                 rel = full.relative_to(self.root).as_posix()
-                if rel.lower() in tracked:
+                if rel.lower() in tracked or rel.lower() in album_entries:
                     continue
                 try:
                     index.setdefault((fn.lower(), full.stat().st_size), rel)
@@ -284,6 +300,7 @@ class Syncer:
         for r in rows:
             by_asset[r.asset_id].append(r)
         deleted_assets: list[str] = []
+        lone_videos: list[FileRow] = []
         for r in missing:
             key = (PurePosixPath(r.rel_path).name.lower(), r.size or -1)
             new_rel = index.pop(key, None)
@@ -294,16 +311,18 @@ class Syncer:
             if r.resource_key == "original":
                 deleted_assets.append(r.asset_id)
             else:
-                # Only the Live Photo video was removed: forget it and don't bring it back.
-                self.state.remove_file(r.asset_id, r.resource_key)
-                self.state.exclude(f"{r.asset_id}#{r.resource_key}", "video deleted on PC")
+                lone_videos.append(r)
+        for r in lone_videos:
+            if r.asset_id in deleted_assets:
+                continue  # the photo is gone too: decided together (and brought back together if asked)
+            # Only the Live Photo video was removed: forget it and don't bring it back.
+            self.state.remove_file(r.asset_id, r.resource_key)
+            self.state.exclude(f"{r.asset_id}#{r.resource_key}", "video deleted on PC")
         return sorted(set(deleted_assets)), moved
 
     def _trash(self, path: Path) -> None:
-        from send2trash import send2trash
-
         self._touch_own(path)
-        send2trash(str(path))
+        recycle(path)
 
     def _trash_inside(self, path: Path) -> None:
         """To the Recycle Bin, but only a file really inside the photos folder: a path that now runs
@@ -357,7 +376,8 @@ class Syncer:
                 if need:
                     found = self.remote.lookup(need)
                     remote_assets.update(found)
-                    gone.update(a for a in need if a not in found)
+                    if any(a not in found for a in need):
+                        full = True  # no answer isn't "deleted in iCloud": the whole library decides
 
         if full:
             result.full_scan = True
@@ -457,6 +477,8 @@ class Syncer:
         # 3) new in iCloud ---------------------------------------------------
         excluded = self.state.excluded()
         tracked_keys = {(r.asset_id, r.resource_key) for rows in rows_by_asset.values() for r in rows}
+        retry_failed = force_full or stale  # parked failures are tried again on a scheduled or asked-for full read
+        parked = 0
         todo: list[tuple[RemoteAsset, RemoteResource]] = []
         for a in remote_assets.values():
             if a.id in excluded or a.id in held or a.id in local_deleted_set:
@@ -470,6 +492,8 @@ class Syncer:
                     self.settings.include_live_video and self.settings.include_videos
                 ):
                     continue
+                if not retry_failed and self.state.get(f"failed:{a.id}#{res.key}"):
+                    continue  # failed before: waits for the next full read instead of every poll
                 todo.append((a, res))
         todo.sort(key=lambda t: t[0].date, reverse=True)  # newest first
 
@@ -545,6 +569,7 @@ class Syncer:
                     self.state.add_file(
                         FileRow(a.id, res.key, rel, res.size, res.is_video, a.date.isoformat()), now_iso()
                     )
+                    self.state.set(f"failed:{a.id}#{res.key}", None)
                     taken.add(rel.lower())
                     result.downloaded += 1
                     last_file = last_file or target
@@ -552,13 +577,15 @@ class Syncer:
                     raise
                 except Exception as exc:  # noqa: BLE001
                     result.errors += 1
+                    parked += 1
+                    self.state.set(f"failed:{a.id}#{res.key}", now_iso())  # retried on the next full read
                     self.cb.activity("error", t("Download failed ({name}): {error}", name=res.filename, error=exc))
             if result.downloaded:
                 text = (t("Downloaded 1 new file") if result.downloaded == 1
                         else t("Downloaded {n} new files", n=result.downloaded))
                 self.cb.activity("download", text, str(last_file))  # click: show it in Explorer
 
-        if not result.errors and not pending:
+        if result.errors == parked and not pending:  # failed downloads are parked, not a reason to read again
             self.state.set("cursor", cursor)
         if full:  # failed items are retried by the next daily full read, not by every poll
             self.state.set("last_full_scan", now_iso())
@@ -621,7 +648,12 @@ class Syncer:
         for rel, aid in wanted.items():
             target = self._abs(rel)
             if rel in links and target.exists():
-                continue
+                if links[rel] == aid:
+                    continue
+                # the name now belongs to another photo (e.g. two IMG_0001 and the album changed)
+                self._unlink_album(rel, [self._abs(r.rel_path) for r in by_asset.get(links[rel], [])])
+                if target.exists():
+                    continue
             src = self._abs(source[rel])
             if not src.exists():
                 continue
@@ -673,7 +705,9 @@ class Syncer:
                 self._touch_own(p)
                 # Moved to a private name first: the file checked is then the file removed, even if
                 # something is saved at the album path in between.
-                staged = p.with_name(f"{TMP_PREFIX}album-{os.getpid()}-{threading.get_ident()}{p.suffix}")
+                import uuid
+
+                staged = p.with_name(f"{TMP_PREFIX}album-{uuid.uuid4().hex}{p.suffix}")
                 os.rename(p, staged)
                 ours = False
                 for src in sources:
@@ -775,6 +809,7 @@ class Syncer:
         """User wants files deleted on the PC back: forget them so they download again."""
         for a in ids:
             self.state.remove_asset(a)
+            self.state.unexclude_parts(a)  # its Live Photo video comes back too
 
     def reject_to_pc(self, ids: list[str]) -> None:
         """User wants to keep local copies of photos deleted in iCloud: stop tracking them."""

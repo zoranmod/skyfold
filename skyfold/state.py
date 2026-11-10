@@ -130,6 +130,12 @@ class State:
         with self._lock:
             return {r[0] for r in self._db.execute("SELECT asset_id FROM excluded")}
 
+    def unexclude_parts(self, asset_id: str) -> None:
+        """Forget "don't bring back" marks for an asset's parts (e.g. its Live Photo video)."""
+        prefix = asset_id + "#"
+        with self._lock:
+            self._db.execute("DELETE FROM excluded WHERE substr(asset_id, 1, ?) = ?", (len(prefix), prefix))
+
     def exclude(self, asset_id: str, reason: str) -> None:
         with self._lock:
             self._db.execute("INSERT OR REPLACE INTO excluded VALUES(?, ?)", (asset_id, reason))

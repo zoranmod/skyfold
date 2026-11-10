@@ -155,12 +155,15 @@ QLabel#Section {{ font-size: 8.5pt; font-weight: 600; color: {c['muted']}; lette
 QLabel#Small {{ font-size: 9pt; }}
 QFrame#ActRow {{ background: transparent; border: none; border-bottom: 1px solid {c['border']}; border-radius: 0; }}
 QFrame#ActRow[link="true"]:hover {{ background: {c['hover']}; border-radius: 6px; }}
+QFrame#ActRow:focus {{ border: 2px solid {c['focus_ring']}; border-radius: 6px; }}
 QLabel#Muted, QLabel#Hint {{ font-size: 8.75pt; color: {c['muted']}; }}
 QLabel#ErrorText {{ color: {c['err_text']}; }}
 QLabel#WarnText {{ color: {c['warn_text']}; }}
 QFrame#Option {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 12px; }}
 QFrame#Option:hover {{ border-color: {c['border_strong']}; }}
 QFrame#Option[selected="true"] {{ border: 1px solid {c['accent']}; background: {c['accent_soft']}; }}
+QFrame#Option:focus {{ border: 2px solid {c['focus_ring']}; }}
+QFrame#Device {{ background: transparent; border: none; border-radius: 8px; }}
 QLabel#DotOff {{ border: 2px solid {c['border_strong']}; border-radius: 9px; background: transparent; }}
 QLabel#DotOn  {{ border: 5px solid {c['accent']}; border-radius: 9px; background: #ffffff; }}
 
@@ -168,7 +171,7 @@ QPushButton {{ background: {c['surface2']}; border: 1px solid {c['border']}; bor
     padding: 0 14px; min-height: 30px; font-weight: 500; outline: none; }}
 QPushButton:hover {{ background: {c['hover']}; border-color: {c['border_strong']}; }}
 QPushButton:pressed {{ background: {c['border']}; }}
-QPushButton:focus {{ border-color: {c['accent']}; }}
+QPushButton:focus {{ border: 2px solid {c['focus_ring']}; }}
 QPushButton:disabled {{ color: {c['disabled']}; background: {c['surface2']}; border-color: {c['border']}; }}
 QPushButton#Primary {{ background: {c['btn']}; color: {c['accent_text']}; border: 1px solid {c['btn']}; font-weight: 600; }}
 QPushButton#Primary:hover {{ background: {c['btn_hover']}; border-color: {c['btn_hover']}; }}
@@ -214,8 +217,8 @@ QListWidget#Nav::item:hover {{ background: {c['hover']}; }}
 QListWidget#Nav::item:selected {{ background: {c['accent_soft']}; color: {c['accent_fg']}; }}
 QScrollArea {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: {c['border_strong']}; border-radius: 3px; min-height: 30px; margin: 0 2px; }}
-QScrollBar::handle:vertical:hover {{ background: {c['muted']}; }}
+QScrollBar::handle:vertical {{ background: {c['muted']}; border-radius: 3px; min-height: 30px; }}
+QScrollBar::handle:vertical:hover {{ background: {c['text']}; }}
 QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {{ height: 0; background: none; }}
 QMenu {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 10px; padding: 4px; }}
 QMenu::item {{ padding: 6px 26px 6px 12px; border-radius: 6px; }}

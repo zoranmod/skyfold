@@ -20,9 +20,11 @@ jobs:
       - name: Check the tag (releases only)
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}  # passed as data, never pasted into the script
         run: |
           $version = (Select-String -Path skyfold\config.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
-          if ("v$version" -ne "${{ github.ref_name }}") { Write-Error "Tag ${{ github.ref_name }} doesn't match VERSION $version"; exit 1 }
+          if ("v$version" -ne $env:TAG) { Write-Error "Tag $env:TAG doesn't match VERSION $version"; exit 1 }
           git merge-base --is-ancestor HEAD origin/main
           if ($LASTEXITCODE -ne 0) { Write-Error "The tagged commit is not on main"; exit 1 }
 
@@ -64,10 +66,11 @@ jobs:
           Compress-Archive -Path $stage -DestinationPath Skyfold-windows.zip
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [System.IO.Compression.ZipFile]::OpenRead("$PWD\Skyfold-windows.zip")
-          $bad = $zip.Entries | Where-Object { $_.FullName -match '(^|[\\/])(data|session)[\\/]|settings\.json$|\.sqlite3$|\.log$|cookiejar|\.session$' }
+          $bad = $zip.Entries | Where-Object { $_.FullName -match '(^|[\\/])(data|session)[\\/]|settings\.json$|\.sqlite3(-wal|-shm)?$|\.log(\.\d+)?$|drive_cache\.json$|signed-out$|cookiejar|\.session$' }
           $zip.Dispose()
           if ($bad) { $bad | ForEach-Object { $_.FullName }; Write-Error "Runtime data found in the zip"; exit 1 }
-          (Get-FileHash Skyfold-windows.zip -Algorithm SHA256).Hash.ToLower() + "  Skyfold-windows.zip" | Out-File -Encoding ascii Skyfold-windows.zip.sha256
+          # LF line ending, so `sha256sum -c` works on Linux and macOS too
+          [IO.File]::WriteAllText("$PWD\Skyfold-windows.zip.sha256", (Get-FileHash Skyfold-windows.zip -Algorithm SHA256).Hash.ToLower() + "  Skyfold-windows.zip`n")
           Get-Content Skyfold-windows.zip.sha256
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
@@ -90,6 +93,7 @@ jobs:
 
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
+          fail_on_unmatched_files: true
           files: |
             Skyfold-windows.zip
             Skyfold-windows.zip.sha256

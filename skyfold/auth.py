@@ -76,6 +76,15 @@ def _serialize_session_saves() -> None:
 
     PyiCloudSession._request = request  # type: ignore[method-assign]
 
+    original_raw = PyiCloudSession._request_raw
+
+    def request_raw(self: Any, method: str, url: str, **kwargs: Any) -> Any:
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = TIMEOUT
+        return original_raw(self, method, url, **kwargs)
+
+    PyiCloudSession._request_raw = request_raw  # type: ignore[method-assign]
+
 
 @dataclass
 class LoginStep:
@@ -176,7 +185,6 @@ def start_login(apple_id: str, password: str) -> LoginStep:
         raise LoginError(t("This account uses the old two-step verification, which isn't supported."))
     if not api.requires_2fa:
         return LoginStep(api, needs_code=False)
-        return LoginStep(api, needs_code=False)
 
     # A security key is a property of the Apple account (not of USB devices plugged into this PC).
     if getattr(api, "security_key_names", None):
@@ -212,8 +220,8 @@ def submit_code(api: Any, code: str) -> None:
     log.info("Sign-in: code accepted=%s", ok)
     if not ok:
         raise LoginError(t("That code isn't right. Try again."))
-    if not api.is_trusted_session:
-        api.trust_session()
+    if not api.is_trusted_session and not api.trust_session():
+        log.warning("Sign-in: Apple didn't mark this PC as trusted; the code may be asked again after a restart")
 
 
 def commit_login(api: Any) -> None:
@@ -221,6 +229,27 @@ def commit_login(api: Any) -> None:
     with _SAVE_LOCK:
         SIGNED_OUT.unlink(missing_ok=True)
         make_current(api)
+        _remove_other_sessions(api)
+
+
+def _remove_other_sessions(api: Any) -> None:
+    """Only the session in use stays on disk (an earlier Apple ID's token never lingers)."""
+    from pathlib import Path
+
+    session = getattr(api, "session", None)
+    keep = set()
+    for attr in ("session_path", "cookiejar_path"):
+        value = getattr(session, attr, None) or getattr(api, attr, None)
+        if value:
+            keep.add(Path(value).name.lower())
+    if not keep or not SESSION_DIR.exists():
+        return
+    for p in SESSION_DIR.iterdir():
+        if p.is_file() and p.name.lower() not in keep:
+            try:
+                p.unlink()
+            except OSError as exc:
+                log.warning("Couldn't remove an old session file: %s", exc)
 
 
 def logout() -> None:
