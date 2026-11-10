@@ -924,6 +924,7 @@ class NotesSyncer:
         fd, tmp = tempfile.mkstemp(prefix=".skyfold-index-", suffix=".tmp", dir=self.root)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(page)
+        written = _digest(Path(tmp))  # what Skyfold wrote, known before the file is public
         aside = None
         try:
             if target.exists():  # moved aside and checked again: never overwrite what was saved meanwhile
@@ -949,7 +950,7 @@ class NotesSyncer:
                 self._trash(aside)  # edited since Skyfold wrote it: recoverable from the Recycle Bin
             else:
                 aside.unlink(missing_ok=True)
-        self.state.set("index_digest", _digest(target))
+        self.state.set("index_digest", written)
 
 
 INDEX_MARK = '<meta name="generator" content="Skyfold notes index">'

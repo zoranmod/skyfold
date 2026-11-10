@@ -51,7 +51,8 @@ class _RedactEmails(logging.Filter):
     _EMAIL = _re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
     _PHONE = _re.compile(r"\+\d[\d ]{7,16}\d")  # an Apple ID can be a phone number
     # whole header lines: every cookie on it, and bearer tokens
-    _HEADER = _re.compile(r"(?im)\b((?:set-)?cookie\s*:|authorization\s*:)[^\r\n]*")
+    _HEADER = _re.compile(r"(?im)\b((?:set-)?cookie\d?\s*:|authorization\s*:)[^\r\n]*")
+    _HEX = _re.compile(r"\b[0-9a-fA-F]{32,}\b")  # cookie and token values written in hex
     # key=value, or "key": "value" (only as a key: "the session: disk full" stays readable)
     _KEYED = _re.compile(r"""(?i)(\b(?:x-apple-[\w-]{1,40}|scnt|(?:\w{1,20}[_-]){0,3}token|session[_-]?id|password"""
                          r"""|dsid)["']?\s*(?:=|:\s*["']))[^\s;,"'&]+""")
@@ -79,6 +80,7 @@ class _RedactEmails(logging.Filter):
         text = cls._KEYED.sub(r"\1<redacted>", text)
         text = cls._NAMES.sub(r"\1<redacted>", text)
         text = cls._SESSION_FILE.sub(r"\1<redacted>", text)
+        text = cls._HEX.sub("<redacted>", text)
 
         def long(m):
             s = m.group(0)
@@ -115,6 +117,22 @@ def _single_instance_mutex(name: str):
     if handle and ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
         return False
     return handle
+
+
+def _wait_for_exit(pid: int, seconds: float = 20.0) -> None:
+    """Wait (bounded) until the process with this id has ended."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = ctypes.c_void_p
+    k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    k32.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = k32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if handle:
+        k32.WaitForSingleObject(handle, int(seconds * 1000))
+        k32.CloseHandle(handle)
 
 
 def _instance_name() -> str:
@@ -466,12 +484,21 @@ class Controller(QObject):
         """Start a fresh copy and quit this one (used after changing the language)."""
         from PySide6.QtCore import QProcess
 
+        global _MUTEX
         if self.server is not None:
             self.server.close()  # free the single-instance name for the new copy
+        if _MUTEX:
+            import ctypes
+
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.CloseHandle.argtypes = [ctypes.c_void_p]
+            k32.CloseHandle(_MUTEX)
+            _MUTEX = None
+        handover = ["--tray", "--after", str(os.getpid())]  # the new copy waits until this one has quit
         if getattr(sys, "frozen", False):
-            QProcess.startDetached(sys.executable, ["--tray"])
+            QProcess.startDetached(sys.executable, handover)
         else:
-            QProcess.startDetached(sys.executable, [str(Path(__file__).resolve().parent.parent / "run.py"), "--tray"])
+            QProcess.startDetached(sys.executable, [str(Path(__file__).resolve().parent.parent / "run.py"), *handover])
         self.quit()
 
     def open_setup(self) -> None:
@@ -535,6 +562,11 @@ def main() -> int:
     if "--quit" in sys.argv:
         return 0  # nothing running
     global _MUTEX
+    if "--after" in sys.argv:  # started by a restart: let the old copy finish quitting first
+        try:
+            _wait_for_exit(int(sys.argv[sys.argv.index("--after") + 1]))
+        except (IndexError, ValueError):
+            pass
     _MUTEX = _single_instance_mutex(instance)
     if _MUTEX is False:
         return 0  # another Skyfold of this user is just starting: it will show itself

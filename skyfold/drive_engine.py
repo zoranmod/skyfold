@@ -933,7 +933,16 @@ class DriveSyncer:
                 if touches_partial(g, n):
                     self._deferred |= {g, n}  # decided once iCloud lists it completely
                     continue
-                if any(n.startswith(m + "/") for m in new if m != n) or not self._remote_move(remote, g, n, res):
+                if any(n.startswith(m + "/") for m in new if m != n):
+                    continue
+                moved = self._remote_move(remote, g, n, res)
+                if moved == "partial":  # finished next pass; nothing else under these two now
+                    drop_under(to_cloud, g)
+                    drop_under(mkdir_remote, n)
+                    drop_under(uploads, n)
+                    drop_under(downloads, g, key=lambda r: r.path)
+                    continue
+                if not moved:
                     continue
                 self._rebase(base, g, n, keep_etags=False)
                 drop_under(to_cloud, g)
@@ -969,7 +978,12 @@ class DriveSyncer:
             key_old = {g: (base[g].lsize, round(base[g].lmtime or 0, 2)) for g in gone}
             key_new = {n: (local[n].size, round(local[n].mtime, 2)) for n in new}
             for g, n in _pairs(key_old, key_new):
-                if not self._remote_move(remote, g, n, res):
+                moved = self._remote_move(remote, g, n, res)
+                if moved == "partial":  # finished next pass; nothing else for these two now
+                    to_cloud.remove(g)
+                    uploads.remove(n)
+                    continue
+                if not moved:
                     continue
                 lo = local[n]
                 self.state.drop(g)
@@ -1000,7 +1014,7 @@ class DriveSyncer:
         before, now = self._prev.get(old), remote.get(new)
         return bool(before and now and before.docwsid and before.docwsid == now.docwsid)
 
-    def _remote_move(self, remote: dict[str, DriveItem], old: str, new: str, res: DriveResult) -> bool:
+    def _remote_move(self, remote: dict[str, DriveItem], old: str, new: str, res: DriveResult) -> bool | str:
         item = remote.get(old)
         parent = remote.get(_parent(new))
         if item is None or parent is None or not parent.is_dir:
@@ -1014,14 +1028,23 @@ class DriveSyncer:
                     return False  # both ways pass through a taken name: sync as add + delete
                 try:  # rename where it is first, then move (the target folder has the old name)
                     etag = self.remote.rename(item, new_name)
-                    item = DriveItem(via_source, item.drivewsid, item.docwsid, item.zone, etag or item.etag,
-                                     item.is_dir, item.size, item.mtime)
-                    self.remote.move(item, parent)
                 except (AuthRequired, RemoteUnavailable):
                     raise
                 except Exception as exc:  # noqa: BLE001
                     log.warning("Rename in iCloud failed (%s -> %s): %s", old, new, exc)
                     return False
+                item = DriveItem(via_source, item.drivewsid, item.docwsid, item.zone, etag or item.etag,
+                                 item.is_dir, item.size, item.mtime)
+                try:
+                    self.remote.move(item, parent)
+                except Exception as exc:  # noqa: BLE001 - renamed but not moved: remember where it is now
+                    log.warning("Move in iCloud failed after the rename (%s -> %s): %s", via_source, new, exc)
+                    self._half_moved(old, via_source, etag)
+                    self._forget_cached(old)
+                    res.followup = True
+                    if isinstance(exc, (AuthRequired, RemoteUnavailable)):
+                        raise
+                    return "partial"
                 self._forget_cached(old)
                 res.moved += 1
                 res.followup = True
@@ -1047,6 +1070,21 @@ class DriveSyncer:
                          str(self._abs(new)))
         return True
 
+    def _half_moved(self, old: str, now: str, etag: str | None) -> None:
+        """iCloud renamed the item but didn't move it: the database follows iCloud, so the next pass
+        sees "renamed on this PC" again and finishes the move (never a second copy)."""
+        rows = self.state.all()
+        for p in [p for p in rows if p == old or p.startswith(old + "/")]:
+            b = rows[p]
+            q = now + p[len(old):]
+            self.state.drop(p)
+            if p == old and not b.is_dir:
+                self.state.put(Base(q, False, etag or b.etag, b.size, b.lmtime, b.lsize, False))
+            elif b.is_dir:
+                self.state.put(Base(q, True, None, None, None, None, False))
+            else:
+                self.state.put(Base(q, False, b.etag, b.size, b.lmtime, b.lsize, False))
+
     def _forget_cached(self, path: str) -> None:
         prefix = path + "/"
         for p in [p for p in self.cache if p == path or p.startswith(prefix)]:
@@ -1065,7 +1103,10 @@ class DriveSyncer:
             dst.parent.mkdir(parents=True, exist_ok=True)
             self._touch_own(src)
             self._touch_own(dst)
-            os.replace(src, dst)
+            os.rename(src, dst)  # refuses an existing name (os.replace would overwrite a file saved just now)
+        except FileExistsError:
+            log.info("Rename on this PC skipped (%s -> %s): the new name was taken meanwhile", old, new)
+            return False
         except OSError as exc:
             log.warning("Rename on this PC failed (%s -> %s): %s", old, new, exc)
             return False

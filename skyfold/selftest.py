@@ -63,19 +63,22 @@ def main(report: str) -> int:
     check("keyring lookup", keyring_lookup)
 
     def trash_backend() -> str:
-        from send2trash import send2trash
+        import pythoncom  # noqa: F401
+        from win32com.server.exception import COMException  # noqa: F401
+        from win32com.server.policy import DesignatedWrapPolicy  # noqa: F401
+        from win32com.shell import shell
 
-        assert send2trash.__module__ == "send2trash.win.modern", send2trash.__module__
-        return "modern (fails instead of deleting for good)"
+        assert shell.CLSID_FileOperation
+        return "IFileOperation with a fail-closed delete check"
 
     check("Recycle Bin backend", trash_backend)
 
     def trash() -> str:
-        from send2trash import send2trash
+        from skyfold.engine import recycle
 
         f = Path(tempfile.mkdtemp()) / "skyfold-selftest.txt"
         f.write_text("x")
-        send2trash(str(f))
+        recycle(f)
         assert not f.exists()
         return "file sent to Recycle Bin"
 

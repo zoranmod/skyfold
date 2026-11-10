@@ -291,11 +291,21 @@ class LoginDialog(_Dialog):
 
     def __init__(self, apple_id: str = "") -> None:
         super().__init__(t("Sign in – {app}", app=APP_NAME))
-        self.setFixedWidth(420)
+        self.setFixedWidth(_fit_screen(420, 0)[0])
         self.api: Any = None
         self._task: Any = None
 
-        outer = QVBoxLayout(self)
+        frame = QVBoxLayout(self)  # a scrolling body: fits a small screen at high scaling
+        frame.setContentsMargins(0, 0, 0, 0)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._login_body = QWidget()
+        self._login_body.setObjectName("Root")
+        self._scroll.setWidget(self._login_body)
+        frame.addWidget(self._scroll)
+        outer = QVBoxLayout(self._login_body)
         outer.setContentsMargins(28, 26, 28, 22)
         outer.setSpacing(14)
         outer.addWidget(_logo(48))
@@ -365,6 +375,7 @@ class LoginDialog(_Dialog):
         btns.addWidget(self.ok)
         outer.addLayout(btns)
         (self.password if apple_id else self.email).setFocus()
+        self._shrink()
 
     def _busy(self, busy: bool, text: str | None = None) -> None:
         self.ok.setEnabled(not busy)
@@ -375,10 +386,10 @@ class LoginDialog(_Dialog):
             self.ok.setText(text)
 
     def _shrink(self) -> None:
-        lay = self.layout()
+        lay = self._login_body.layout()
         lay.activate()
         h = lay.totalHeightForWidth(self.width()) if lay.hasHeightForWidth() else lay.totalSizeHint().height()
-        self.resize(self.width(), h)
+        self.resize(self.width(), min(h + 2, _fit_screen(0, 100000)[1]))
 
     def _show_error(self, msg: str) -> None:
         self.error.setText(msg)
@@ -1317,7 +1328,7 @@ class FolderSetupDialog(_Dialog):
     def __init__(self, current: str, palette: dict[str, str]) -> None:
         super().__init__(t("Welcome – {app}", app=APP_NAME))
         self.c = palette
-        self.setFixedWidth(500)
+        self.setFixedWidth(_fit_screen(500, 0)[0])
         # Scrollable body with the buttons always visible: fits a 1366x768 screen at any scale.
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)

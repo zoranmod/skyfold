@@ -41,20 +41,78 @@ DISK_RESERVE = 2 * 1024**3  # always leave this much free on the disk
 
 
 def recycle(path: Path) -> None:
-    """Move to the Windows Recycle Bin, and never anything less: on a drive without a Recycle Bin
-    (network share, many USB sticks) Windows would delete for good, so nothing is deleted there."""
-    from send2trash import send2trash
+    """Move to the Windows Recycle Bin, and never anything less. Windows itself deletes for good
+    whatever it can't recycle (network shares, subst drives, a disabled or full Recycle Bin), so
+    every item is checked as Windows is about to delete it and the whole operation is stopped if
+    it wouldn't go to the Recycle Bin. Raises OSError then; the file stays where it is."""
+    if os.name != "nt":
+        from send2trash import send2trash
 
-    if os.name == "nt":
-        import ctypes
+        send2trash(str(path))
+        return
+    import ctypes
 
-        p = os.path.abspath(str(path))
-        if p.startswith("\\\\"):
-            raise OSError(t("{name} is on a network drive without a Recycle Bin; not deleted", name=p))
-        drive_type = ctypes.windll.kernel32.GetDriveTypeW(os.path.splitdrive(p)[0] + "\\")
-        if drive_type in (2, 4, 5):  # removable, network, CD: no Recycle Bin
-            raise OSError(t("{name} is on a drive without a Recycle Bin; not deleted", name=p))
-    send2trash(str(path))  # (with pywin32: fails instead of deleting when an item can't be recycled)
+    p = os.path.abspath(str(path))
+    if p.startswith("\\\\"):
+        raise OSError(t("{name} is on a network drive without a Recycle Bin; not deleted", name=p))
+    drive_type = ctypes.windll.kernel32.GetDriveTypeW(os.path.splitdrive(p)[0] + "\\")
+    if drive_type in (2, 4, 5):  # removable, network, CD: no Recycle Bin
+        raise OSError(t("{name} is on a drive without a Recycle Bin; not deleted", name=p))
+    _recycle_windows(p)
+
+
+def _recycle_windows(p: str) -> None:
+    import pythoncom
+    import pywintypes
+    from win32com.server.exception import COMException
+    from win32com.server.policy import DesignatedWrapPolicy
+    from win32com.shell import shell, shellcon
+
+    class Sink(DesignatedWrapPolicy):
+        _com_interfaces_ = [shell.IID_IFileOperationProgressSink]
+        _public_methods_ = ["StartOperations", "FinishOperations", "PreRenameItem", "PostRenameItem",
+                            "PreMoveItem", "PostMoveItem", "PreCopyItem", "PostCopyItem", "PreDeleteItem",
+                            "PostDeleteItem", "PreNewItem", "PostNewItem", "UpdateProgress", "ResetTimer",
+                            "PauseTimer", "ResumeTimer"]
+
+        def __init__(self) -> None:
+            self._wrap_(self)
+            self.refused = False
+
+        def PreDeleteItem(self, flags, item):  # noqa: N802 - COM naming
+            if not flags & shellcon.TSF_DELETE_RECYCLE_IF_POSSIBLE:
+                self.refused = True  # it would be deleted for good: stop (only an exception stops it)
+                raise COMException(hresult=-2147467260)  # E_ABORT
+            return 0
+
+        def __getattr__(self, name):  # every other callback: "carry on"
+            if name in Sink._public_methods_:
+                return lambda *a: 0
+            raise AttributeError(name)
+
+    pythoncom.CoInitialize()
+    try:
+        sink_obj = Sink()
+        sink = pythoncom.WrapObject(sink_obj, shell.IID_IFileOperationProgressSink)
+        op = pythoncom.CoCreateInstance(shell.CLSID_FileOperation, None, pythoncom.CLSCTX_ALL,
+                                        shell.IID_IFileOperation)
+        op.SetOperationFlags(shellcon.FOF_ALLOWUNDO | shellcon.FOF_NOCONFIRMATION | shellcon.FOF_NOERRORUI
+                             | shellcon.FOF_SILENT | shellcon.FOFX_EARLYFAILURE
+                             | 0x20000000 | 0x00080000)  # FOFX_ADDUNDORECORD | FOFX_RECYCLEONDELETE
+        try:
+            op.DeleteItem(shell.SHCreateItemFromParsingName(p, None, shell.IID_IShellItem), sink)
+            result = op.PerformOperations()
+            aborted = op.GetAnyOperationsAborted()
+        except pywintypes.com_error as exc:
+            if sink_obj.refused:
+                raise OSError(t("{name} can't go to the Recycle Bin; not deleted", name=p)) from exc
+            raise OSError(None, exc.strerror, p) from exc
+        if sink_obj.refused:
+            raise OSError(t("{name} can't go to the Recycle Bin; not deleted", name=p))
+        if result or aborted:
+            raise OSError(t("{name} couldn't be moved to the Recycle Bin", name=p))
+    finally:
+        pythoncom.CoUninitialize()
 
 
 def _is_link(p: Path) -> bool:

@@ -150,6 +150,8 @@ BS: dict[str, str] = {
     "Choose a folder.": "Izaberi folder.",
     "Enter the full folder path.": "Unesi punu putanju foldera.",
     "Clear": "Očisti",
+    "{name} can't go to the Recycle Bin; not deleted": "{name} ne može u Kantu za smeće; nije obrisano",
+    "{name} couldn't be moved to the Recycle Bin": "{name} se nije mogao premjestiti u Kantu za smeće",
     "{name} is on a network drive without a Recycle Bin; not deleted": "{name} je na mrežnom disku bez Kante za smeće; nije obrisano",
     "{name} is on a drive without a Recycle Bin; not deleted": "{name} je na disku bez Kante za smeće; nije obrisano",
     "an attachment couldn't be downloaded; tried again next time": "prilog se nije mogao preuzeti; ponovo sljedeći put",

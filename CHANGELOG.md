@@ -61,6 +61,13 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - Log: a new filter removes the Apple ID in every spelling, cookies, tokens, passwords and people's names, without blurring ordinary lines, and stays fast on long text; unexpected errors are logged.
   - Panel and dialogs: no needless scroll bar; the panel no longer closes when a new entry arrives; activity entries and the first-run layout choice work with the keyboard; clearer focus rings and scroll bar; a long Apple ID no longer cuts off Settings; icon-only buttons on very narrow screens.
   - Release: the tag reaches the build as data only; the checksum file uses LF line endings; the zip check also covers database side files, rotated logs and the Drive listing.
+- Sixth follow-up review (tests in tests/test_review8_fixes.py):
+  - Recycle Bin: every item is checked the moment Windows is about to delete it, and the operation is stopped if it wouldn't go to the Recycle Bin (e.g. a subst drive, a disabled or full Recycle Bin); the file then stays where it is.
+  - iCloud Drive: a rename coming from iCloud never replaces a file saved at that moment under the new name; a move that iCloud refuses after the rename is remembered as it is and finished on the next pass, never leaving two copies.
+  - Notes: the index's fingerprint is taken from Skyfold's own private file before it is published, so an edit made right after is never taken for Skyfold's.
+  - Log: lines from a damaged cookie file and long hex values never reach the log.
+  - Restart (after changing the language): the old copy lets go of the single-instance lock and the new one waits for it to quit.
+  - Sign-in and first-run windows fit small screens at high scaling.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.
