@@ -80,6 +80,11 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - An item deleted in iCloud before the move was settled is deleted on the PC as well (Recycle Bin, with the usual approval for many files) instead of being uploaded again.
   - When the PC copy is still the one that was moved, the move is finished right away.
 - Quitting or pausing while a pass runs no longer shows a "Sync error" in the panel (e.g. "cannot schedule new futures after shutdown"); it is a stop.
+- Ninth follow-up review (tests in tests/test_review11_codex_probes.py and tests/test_review10_codex_probes.py, Codex's own reproductions):
+  - iCloud Drive conflicts: the PC copy's new "(PC conflict …)" name is taken with a rename that refuses an existing file, so a file another program saves there at that moment is never overwritten.
+  - Interrupted moves: a retry keeps iCloud's size/time from when the move first started, so an iCloud edit made in between is always downloaded; a finished move updates the database and drops its record in one transaction; anything still unsettled is kept out of the rest of the pass (no duplicates); records from the previous build are completed from the database; an incomplete listing of the Drive's top level holds every pending move; switching the Drive folder forgets the moves written down for the old one.
+  - A failed download no longer looks like "Sync stopped": sign-in loss, iCloud access problems and database errors are reported again.
+  - Build: PyInstaller runs with only Windows' own folders on PATH, so no DLL from another program can end up in the package.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

@@ -139,8 +139,10 @@ class DriveState:
         return {"files": files, "bytes": size}
 
     def reset(self) -> None:
-        with self._lock:
+        """Forget everything about the synced folder, moves written down for it included."""
+        with self.transaction():
             self._db.execute("DELETE FROM drive_files")
+            self._db.execute("DELETE FROM drive_meta WHERE key=?", (PENDING_MOVE,))
 
     @contextmanager
     def transaction(self):
@@ -912,12 +914,21 @@ class DriveSyncer:
     def _conflict(self, path: str, r: DriveItem, res: DriveResult, downloads: list[DriveItem]) -> None:
         """Both sides changed: iCloud's copy keeps the name; the PC copy is renamed and uploaded later."""
         src = self._abs(path)
-        dst_rel = self._conflict_name(path)
-        try:
-            os.replace(src, self._abs(dst_rel))
-        except OSError as exc:
+        for _ in range(20):
+            dst_rel = self._conflict_name(path)
+            try:
+                os.rename(src, self._abs(dst_rel))  # refuses a name taken meanwhile (never overwrites)
+                break
+            except FileExistsError:
+                continue  # another program saved a file there just now: pick another name
+            except OSError as exc:
+                res.errors += 1
+                self.cb.activity("error", t("Couldn't resolve conflict ({name}): {error}", name=path, error=exc))
+                return
+        else:
             res.errors += 1
-            self.cb.activity("error", t("Couldn't resolve conflict ({name}): {error}", name=path, error=exc))
+            self.cb.activity("error", t("Couldn't resolve conflict ({name}): {error}", name=path,
+                                        error="no free name"))
             return
         self.state.drop(path)  # iCloud's copy is now simply "new in iCloud" until it is downloaded
         res.conflicts += 1
@@ -939,7 +950,7 @@ class DriveSyncer:
         self._deferred: set[str] = set()
 
         def touches_partial(*tops: str) -> bool:
-            return any(q == top or q.startswith(top + "/") or top.startswith(q + "/") for q in partial for top in tops)
+            return any(_overlaps(q, top) for q in partial for top in tops)
 
         def drop_under(lst, top, key=lambda x: x):
             lst[:] = [x for x in lst if not (key(x) == top or key(x).startswith(top + "/"))]
@@ -967,7 +978,9 @@ class DriveSyncer:
                     continue
                 if not moved:
                     continue
-                self._rebase(base, g, n, keep_etags=False)
+                with self.state.transaction():  # rows and the move's record together
+                    self._rebase(base, g, n, keep_etags=False)
+                    self._journal_put(self._moved_ident, None)
                 drop_under(to_cloud, g)
                 drop_under(mkdir_remote, n)
                 drop_under(uploads, n)
@@ -1009,8 +1022,10 @@ class DriveSyncer:
                 if not moved:
                     continue
                 lo = local[n]
-                self.state.drop(g)
-                self.state.put(Base(n, False, base[g].etag, base[g].size, lo.mtime, lo.size, False))
+                with self.state.transaction():  # rows and the move's record together
+                    self.state.drop(g)
+                    self.state.put(Base(n, False, base[g].etag, base[g].size, lo.mtime, lo.size, False))
+                    self._journal_put(self._moved_ident, None)
                 to_cloud.remove(g)
                 uploads.remove(n)
 
@@ -1069,6 +1084,11 @@ class DriveSyncer:
         entry = {"old": old, "new": new, "at": old, "size": item.size, "mtime": item.mtime,
                  "rows": [[p[len(old):], b.is_dir, b.etag, b.size, b.lmtime, b.lsize]
                           for p, b in rows.items() if p == old or p.startswith(old + "/")]}
+        prior = self._journal().get(ident)
+        if prior is not None:
+            # A retry of a move that was cut short: iCloud's size/time from when it first started stay
+            # the evidence (what is in iCloud now may be an edit the PC hasn't got yet).
+            entry["size"], entry["mtime"] = prior.get("size"), prior.get("mtime")
         with self.state.transaction():
             self._journal_put(ident, entry)
         here = old
@@ -1099,8 +1119,7 @@ class DriveSyncer:
                 return "partial"
             item = DriveItem(here, item.drivewsid, item.docwsid, item.zone, got or item.etag,
                              item.is_dir, item.size, item.mtime)
-        with self.state.transaction():
-            self._journal_put(ident, None)
+        self._moved_ident = ident  # the caller lets the rows follow and drops the record, together
         self._forget_cached(old)
         res.moved += 1
         res.followup = True  # the next pass learns the new iCloud versions
@@ -1160,10 +1179,13 @@ class DriveSyncer:
         for ident, e in list(self._journal().items()):
             old, new = e["old"], e["new"]
             at = e.get("at") or old
+            if "rows" not in e:  # written by an earlier build: the database still has the rows
+                known = self.state.all()
+                e = {**e, "rows": [[p[len(at):], b.is_dir, b.etag, b.size, b.lmtime, b.lsize]
+                                   for p, b in known.items() if p == at or p.startswith(at + "/")]}
             hit = next((r for r in remote.values() if ident and ident in (r.docwsid, r.drivewsid)), None)
             touched = {old, at, new} | ({hit.path} if hit else set())
-            if partly and (hit is None or any(q == t or q.startswith(t + "/") or t.startswith(q + "/")
-                                              for q in partly for t in touched if t)):
+            if partly and (hit is None or any(_overlaps(q, t) for q in partly for t in touched)):
                 # decided once iCloud lists it completely: nothing is done around it meanwhile
                 self.remote.incomplete |= touched | ({_parent(t) for t in touched} if hit is None else set())
                 continue
@@ -1189,6 +1211,11 @@ class DriveSyncer:
                     remote[q] = self.cache[q] = DriveItem(q, r.drivewsid, r.docwsid, r.zone, r.etag,
                                                           r.is_dir, r.size, r.mtime)
                 self._move_rows(hit.path, new, None, ident, None)
+        # Whatever is still written down now (an unknown answer again, a refusal halfway) is kept
+        # out of this pass entirely: nothing is uploaded, downloaded or deleted around it.
+        for e in self._journal().values():
+            held = {e["old"], e.get("at") or e["old"], e["new"]}
+            self.remote.incomplete |= held
 
     def _still_moved_copy(self, new: str, at: str, e: dict) -> bool:
         """Is the PC copy at `new` still the one whose move was started (not edited or replaced)?"""
@@ -1422,17 +1449,19 @@ class DriveSyncer:
             for p, rel in old:
                 self._recycle_previous(p, rel)
 
+        abort = threading.Event()  # one download failed for good: the others stop (not a user stop)
+
         def on_bytes(k: int) -> None:
             nonlocal done
             THROTTLE.take(k)
             with done_lock:
                 done += k
-            if self.cancel_flag.is_set():
+            if self.cancel_flag.is_set() or abort.is_set():
                 raise Cancelled()
 
         def fetch(item: DriveItem) -> Path:
             """Runs on a worker thread: download to a temporary file and put it in place."""
-            if self.cancel_flag.is_set():
+            if self.cancel_flag.is_set() or abort.is_set():
                 raise Cancelled()
             target = self._abs(item.path)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -1492,7 +1521,7 @@ class DriveSyncer:
         pool = ThreadPoolExecutor(WORKERS)
         try:
             while True:
-                while len(running) < WORKERS and not self.cancel_flag.is_set():
+                while len(running) < WORKERS and not self.cancel_flag.is_set() and not abort.is_set():
                     item = next(todo, None)
                     if item is None:
                         break
@@ -1534,7 +1563,7 @@ class DriveSyncer:
                                                               total_bytes, rate))
                 self._check_cancel()
         except BaseException:
-            self.cancel_flag.set()  # make downloads still running stop at their next chunk
+            abort.set()  # make downloads still running stop at their next chunk
             raise
         finally:
             pool.shutdown(wait=True, cancel_futures=True)
@@ -1759,6 +1788,11 @@ def _aside_original(name: str) -> str:
     rest = name[len(ASIDE_PREFIX):]
     m = re.match(r"(?:\d+-\d+-|[0-9a-f]{8}-)(.+)", rest)
     return m.group(1) if m else (rest or "file")
+
+
+def _overlaps(a: str, b: str) -> bool:
+    """Is one path the other or inside it? "" (the Drive itself) contains every path."""
+    return a == b or a == "" or b == "" or a.startswith(b + "/") or b.startswith(a + "/")
 
 
 def _parent(path: str) -> str:
