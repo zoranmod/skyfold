@@ -43,20 +43,33 @@ def setup_logging() -> None:
 
 
 class _RedactEmails(logging.Filter):
-    """Users attach the log to bug reports: never let an email address (the Apple ID) into it."""
+    """Users attach the log to bug reports: never let an email address (the Apple ID), a cookie or a
+    token into it."""
 
     import re as _re
 
     _EMAIL = _re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
+    # X-APPLE-WEBAUTH-…=value, scnt/session/token headers, and any long token-like run of characters
+    _SECRET = _re.compile(r"(?i)((?:x-apple-[\w-]+|scnt|session[\w-]*|[\w-]*token[\w-]*|cookie|dsid)"
+                          r"[\"']?\s*[=:]\s*[\"']?)[^\s;,\"'&]+")
+    _LONG = _re.compile(r"(?=[\w+=-]*\d)(?=[\w+=-]*[A-Za-z])[\w+=-]{40,}")  # letters and digits mixed
+
+    @classmethod
+    def clean(cls, text: str) -> str:
+        if "@" in text:
+            text = cls._EMAIL.sub("<apple-id>", text)
+        text = cls._SECRET.sub(r"\1<redacted>", text)
+        return cls._LONG.sub("<redacted>", text)
 
     def filter(self, record: logging.LogRecord) -> bool:
         text = record.getMessage()
-        if "@" in text:
-            record.msg, record.args = self._EMAIL.sub("<apple-id>", text), ()
+        clean = self.clean(text)
+        if clean != text:
+            record.msg, record.args = clean, ()
         if record.exc_info and not record.exc_text:
             record.exc_text = logging.Formatter().formatException(record.exc_info)
-        if record.exc_text and "@" in record.exc_text:
-            record.exc_text = self._EMAIL.sub("<apple-id>", record.exc_text)
+        if record.exc_text:
+            record.exc_text = self.clean(record.exc_text)
         return True
 
 

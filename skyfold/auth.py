@@ -24,7 +24,7 @@ class Offline(Exception):
     """Apple could not be reached; the saved session may still be fine."""
 
 
-_SAVE_LOCK = threading.Lock()
+_SAVE_LOCK = threading.RLock()  # also guards _CURRENT: checked and saved in one step
 _CURRENT: Any = None  # the PyiCloudSession whose state belongs on disk (None: any)
 TIMEOUT = (20, 300)  # connect, read (per chunk): a stalled connection must not hang a thread forever
 
@@ -35,12 +35,13 @@ def make_current(api: Any) -> None:
     old one (the next start would then restore a stale sign-in)."""
     global _CURRENT
     session = getattr(api, "session", None)
-    _CURRENT = session
-    if session is not None:
-        try:
-            session._save_session_data()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Couldn't save the session: %s", exc)
+    with _SAVE_LOCK:
+        _CURRENT = session
+        if session is not None:
+            try:
+                session._save_session_data()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Couldn't save the session: %s", exc)
 
 
 def _serialize_session_saves() -> None:
@@ -55,9 +56,9 @@ def _serialize_session_saves() -> None:
     def save(self: Any) -> None:
         import os
 
-        if _CURRENT is not None and self is not _CURRENT:
-            return  # a replaced sign-in: never write its old token over the new one
-        with _SAVE_LOCK:
+        with _SAVE_LOCK:  # checked under the same lock that sign-in and sign-out change it with
+            if _CURRENT is not None and self is not _CURRENT:
+                return  # a replaced sign-in: never write its old token over the new one
             folder = getattr(self, "_cookie_directory", None)
             if folder and not os.path.isdir(folder):
                 return  # signed out meanwhile: don't bring the session back
@@ -217,18 +218,20 @@ def submit_code(api: Any, code: str) -> None:
 
 def commit_login(api: Any) -> None:
     """The user's sign-in is complete and accepted: it becomes the one in use."""
-    SIGNED_OUT.unlink(missing_ok=True)
-    make_current(api)
+    with _SAVE_LOCK:
+        SIGNED_OUT.unlink(missing_ok=True)
+        make_current(api)
 
 
 def logout() -> None:
     global _CURRENT
-    _CURRENT = object()  # no session object may save itself again after this
-    try:
-        SIGNED_OUT.parent.mkdir(parents=True, exist_ok=True)
-        SIGNED_OUT.write_text("", encoding="utf-8")  # even if a session file can't be deleted, it's never used
-    except OSError as exc:
-        log.warning("Sign-out: couldn't record it: %s", exc)
+    with _SAVE_LOCK:  # a save already waiting for the lock then sees it is no longer current
+        _CURRENT = object()  # no session object may save itself again after this
+        try:
+            SIGNED_OUT.parent.mkdir(parents=True, exist_ok=True)
+            SIGNED_OUT.write_text("", encoding="utf-8")  # even if a session file can't be deleted, it's never used
+        except OSError as exc:
+            log.warning("Sign-out: couldn't record it: %s", exc)
     for _ in range(3):
         shutil.rmtree(SESSION_DIR, ignore_errors=True)
         if not SESSION_DIR.exists():

@@ -582,8 +582,9 @@ class SyncWorker(QObject):
             return False
         if isinstance(exc, AuthRequired):
             cause = exc.__cause__
-            log.warning("Sign-in lost during %s: %s (%s: %s)", service, exc,
-                        type(cause).__name__ if cause else "-", cause or "-")
+            # Only the kinds of error: Apple's texts can carry cookie values (the log is shared in bug reports).
+            log.warning("Sign-in lost during %s (%s, cause %s)", service, type(exc).__name__,
+                        type(cause).__name__ if cause else "-")
         if isinstance(exc, AuthRequired) and svc == "drive":
             self._authLost.emit(self.api)  # session objects are owned by the worker thread
             return False

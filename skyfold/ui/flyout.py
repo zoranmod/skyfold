@@ -191,6 +191,7 @@ class ServiceRow(QFrame):
         super().__init__()
         self.setObjectName("Row")
         self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)  # Tab reaches it; Enter or Space opens it, like a button
         self.glyph_name = glyph_name
         lay = QHBoxLayout(self)
         lay.setContentsMargins(8, 6, 10, 6)
@@ -228,6 +229,12 @@ class ServiceRow(QFrame):
     def mousePressEvent(self, e) -> None:  # noqa: N802
         self.clicked.emit()
         super().mousePressEvent(e)
+
+    def keyPressEvent(self, e) -> None:  # noqa: N802
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.clicked.emit()
+            return
+        super().keyPressEvent(e)
 
 
 def reveal(target: str) -> None:
@@ -393,7 +400,13 @@ class Flyout(QWidget):
         outer.setSpacing(0)
         body = QWidget()
         body.setObjectName("Root")
-        outer.addWidget(body, 1)
+        self._body = body
+        self._scroll = QScrollArea()  # a small screen scrolls the content; the buttons never leave it
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setWidget(body)
+        outer.addWidget(self._scroll, 1)
         root = QVBoxLayout(body)
         root.setContentsMargins(16, 16, 16, 8)
         root.setSpacing(10)
@@ -571,6 +584,7 @@ class Flyout(QWidget):
         self.folder_btn.setToolTip(t("Find My devices…"))
         self.folder_btn.setAccessibleName(t("Find My devices…"))
         self.pause_btn = bar_button(t("Pause"), self.togglePause)
+        self._bottom = bar
         outer.addWidget(bar)
         self._bar_icons()
         self.set_paused(False)
@@ -853,16 +867,12 @@ class Flyout(QWidget):
             lay = row.layout()
             lay.activate()
             height += (lay.totalHeightForWidth(width) if lay.hasHeightForWidth() else row.sizeHint().height()) + 1
+        self._fit_width()
         self.services_card.show()
         self.list.setFixedHeight(max(height, self.MIN_LIST_HEIGHT if rows else 1) + 2)
         room = self._limit() - (self._needed_height() - self.list.height())
-        if self.list.height() > room:
-            if room < 60:
-                self.list.setFixedHeight(0)  # no room at all: the buttons matter more than the list
-                if self._needed_height() > self._limit():
-                    self.services_card.hide()
-            else:
-                self.list.setFixedHeight(room)
+        if self.list.height() > room:  # the list gives way first; below that the panel content scrolls
+            self.list.setFixedHeight(max(room, min(self.list.height(), 120)))
         self._fit()
 
     def refresh_activity_times(self) -> None:
@@ -870,16 +880,32 @@ class Flyout(QWidget):
             w.refresh()
 
     # placement -----------------------------------------------------------------
+    def _screen(self):
+        """The screen the panel opens on: the tray icon's, not wherever the window was last."""
+        anchor = getattr(self, "_anchor", None)
+        screen = QGuiApplication.screenAt(anchor.center()) if anchor else None
+        return screen or self.screen() or QGuiApplication.primaryScreen()
+
     def _limit(self) -> int:
-        screen = self.screen() or QGuiApplication.primaryScreen()
-        return screen.availableGeometry().height() - 24
+        return self._screen().availableGeometry().height() - 24
+
+    def _fit_width(self) -> None:
+        """At most 400 px, never wider than the screen (e.g. a small display at 225 %)."""
+        w = max(200, min(Flyout.WIDTH, self._screen().availableGeometry().width() - 24))
+        if w != self.WIDTH or self.width() != w:
+            self.WIDTH = w
+            self.setFixedWidth(w)
 
     def _needed_height(self) -> int:
-        lay = self.layout()
+        lay = self._body.layout()
         lay.activate()
-        return lay.totalHeightForWidth(self.WIDTH) if lay.hasHeightForWidth() else lay.totalSizeHint().height()
+        body = lay.totalHeightForWidth(self.WIDTH) if lay.hasHeightForWidth() else lay.totalSizeHint().height()
+        bar = self._bottom.layout()
+        bar.activate()
+        return body + bar.totalSizeHint().height()
 
     def _fit(self) -> None:
+        self._fit_width()
         limit = self._limit()
         self.setMinimumHeight(0)
         self.setMaximumHeight(limit)
@@ -926,6 +952,8 @@ class Flyout(QWidget):
             self.show_at(anchor)
 
     def show_at(self, anchor: QRect | None) -> None:
+        if anchor is not None and anchor.isValid() and not anchor.isEmpty():
+            self._anchor = anchor  # sized for the screen it opens on
         self.refresh_times()
         self.refresh_activity_times()
         self._size_list()

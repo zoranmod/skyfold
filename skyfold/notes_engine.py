@@ -17,6 +17,7 @@ import tempfile
 import re
 import sqlite3
 import threading
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -539,6 +540,15 @@ def _is_our_index(p: Path) -> bool:
     return "const KEY='skyfold-collapsed'" in text and "skyfold-theme" in text
 
 
+STAGE_PREFIX = ".skyfold-tmp-note-"
+
+
+def _digest(p: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
 def _is_our_page(p: Path) -> bool:
     """Only pages Skyfold wrote (they carry its style block) are ever removed: an .html file the
     user keeps in the same folder is left alone."""
@@ -657,11 +667,17 @@ class NotesSyncer:
                 if not inside_root(self.root, out_dir):
                     raise SyncError(t("{name} leads outside the notes folder; left alone", name=out_dir))
                 out_dir.mkdir(parents=True, exist_ok=True)
-                self.remote.export(n.id, out_dir, Path(rel).name, self.root / ASSETS)
-                self._polish(rel, n)
-                if n.modified:
-                    ts = n.modified.timestamp()
-                    os.utime(self.root / rel, (ts, ts))
+                # Exported under a private name first, then put in place without overwriting anything.
+                staged_rel = f"{PurePosixPath(rel).parent.as_posix()}/{STAGE_PREFIX}{uuid.uuid4().hex}.html"
+                try:
+                    self.remote.export(n.id, out_dir, PurePosixPath(staged_rel).name, self.root / ASSETS)
+                    self._polish(staged_rel, n)
+                    if n.modified:
+                        ts = n.modified.timestamp()
+                        os.utime(self.root / staged_rel, (ts, ts))
+                    self._publish_page(self.root / staged_rel, self.root / rel, n.id, old)
+                finally:
+                    (self.root / staged_rel).unlink(missing_ok=True)
             except (Cancelled, AuthRequired, RemoteUnavailable):
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -745,6 +761,65 @@ class NotesSyncer:
         page = pdfs_to_images(page, p.parent, t("Open the original PDF"))
         p.write_text(polish_note_html(page, back, t("All notes"), updated, t("Light / dark")), encoding="utf-8")
 
+    def _publish_page(self, staged: Path, target: Path, nid: str, old: tuple | None) -> None:
+        """Put a freshly exported page in place. A file there is first moved aside (so nothing saved at
+        this moment is overwritten); someone else's file is given back, and our previous page is only
+        deleted when it is exactly what Skyfold wrote, otherwise it goes to the Recycle Bin."""
+        digest = _digest(staged)
+        aside = None
+        if target.exists():
+            aside = target.with_name(f"{STAGE_PREFIX}old-{uuid.uuid4().hex}.html")
+            os.rename(target, aside)
+            if not _is_our_page(aside):  # someone's own file appeared there: give it back untouched
+                os.rename(aside, target)
+                raise SyncError(t("{name} isn't a page Skyfold wrote; the note gets another name next time",
+                                  name=target.name))
+        try:
+            os.rename(staged, target)  # refuses if a file was saved there meanwhile
+        except FileExistsError:
+            if aside is not None:
+                self._let_go(aside, target, nid, old)
+            raise SyncError(t("{name} changed while it was downloading; tried again next time",
+                              name=target.name)) from None
+        except BaseException:
+            if aside is not None:
+                try:
+                    os.rename(aside, target)
+                except OSError:
+                    self._let_go(aside, target, nid, old)
+            raise
+        if aside is not None:
+            self._let_go(aside, target, nid, old)
+        self.state.set(f"page:{nid}", digest)
+
+    def _let_go(self, aside: Path, target: Path, nid: str, old: tuple | None) -> None:
+        """Our previous page: deleted when unchanged since Skyfold wrote it, else to the Recycle Bin."""
+        recorded = self.state.get(f"page:{nid}")
+        try:
+            if recorded:
+                unchanged = _digest(aside) == recorded
+            else:  # written before 1.0.6: it carries the note's own modified time, edits change that
+                when = datetime.fromisoformat(old[4]).timestamp() if old and old[4] else None
+                unchanged = when is not None and abs(aside.stat().st_mtime - when) < 2
+        except (OSError, ValueError):
+            unchanged = False
+        if unchanged:
+            aside.unlink(missing_ok=True)
+            return
+        named = target.with_name(f"{target.stem} ({t('previous version')}).html")
+        try:
+            if not named.exists():
+                os.rename(aside, named)
+                aside = named
+            self._trash(aside)
+        except OSError as exc:
+            log.warning("Notes: couldn't move the previous %s to the Recycle Bin: %s", target.name, exc)
+            if aside != named and not named.exists():
+                try:
+                    os.rename(aside, named)  # at least visible, never left under a hidden name
+                except OSError:
+                    pass
+
     def _path_for(self, n: NoteInfo, folder: str, old: tuple | None, taken: set[str]) -> str:
         base = f"{folder}/{_safe(n.title, t('Untitled'))}"
         cand = f"{base}.html"
@@ -798,13 +873,39 @@ class NotesSyncer:
             data=json.dumps(data, ensure_ascii=False).replace("</", "<\\/"),
         )
         target = self.root / INDEX
+        not_ours = SyncError(t("The Notes folder already has a Notes.html that isn't from Skyfold. Choose an empty "
+                               "folder for Notes in Settings."))
         if target.exists() and not _is_our_index(target):
-            raise SyncError(t("The Notes folder already has a Notes.html that isn't from Skyfold. Choose an empty "
-                              "folder for Notes in Settings."))
+            raise not_ours
         fd, tmp = tempfile.mkstemp(prefix=".skyfold-index-", suffix=".tmp", dir=self.root)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(page)
-        os.replace(tmp, target)
+        aside = None
+        try:
+            if target.exists():  # moved aside and checked again: never overwrite what was saved meanwhile
+                aside = target.with_name(f"{STAGE_PREFIX}index-{uuid.uuid4().hex}.html")
+                os.rename(target, aside)
+                if not _is_our_index(aside):
+                    os.rename(aside, target)
+                    aside = None
+                    raise not_ours
+            os.rename(tmp, target)  # refuses if a file was saved there meanwhile
+        except BaseException:
+            if aside is not None:
+                try:
+                    os.rename(aside, target)
+                except OSError:
+                    self._trash(aside)  # ours, but recoverable all the same
+            raise
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+        if aside is not None:
+            recorded = self.state.get("index_digest")
+            if recorded and _digest(aside) != recorded:
+                self._trash(aside)  # edited since Skyfold wrote it: recoverable from the Recycle Bin
+            else:
+                aside.unlink(missing_ok=True)
+        self.state.set("index_digest", _digest(target))
 
 
 INDEX_MARK = '<meta name="generator" content="Skyfold notes index">'

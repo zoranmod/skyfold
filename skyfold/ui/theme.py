@@ -125,6 +125,7 @@ QWidget#NavPane {{ background: {c['surface']}; border-right: 1px solid {c['borde
 QFrame#Card, QFrame#Tile {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 12px; }}
 QFrame#Row {{ background: transparent; border: none; border-radius: 8px; }}
 QFrame#Row:hover {{ background: {c['hover']}; }}
+QFrame#Row:focus {{ border: 2px solid {c['focus_ring']}; }}
 QFrame#BottomBar {{ background: {c['surface']}; border: none; border-top: 1px solid {c['border']};
     border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }}
 QToolButton#Bar {{ background: transparent; border: none; border-radius: 8px; padding: 6px 2px 4px 2px;

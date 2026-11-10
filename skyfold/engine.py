@@ -40,6 +40,13 @@ class SyncError(Exception):
 DISK_RESERVE = 2 * 1024**3  # always leave this much free on the disk
 
 
+def _is_link(p: Path) -> bool:
+    try:
+        return p.is_symlink() or (hasattr(os.path, "isjunction") and os.path.isjunction(p))
+    except OSError:
+        return True
+
+
 def inside_root(root: Path, p: Path) -> bool:
     """Is p really inside root once links/junctions are followed? (p may not exist yet: its nearest
     existing parent is checked.)"""
@@ -257,6 +264,7 @@ class Syncer:
         tracked = {r.rel_path.lower() for r in rows}
         index: dict[tuple[str, int], str] = {}
         for dirpath, dirs, files in os.walk(self.root):
+            dirs[:] = [d for d in dirs if not _is_link(Path(dirpath) / d)]  # a junction may lead anywhere
             if Path(dirpath) == self.root and ALBUMS_DIR in dirs:
                 dirs.remove(ALBUMS_DIR)  # album links share name and size with the originals
             for fn in files:
@@ -296,6 +304,13 @@ class Syncer:
 
         self._touch_own(path)
         send2trash(str(path))
+
+    def _trash_inside(self, path: Path) -> None:
+        """To the Recycle Bin, but only a file really inside the photos folder: a path that now runs
+        through a link or junction may lead to someone else's file."""
+        if not inside_root(self.root, path):
+            raise OSError(t("{name} leads outside the photos folder; left alone", name=path))
+        self._trash(path)
 
     # main entry -----------------------------------------------------------
     def run(self, force_full: bool = False) -> Result:
@@ -389,7 +404,7 @@ class Syncer:
                         p = self._abs(r.rel_path)
                         if p.exists():
                             try:
-                                self._trash(p)
+                                self._trash_inside(p)
                             except OSError:
                                 pass
                     self.state.remove_asset(a)
@@ -419,7 +434,7 @@ class Syncer:
                         p = self._abs(r.rel_path)
                         if p.exists():
                             try:
-                                self._trash(p)
+                                self._trash_inside(p)
                             except OSError as exc:
                                 ok = False
                                 result.errors += 1
@@ -619,13 +634,27 @@ class Syncer:
                     if rel not in links:  # not one of our links: someone's own file, leave it alone
                         log.info("Album folder: %s exists and isn't Skyfold's; left as it is", rel)
                         continue
-                    target.unlink()
+                    self._unlink_album(rel, [src])
+                    if target.exists():
+                        continue
                 try:
-                    os.link(src, target)  # same file, no extra space
+                    os.link(src, target)  # same file, no extra space; refuses an existing name
+                except FileExistsError:
+                    log.info("Album folder: %s appeared meanwhile; left as it is", rel)
+                    continue
                 except OSError:
                     import shutil
 
-                    shutil.copy2(src, target)  # e.g. a file system without hard links
+                    fd, tmp = tempfile.mkstemp(prefix=TMP_PREFIX, dir=target.parent)  # e.g. no hard links here
+                    os.close(fd)
+                    try:
+                        shutil.copy2(src, tmp)
+                        os.rename(tmp, target)  # refuses an existing name: nothing is overwritten
+                    except FileExistsError:
+                        log.info("Album folder: %s appeared meanwhile; left as it is", rel)
+                        continue
+                    finally:
+                        Path(tmp).unlink(missing_ok=True)
                 self.state.add_album_link(rel, aid)
             except OSError as exc:
                 log.warning("Album link %s: %s", rel, exc)
@@ -642,21 +671,37 @@ class Syncer:
         try:
             if p.exists():
                 self._touch_own(p)
+                # Moved to a private name first: the file checked is then the file removed, even if
+                # something is saved at the album path in between.
+                staged = p.with_name(f"{TMP_PREFIX}album-{os.getpid()}-{threading.get_ident()}{p.suffix}")
+                os.rename(p, staged)
                 ours = False
                 for src in sources:
                     try:
-                        if src.exists() and os.path.samefile(p, src):
+                        if src.exists() and os.path.samefile(staged, src):
                             ours = True
                             break
                     except OSError:
                         pass
                 if ours:
-                    p.unlink()  # just a second name of the photo: nothing is lost
+                    staged.unlink()  # just a second name of the photo: nothing is lost
                 else:
-                    self._trash(p)  # can't prove it's ours: recoverable from the Recycle Bin
+                    self._trash(self._put_back(staged, p))  # can't prove it's ours: recoverable
         except OSError:
             return
         self.state.drop_album_link(rel)
+
+    def _put_back(self, staged: Path, p: Path) -> Path:
+        """A file moved to a private name goes back under its own name, or a free one next to it."""
+        for n in range(1, 50):
+            dest = p if n == 1 else p.with_name(f"{p.stem} ({n}){p.suffix}")
+            try:
+                self._touch_own(dest)
+                os.rename(staged, dest)
+                return dest
+            except FileExistsError:
+                continue
+        return staged
 
     @staticmethod
     def _prune_empty(top: Path) -> None:
@@ -716,7 +761,7 @@ class Syncer:
             p = self._abs(r.rel_path)
             if p.exists():
                 try:
-                    self._trash(p)
+                    self._trash_inside(p)
                 except OSError:
                     pass
         self.state.remove_asset(asset_id)
