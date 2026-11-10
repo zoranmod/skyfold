@@ -73,6 +73,12 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - iCloud Drive: a rename/move in iCloud is written down before it starts. If it is cut short (refused halfway, a crash, an answer that never arrived), the next full pass finds the item by its iCloud id and continues from where it really is, in either order of the two steps, never leaving two copies.
   - Log: an error about a damaged cookie file never quotes the cookie, whatever the value looks like.
   - Restart: the old copy keeps the single-instance lock until it has ended; the new copy waits for that and gives up if the old one doesn't end, so two copies never run at once.
+- Eighth follow-up review (tests in tests/test_review10_fixes.py) – interrupted renames/moves in iCloud Drive:
+  - Each item has its own record (a second move never erases the first one's), and the database rows move together with that record in one transaction, so a crash can't leave one without the other.
+  - Nothing is settled while iCloud lists any of the folders involved only partly: a moved folder is never uploaded a second time.
+  - iCloud's version is taken over only when size and modified time prove it is the same file; an edit made in iCloud meanwhile is downloaded, even one of the same size.
+  - An item deleted in iCloud before the move was settled is deleted on the PC as well (Recycle Bin, with the usual approval for many files) instead of being uploaded again.
+  - When the PC copy is still the one that was moved, the move is finished right away.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

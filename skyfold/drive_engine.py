@@ -23,6 +23,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -141,8 +142,20 @@ class DriveState:
         with self._lock:
             self._db.execute("DELETE FROM drive_files")
 
+    @contextmanager
+    def transaction(self):
+        """Everything inside is written together or not at all (also when the process dies)."""
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+            self._db.execute("COMMIT")
 
-PENDING_MOVE = "move_pending"  # a rename/move in iCloud that was started and not known to be settled
+
+PENDING_MOVE = "move_pending"  # renames/moves in iCloud started and not known to be settled, by item id
 
 
 def ignored(name: str) -> bool:
@@ -461,7 +474,7 @@ class DriveSyncer:
             if pending:
                 if not hasattr(self.remote, "incomplete"):
                     self.remote.incomplete = set()
-                self._settle_pending_move(remote, partly)
+                self._settle_pending_moves(remote, partly, res)
                 base = self.state.all()
                 everything_known = dict(base)
             self._check_cancel()
@@ -1051,10 +1064,14 @@ class DriveSyncer:
             return False
         # Written down before iCloud is touched: after a crash or an unknown answer the next full
         # pass finds the item by its id and the database follows where it really is.
-        self.state.set_meta(PENDING_MOVE, json.dumps({"old": old, "new": new,
-                                                     "id": item.docwsid or item.drivewsid}))
+        ident = item.docwsid or item.drivewsid
+        rows = self.state.all()
+        entry = {"old": old, "new": new, "at": old, "size": item.size, "mtime": item.mtime,
+                 "rows": [[p[len(old):], b.is_dir, b.etag, b.size, b.lmtime, b.lsize]
+                          for p, b in rows.items() if p == old or p.startswith(old + "/")]}
+        with self.state.transaction():
+            self._journal_put(ident, entry)
         here = old
-        etag = item.etag
         for n, step in enumerate(steps):
             try:
                 if step == "move":
@@ -1068,23 +1085,22 @@ class DriveSyncer:
                 log.warning("%s in iCloud failed (%s -> %s): %s", "Move" if step == "move" else "Rename",
                             here, new, exc)
                 if n == 0 and not unknown:
-                    self.state.set_meta(PENDING_MOVE, None)  # refused: nothing changed in iCloud
+                    with self.state.transaction():
+                        self._journal_put(ident, None)  # refused: nothing changed in iCloud
                     return False
-                if n > 0:  # the first step is done: the database follows iCloud
-                    self._half_moved(old, here, etag)
+                # Stays written down with where the database has it now (moved together, in one
+                # transaction): the next full pass finds the item by its id and settles it.
+                self._move_rows(old, here, None, ident, {**entry, "at": here})
+                if n > 0:
                     self._forget_cached(old)
                     res.followup = True
-                # Stays written down with where the database has it now: the next full pass finds
-                # the item by its id and learns its iCloud version (changed by the step that worked).
-                self.state.set_meta(PENDING_MOVE, json.dumps({"old": old, "new": new, "at": here,
-                                                             "id": item.docwsid or item.drivewsid}))
                 if isinstance(exc, (AuthRequired, RemoteUnavailable)):
                     raise
                 return "partial"
-            etag = got or etag
-            item = DriveItem(here, item.drivewsid, item.docwsid, item.zone, etag,
+            item = DriveItem(here, item.drivewsid, item.docwsid, item.zone, got or item.etag,
                              item.is_dir, item.size, item.mtime)
-        self.state.set_meta(PENDING_MOVE, None)
+        with self.state.transaction():
+            self._journal_put(ident, None)
         self._forget_cached(old)
         res.moved += 1
         res.followup = True  # the next pass learns the new iCloud versions
@@ -1092,51 +1108,101 @@ class DriveSyncer:
                          str(self._abs(new)))
         return True
 
-    def _settle_pending_move(self, remote: dict[str, DriveItem], partly: set[str]) -> None:
-        """A rename/move in iCloud that may have been cut short (crash, unknown answer): find the item
-        by its id and let the database follow where it is now."""
+    def _journal(self) -> dict[str, dict]:
         raw = self.state.get_meta(PENDING_MOVE)
         if not raw:
-            return
+            return {}
         try:
             j = json.loads(raw)
-            old, ident = j.get("at") or j["old"], j["id"]
-        except (ValueError, KeyError, TypeError, AttributeError):
-            self.state.set_meta(PENDING_MOVE, None)
-            return
-        hit = next((r for r in remote.values() if ident and ident in (r.docwsid, r.drivewsid)), None)
-        if hit is None:
-            if partly:  # maybe in a folder iCloud didn't list completely: decide when it does
-                for p in (old, j.get("new") or old):
-                    q = _parent(p)
-                    self.remote.incomplete.add(q)
-                return
-            self.state.set_meta(PENDING_MOVE, None)  # gone from iCloud: synced as a deletion
-            return
-        rows = self.state.all()
-        row = rows.get(old)
-        if row is not None and (hit.path != old or hit.etag != row.etag):
-            log.info("Drive: an interrupted rename/move in iCloud is picked up where iCloud has it")
-            # iCloud's version is taken over only when it is still the same file (same size); an
-            # edit made in iCloud meanwhile then still shows as a change instead of being missed
-            same = hit.is_dir or row.size is None or row.size == hit.size
-            self._half_moved(old, hit.path, hit.etag if same else None)
-        self.state.set_meta(PENDING_MOVE, None)
+        except ValueError:
+            return {}
+        if isinstance(j, dict) and "id" in j and "old" in j:  # written by an earlier 1.0.6 build
+            j = {j["id"]: j}
+        return {k: v for k, v in j.items() if isinstance(v, dict) and "old" in v and "new" in v} \
+            if isinstance(j, dict) else {}
 
-    def _half_moved(self, old: str, now: str, etag: str | None) -> None:
-        """iCloud renamed the item but didn't move it: the database follows iCloud, so the next pass
-        sees "renamed on this PC" again and finishes the move (never a second copy)."""
-        rows = self.state.all()
-        for p in [p for p in rows if p == old or p.startswith(old + "/")]:
-            b = rows[p]
-            q = now + p[len(old):]
-            self.state.drop(p)
-            if p == old and not b.is_dir:
-                self.state.put(Base(q, False, etag or b.etag, b.size, b.lmtime, b.lsize, False))
-            elif b.is_dir:
-                self.state.put(Base(q, True, None, None, None, None, False))
-            else:
-                self.state.put(Base(q, False, b.etag, b.size, b.lmtime, b.lsize, False))
+    def _journal_put(self, ident: str, entry: dict | None) -> None:
+        """Call inside a transaction."""
+        j = self._journal()
+        if entry is None:
+            j.pop(ident, None)
+        else:
+            j[ident] = entry
+        self.state.set_meta(PENDING_MOVE, json.dumps(j) if j else None)
+
+    def _move_rows(self, src: str, dst: str, top_etag: str | None, ident: str, entry: dict | None,
+                   snapshot: dict | None = None) -> None:
+        """Let the database rows of `src` (and below) follow the item to `dst`, and update its
+        journal entry, in one transaction. Rows that are missing are rebuilt from the snapshot taken
+        when the move started. top_etag: iCloud's version, only when it is known to be the same file."""
+        with self.state.transaction():
+            rows = self.state.all()
+            mine = {p: r for p, r in rows.items() if p == src or p.startswith(src + "/")}
+            if not mine and snapshot:
+                mine = {src + rel: Base(src + rel, bool(d), e, sz, lm, ls, False)
+                        for rel, d, e, sz, lm, ls in snapshot.get("rows") or []}
+            for p in mine:
+                self.state.drop_one(p)
+            for p, r in mine.items():
+                q = dst + p[len(src):]
+                if r.is_dir:
+                    self.state.put(Base(q, True, None, None, None, None, False))
+                else:
+                    etag = (top_etag or r.etag) if p == src else r.etag
+                    self.state.put(Base(q, False, etag, r.size, r.lmtime, r.lsize, False))
+            self._journal_put(ident, entry)
+
+    def _settle_pending_moves(self, remote: dict[str, DriveItem], partly: set[str], res: DriveResult) -> None:
+        """Renames/moves in iCloud that may have been cut short (crash, unknown answer, refused
+        halfway): find each item by its id, let the database follow where it really is, and finish
+        the move when the PC copy is still the one that was moved. Nothing is decided about an item
+        while iCloud lists any of the folders involved only partly."""
+        for ident, e in list(self._journal().items()):
+            old, new = e["old"], e["new"]
+            at = e.get("at") or old
+            hit = next((r for r in remote.values() if ident and ident in (r.docwsid, r.drivewsid)), None)
+            touched = {old, at, new} | ({hit.path} if hit else set())
+            if partly and (hit is None or any(q == t or q.startswith(t + "/") or t.startswith(q + "/")
+                                              for q in partly for t in touched if t)):
+                # decided once iCloud lists it completely: nothing is done around it meanwhile
+                self.remote.incomplete |= touched | ({_parent(t) for t in touched} if hit is None else set())
+                continue
+            if hit is None:  # gone from iCloud: the PC copy (under its new name) follows that deletion
+                dst = new if os.path.lexists(self._abs(new)) else at
+                self._move_rows(at, dst, None, ident, None, snapshot=e)
+                continue
+            # iCloud's version is taken over only when provably the same file (size and modified time
+            # as when the move started); otherwise the old version stays, so an edit made in iCloud
+            # meanwhile shows as a change and is downloaded
+            same = hit.is_dir or (hit.size == e.get("size") and hit.mtime == e.get("mtime"))
+            log.info("Drive: an interrupted rename/move in iCloud is picked up where iCloud has it")
+            finish = hit.path != new and self._still_moved_copy(new, at, e)
+            self._move_rows(at, hit.path, hit.etag if same else None, ident,
+                            {**e, "at": hit.path} if finish else None, snapshot=e)
+            if not finish:
+                continue
+            moved = self._remote_move(remote, hit.path, new, res)  # keeps its own journal entry
+            if moved is True:
+                for p in [p for p in list(remote) if p == hit.path or p.startswith(hit.path + "/")]:
+                    r = remote.pop(p)
+                    q = new + p[len(hit.path):]
+                    remote[q] = self.cache[q] = DriveItem(q, r.drivewsid, r.docwsid, r.zone, r.etag,
+                                                          r.is_dir, r.size, r.mtime)
+                self._move_rows(hit.path, new, None, ident, None)
+
+    def _still_moved_copy(self, new: str, at: str, e: dict) -> bool:
+        """Is the PC copy at `new` still the one whose move was started (not edited or replaced)?"""
+        p = self._abs(new)
+        top = next((r for r in e.get("rows") or [] if r[0] == ""), None)
+        try:
+            if top is None or bool(top[1]) != p.is_dir() or _is_link(p):
+                return False
+            if top[1]:
+                return True
+            st = p.stat()
+            return st.st_size == top[5] and round(st.st_mtime, 2) == round(top[4] or 0, 2)
+        except OSError:
+            return False
 
     def _forget_cached(self, path: str) -> None:
         prefix = path + "/"
