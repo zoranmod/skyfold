@@ -80,6 +80,8 @@ class DriveResult:
     errors: int = 0
     pending_to_cloud: list[str] = field(default_factory=list)
     pending_to_pc: list[str] = field(default_factory=list)
+    down_files: list[str] = field(default_factory=list)
+    up_files: list[str] = field(default_factory=list)
     full: bool = False  # True when the whole Drive was read
     followup: bool = False  # a new folder was created; its contents go up on the next pass
 
@@ -385,6 +387,15 @@ class DriveSyncer:
         self._late = None
         root_id = os.path.normcase(os.path.abspath(self.root))
         synced_root = self.state.get_meta("root")
+        if synced_root is None and self.state.all():  # from before 1.0.6: which folder was it?
+            cached_root = None
+            if self.cache_file and self.cache_file.exists():
+                try:
+                    cached_root = json.loads(self.cache_file.read_text(encoding="utf-8")).get("root")
+                except (OSError, ValueError):
+                    cached_root = None
+            if not cached_root or os.path.normcase(os.path.abspath(cached_root)) != root_id:
+                synced_root = "?"  # can't show it was this folder: start afresh (a marked folder is then refused)
         if synced_root is not None and synced_root != root_id:
             log.info("Drive: another folder than the one this database synced; starting afresh")
             self.state.reset()  # what it remembers is about the other folder
@@ -395,6 +406,7 @@ class DriveSyncer:
             self.remote.incomplete = set()
         res = DriveResult()
         base = self.state.all()  # (after the folder check above)
+        everything_known = dict(base)  # before a quick pass narrows `base` to a few folders
         self._check_root(bool(base))
 
         scope = self._scope_folders(changed) if changed else None
@@ -443,7 +455,7 @@ class DriveSyncer:
         to_pc: list[str] = []  # delete on PC
         mkdir_local: list[DriveItem] = []  # new folders in iCloud
 
-        twins = self._case_twins({**self.cache, **remote}, base)
+        twins = self._case_twins({**self.cache, **remote}, everything_known)
         if twins:
             def in_twin(p: str) -> bool:
                 return any(p == q or p.startswith(q + "/") for q in twins)
@@ -486,8 +498,8 @@ class DriveSyncer:
             paths = [p for p in paths if _parent(p) in dirs]  # only the re-read folders' contents
         for path in paths:
             r, lo, b = remote.get(path), local.get(path), base.get(path)
-            if partial and (r is None or lo is None) and (listed_partly(path) or path in partial):
-                continue  # iCloud didn't list this folder completely: decide next time
+            if partial and (listed_partly(path) or path in partial):
+                continue  # iCloud didn't list this folder completely: nothing is done in it this pass
             if r and not lo and not b and self._skip_unsupported(path):
                 continue
             if r and lo and r.is_dir != lo.is_dir:
@@ -518,7 +530,7 @@ class DriveSyncer:
 
             settled = lo is not None and not (0 <= now - lo.mtime < SETTLE_SECONDS)
             if r and lo:
-                same = r.size == lo.size and (r.mtime is None or abs(r.mtime - lo.mtime) < 1.0)
+                same = r.size == lo.size and r.mtime is not None and abs(r.mtime - lo.mtime) < 1.0
                 if b is None:
                     if same:  # same file on both sides (e.g. first sync): adopt
                         self.state.put(Base(path, False, r.etag, r.size, lo.mtime, lo.size, False))
@@ -547,7 +559,8 @@ class DriveSyncer:
                     # records "last opened"): same size and same modified time = same content.
                     self.state.put(Base(path, False, r.etag, r.size, b.lmtime, b.lsize, False))
                     continue
-                if remote_changed and local_changed and same:
+                if remote_changed and local_changed and r.size == lo.size and r.mtime is not None \
+                        and abs(r.mtime - lo.mtime) < 0.01:  # we gave it exactly iCloud's time: our own download
                     # already the iCloud version (e.g. downloaded just before a crash): remember it
                     self.state.put(Base(path, False, r.etag, r.size, lo.mtime, lo.size, False))
                 elif remote_changed and local_changed:
@@ -659,12 +672,16 @@ class DriveSyncer:
         if res.uploaded:
             res.followup = True
         self._save_cache()
-        if res.downloaded:
-            self.cb.activity("download", t("Drive: downloaded 1 file") if res.downloaded == 1
-                             else t("Drive: downloaded {n} files", n=res.downloaded), res.last_down)
-        if res.uploaded:
-            self.cb.activity("upload", t("Drive: uploaded 1 file") if res.uploaded == 1
-                             else t("Drive: uploaded {n} files", n=res.uploaded), res.last_up)
+        if res.downloaded and len(res.down_files) <= 8:  # a few files: one entry each
+            for p in res.down_files:
+                self.cb.activity("download", t("Drive: downloaded: {name}", name=p), str(self._abs(p)))
+        elif res.downloaded:
+            self.cb.activity("download", t("Drive: downloaded {n} files", n=res.downloaded), str(self.root))
+        if res.uploaded and len(res.up_files) <= 8:
+            for p in res.up_files:
+                self.cb.activity("upload", t("Drive: uploaded: {name}", name=p), str(self._abs(p)))
+        elif res.uploaded:
+            self.cb.activity("upload", t("Drive: uploaded {n} files", n=res.uploaded), str(self.root))
         self.state_set_last_sync()
         return res
 
@@ -720,7 +737,8 @@ class DriveSyncer:
                 out.append(p)
                 continue
             dirty, clean = False, []
-            for dirpath, _dirs, files in os.walk(self._abs(p)):
+            unreadable: list[str] = []
+            for dirpath, _dirs, files in os.walk(self._abs(p), onerror=lambda e: unreadable.append(str(e))):
                 rel_dir = Path(dirpath).relative_to(self.root).as_posix()
                 for f in files:
                     if ignored(f):
@@ -738,6 +756,9 @@ class DriveSyncer:
                             self.state.drop(rel)
                     else:
                         clean.append(rel)
+            if unreadable:
+                log.warning("Drive: %s couldn't be read completely; not deleted (%s)", p, unreadable[:2])
+                continue  # can't check what's inside: decide another time
             if not dirty:
                 out.append(p)
                 continue
@@ -1159,6 +1180,7 @@ class DriveSyncer:
                     self.state.put(Base(item.path, False, item.etag, item.size, st.st_mtime, st.st_size, False))
                     res.downloaded += 1
                     res.last_down = str(target) if not res.downloaded - 1 else str(self.root)
+                    res.down_files.append(item.path)
                 if fatal is not None:
                     raise fatal
                 self.apply_approved_deletions()
@@ -1198,6 +1220,7 @@ class DriveSyncer:
                 self.state.put(Base(path, False, None, len(data), lo.mtime, lo.size, False))
                 res.uploaded += 1
                 res.last_up = res.last_up or str(self._abs(path))
+                res.up_files.append(path)
             except (AuthRequired, RemoteUnavailable):
                 raise
             except Exception as exc:  # noqa: BLE001

@@ -639,9 +639,10 @@ class NotesSyncer:
             folder = folders.get(n.folder_id or "", "Notes")
             modified = n.modified.isoformat() if n.modified else None
             if n.locked:
-                if old and old[1]:
-                    self._remove(old, res)
-                self.state.put(n.id, None, n.title, folder, modified, True)
+                keep = None
+                if old and old[1] and not self._remove(old, res):
+                    keep = old[1]  # couldn't remove the readable copy yet: remember it, try again next time
+                self.state.put(n.id, keep, n.title, folder, None if keep else modified, True)
                 continue
             if old and old[4] == modified and old[1] and (self.root / old[1]).exists() and old[3] == folder \
                     and old[2] == n.title:

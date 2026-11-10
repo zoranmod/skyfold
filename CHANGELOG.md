@@ -34,6 +34,11 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - Notes: a note seen alive again isn't removed because of an earlier absence; a page that couldn't be removed is tried again.
   - Sign-in: only an accepted sign-in clears the "signed out" mark (a cancelled one doesn't).
   - Panel: brighter keyboard focus ring in dark mode, sections come back when there is room again, the panel is placed again after its final size is known, long file names are shortened safely.
+- Third follow-up review (tests in tests/test_review5_fixes.py):
+  - Photos: a new photo is put in place with an operation that refuses an existing name, so a file saved there at the same moment is never overwritten; album cleanup never removes a link or junction.
+  - iCloud Drive: a database from before 1.0.6 is only used for the folder its cache shows it synced; an approved folder deletion waits when the folder can't be read completely; edits on both sides keep both versions unless it is provably Skyfold's own download; nothing is uploaded or downloaded inside a folder iCloud listed only partly; quick checks keep the spelling already synced; a few transferred files get one activity entry each.
+  - Notes: a locked note whose old page couldn't be removed yet is tried again.
+  - Panel: keeps its exact size when placed, and is placed again after the size changes while it is open.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

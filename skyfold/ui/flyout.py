@@ -884,6 +884,7 @@ class Flyout(QWidget):
         self.resize(self.WIDTH, min(self._needed_height(), limit))
         if self.isVisible():
             self._place()
+            QTimer.singleShot(0, self._place)  # again once Qt has applied the new size
 
     def _place(self, anchor: QRect | None = None) -> None:
         if anchor is not None:
@@ -893,7 +894,8 @@ class Flyout(QWidget):
         screen = screen or QGuiApplication.primaryScreen()
         avail = screen.availableGeometry()
         full = screen.geometry()
-        self.adjustSize()
+        if self.height() > avail.height() - 24:  # (adjustSize() would undo the exact size _fit() set)
+            self.resize(self.width(), avail.height() - 24)
         w, h = self.width(), self.height()
         margin = 12
         # Taskbar position decides which corner we pop out of.

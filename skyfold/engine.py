@@ -511,9 +511,17 @@ class Syncer:
                                                         a.date.isoformat()), now_iso())
                             taken.add(rel.lower())
                             continue
-                        if target.exists():  # never replace a file that isn't ours
+                        for _attempt in range(20):
+                            try:
+                                os.rename(tmp_path, target)  # fails if a file appeared there: never overwrites
+                                break
+                            except FileExistsError:
+                                taken.add(rel.lower())  # someone just saved a file there: take the next name
+                                rel = self._place(a, res, taken)
+                                self._verify.discard(rel)
+                                target = self._abs(rel)
+                        else:
                             raise SyncError(t("{name} already exists; not replaced", name=rel))
-                        os.replace(tmp_path, target)  # watcher ignores it: the source is a temp file
                         ts = a.date.timestamp()
                         os.utime(target, (ts, ts))
                     finally:
@@ -638,7 +646,19 @@ class Syncer:
     def _prune_empty(top: Path) -> None:
         if not top.exists():
             return
-        for dirpath, _dirs, _files in sorted(os.walk(top), key=lambda x: len(x[0]), reverse=True):
+        def is_link(p: Path) -> bool:
+            try:
+                return p.is_symlink() or (hasattr(os.path, "isjunction") and os.path.isjunction(p))
+            except OSError:
+                return True
+
+        found = []
+        for dirpath, dirs, _files in os.walk(top):
+            dirs[:] = [d for d in dirs if not is_link(Path(dirpath) / d)]  # someone's link: leave it alone
+            found.append(dirpath)
+        for dirpath in sorted(found, key=len, reverse=True):
+            if is_link(Path(dirpath)):
+                continue
             try:
                 Path(dirpath).rmdir()  # only succeeds when empty
             except OSError:
