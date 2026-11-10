@@ -69,7 +69,7 @@ def split_activity(text: str, kind: str = "") -> tuple[str, str]:
     if not sep or not head or chr(10) in tail or len(tail) > 260 or " → " in tail:
         return text, ""
     name = tail.rsplit("/", 1)[-1]
-    if "." not in name and "/" not in tail:
+    if "." not in name and "/" not in tail and not head.startswith("Drive: "):
         return text, ""
     folder = tail.rsplit("/", 1)[0] if "/" in tail else ""
     drive = head.startswith("Drive: ")
@@ -496,6 +496,8 @@ class Flyout(QWidget):
         self.row_photos.clicked.connect(lambda: self.serviceClicked.emit("photos"))
         self.row_drive.clicked.connect(lambda: self.serviceClicked.emit("drive"))
         self.row_notes = ServiceRow("note", t("Notes"), palette)
+        for row in (self.row_photos, self.row_drive, self.row_notes):
+            row.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)  # never squeezed below their text
         self.row_notes.clicked.connect(lambda: self.serviceClicked.emit("notes"))
         for i, row in enumerate((self.row_photos, self.row_drive, self.row_notes)):
             if i:
@@ -690,7 +692,7 @@ class Flyout(QWidget):
             self.dot.setToolTip(STATE_TITLES.get(self.state, self.state) + "\n" + text.replace(chr(0xA0), " "))
         if self.bar.isHidden():
             self.bar.show()
-            self._fit()
+            self._size_list()  # the same sizing as everywhere: the buttons stay on screen
 
     def set_stats(self, stats: dict) -> None:
         self._stats = stats
@@ -777,7 +779,7 @@ class Flyout(QWidget):
         self.dot.set_state(self._dot_state())
         self._dot_tip()
         self._status_line()
-        self._fit()
+        self._size_list()
 
     MAX_ROWS_VISIBLE = 6
     MIN_LIST_HEIGHT = 300  # the panel keeps a calm, steady height instead of jumping with each entry

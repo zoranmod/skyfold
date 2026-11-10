@@ -39,6 +39,11 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - iCloud Drive: a database from before 1.0.6 is only used for the folder its cache shows it synced; an approved folder deletion waits when the folder can't be read completely; edits on both sides keep both versions unless it is provably Skyfold's own download; nothing is uploaded or downloaded inside a folder iCloud listed only partly; quick checks keep the spelling already synced; a few transferred files get one activity entry each.
   - Notes: a locked note whose old page couldn't be removed yet is tried again.
   - Panel: keeps its exact size when placed, and is placed again after the size changes while it is open.
+- Fourth follow-up review (tests in tests/test_review6_fixes.py):
+  - Photos: an album entry is removed directly only when it is provably a second name of the photo; anything else there goes to the Recycle Bin.
+  - Notes: a page is overwritten or removed only when Skyfold wrote it; a personal file at a note's old path is left alone and the note gets a new name.
+  - iCloud Drive: renames keep each file's previous iCloud version tag, so an edit made in iCloud meanwhile still comes down; another folder is checked before anything the database knows is forgotten; a download is put in place by moving the old file aside first (never overwriting a save made at that moment); a folder answer with an error status is never read as empty; nothing is renamed across a partly listed folder, and its last known contents stay remembered; an approved folder deletion waits when a link or junction appeared inside.
+  - Panel: progress, pending deletions and state changes all use the same sizing, so the buttons stay on screen; service rows are never squeezed below their text; a few transferred files in one pass get one entry each; files without an extension show name and folder.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

@@ -171,7 +171,9 @@ class ICloudDrive:
                         answered = fut.result()
                         # Never read "no answer" as "this folder is empty": that would look like deletions.
                         got = {f.get("drivewsid") for f in answered
-                               if isinstance(f.get("items"), list) or not f.get("numberOfItems")}
+                               if (isinstance(f.get("items"), list) or not f.get("numberOfItems"))
+                               and str(f.get("status") or "OK").upper() in ("OK", "SUCCESS")
+                               and not f.get("errorCode") and not f.get("error")}
                         if set(paths) - got:
                             raise RuntimeError("iCloud returned an incomplete folder listing")
                         for folder in answered:

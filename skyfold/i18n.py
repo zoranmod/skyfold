@@ -150,6 +150,7 @@ BS: dict[str, str] = {
     "Choose a folder.": "Izaberi folder.",
     "Enter the full folder path.": "Unesi punu putanju foldera.",
     "Clear": "Očisti",
+    "{name} changed while it was downloading; tried again next time": "{name} se promijenio tokom preuzimanja; ponovo sljedeći put",
     "Drive: downloaded: {name}": "Drive: preuzeto: {name}",
     "Drive: uploaded: {name}": "Drive: poslano: {name}",
     "{name} already exists; not replaced": "{name} već postoji; nije zamijenjen",

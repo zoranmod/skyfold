@@ -567,8 +567,11 @@ class Syncer:
         """
         links = self.state.album_links()
         if not self.settings.albums_as_folders:
-            for rel in links:
-                self._unlink_album(rel)
+            sources = defaultdict(list)
+            for r in self.state.files():
+                sources[r.asset_id].append(self._abs(r.rel_path))
+            for rel, aid in links.items():
+                self._unlink_album(rel, sources.get(aid, []))
             self._prune_empty(self.root / ALBUMS_DIR)
             return
         rows = {(r.asset_id, r.resource_key): r for r in self.state.files()}
@@ -581,7 +584,7 @@ class Syncer:
         if not due and last:
             for rel, aid in links.items():  # cheap pass: drop links of photos that no longer exist
                 if aid not in by_asset:
-                    self._unlink_album(rel)
+                    self._unlink_album(rel, [])
             self._prune_empty(self.root / ALBUMS_DIR)
             return
         self.cb.status(t("Updating album folders…"))
@@ -597,9 +600,9 @@ class Syncer:
                         rel = f"{ALBUMS_DIR}/{folder}/{name.stem}_{aid[:6]}{name.suffix}"
                     wanted[rel] = aid
                     source[rel] = r.rel_path
-        for rel in links:
+        for rel, aid in links.items():
             if rel not in wanted:
-                self._unlink_album(rel)
+                self._unlink_album(rel, [self._abs(r.rel_path) for r in by_asset.get(aid, [])])
         for rel, aid in wanted.items():
             target = self._abs(rel)
             if rel in links and target.exists():
@@ -629,7 +632,9 @@ class Syncer:
         self.state.set("albums_refreshed", now_iso())
         self._prune_empty(self.root / ALBUMS_DIR)
 
-    def _unlink_album(self, rel: str) -> None:
+    def _unlink_album(self, rel: str, sources: list[Path] | tuple = ()) -> None:
+        """Remove an album entry. Only a provable link to the photo itself is removed directly; anything
+        else at that path (e.g. a file someone put there instead) goes to the Recycle Bin."""
         p = self._abs(rel)
         if not inside_root(self.root, p.parent):
             self.state.drop_album_link(rel)  # leads elsewhere now: forget it, touch nothing there
@@ -637,7 +642,18 @@ class Syncer:
         try:
             if p.exists():
                 self._touch_own(p)
-                p.unlink()
+                ours = False
+                for src in sources:
+                    try:
+                        if src.exists() and os.path.samefile(p, src):
+                            ours = True
+                            break
+                    except OSError:
+                        pass
+                if ours:
+                    p.unlink()  # just a second name of the photo: nothing is lost
+                else:
+                    self._trash(p)  # can't prove it's ours: recoverable from the Recycle Bin
         except OSError:
             return
         self.state.drop_album_link(rel)

@@ -748,7 +748,8 @@ class NotesSyncer:
     def _path_for(self, n: NoteInfo, folder: str, old: tuple | None, taken: set[str]) -> str:
         base = f"{folder}/{_safe(n.title, t('Untitled'))}"
         cand = f"{base}.html"
-        if old and old[1] and old[1].lower() == cand.lower():
+        here = self.root / cand
+        if old and old[1] and old[1].lower() == cand.lower() and (not here.exists() or _is_our_page(here)):
             return cand
         k = 2
         while cand.lower() in taken or ((self.root / cand).exists() and not _is_our_page(self.root / cand)):
@@ -765,6 +766,9 @@ class NotesSyncer:
             log.warning("Notes: %s leads outside the notes folder; not removed", row[1])
             return True  # nothing of ours to remove there
         try:
+            if p.exists() and p.suffix.lower() == ".html" and not _is_our_page(p):
+                log.info("Notes: %s isn't a page Skyfold wrote; left alone", row[1])
+                return True  # someone else's file now: forget the note's old path, keep the file
             if p.exists():
                 self._trash(p)
             if count:

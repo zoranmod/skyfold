@@ -256,6 +256,24 @@ class DriveSyncer:
             raise SyncError(t("This Drive folder belongs to another Apple ID. Choose a new, empty folder for "
                               "iCloud Drive in Settings."))
 
+    def _refuse_unowned_folder(self) -> None:
+        """A folder this database never synced: refuse it if its marker says it belongs to someone else,
+        or if it has an old marker that can't tell whose it is."""
+        marker = self.root / MARKER
+        if not marker.exists():
+            return
+        try:
+            text = marker.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise SyncError(t("Couldn't read the Drive folder's sync marker: {error}", error=exc)) from exc
+        owner = next((ln.split(":", 1)[1].strip() for ln in text.splitlines() if ln.startswith("account:")), None)
+        if owner is None:
+            raise SyncError(t("This Drive folder was used before and it isn't clear by which Apple ID. Choose a "
+                              "new, empty folder for iCloud Drive in Settings."))
+        if self.account and owner != self.account:
+            raise SyncError(t("This Drive folder belongs to another Apple ID. Choose a new, empty folder for "
+                              "iCloud Drive in Settings."))
+
     def _unreadable_add(self, full: str | Path) -> None:
         try:
             rel = Path(full).relative_to(self.root).as_posix()
@@ -397,6 +415,7 @@ class DriveSyncer:
             if not cached_root or os.path.normcase(os.path.abspath(cached_root)) != root_id:
                 synced_root = "?"  # can't show it was this folder: start afresh (a marked folder is then refused)
         if synced_root is not None and synced_root != root_id:
+            self._refuse_unowned_folder()  # nothing is forgotten when the new folder can't be used anyway
             log.info("Drive: another folder than the one this database synced; starting afresh")
             self.state.reset()  # what it remembers is about the other folder
             self.cache = {}
@@ -414,7 +433,10 @@ class DriveSyncer:
             self.cb.status(t("Reading iCloud Drive…"))
             remote = self.remote.walk(lambda n: self.cb.status(t("Reading iCloud Drive… {n}", n=n)),
                                       want=self._wanted_dir)
-            self.cache = dict(remote)
+            partly = set(getattr(self.remote, "incomplete", set()) or ())
+            kept = {p: it for p, it in self.cache.items()  # what partly listed folders held last time
+                    if p not in remote and any(p.startswith(q + "/") for q in partly)}
+            self.cache = {**kept, **remote}
             self._check_cancel()
             local = self.scan_local()
             res.full = True
@@ -609,6 +631,7 @@ class DriveSyncer:
             # went, if it was renamed): only a full read can decide safely.
             log.info("Drive: a folder was removed or renamed; doing a full read instead of a quick one")
             return self.run()
+        self._partial = partial
         # A rename or move looks like "one deleted + one new": do it as a rename instead.
         self._moves(remote, local, base, downloads, uploads, mkdir_remote, mkdir_local, to_cloud, to_pc, res)
         for r in mkdir_local:
@@ -672,12 +695,13 @@ class DriveSyncer:
         if res.uploaded:
             res.followup = True
         self._save_cache()
-        if res.downloaded and len(res.down_files) <= 8:  # a few files: one entry each
+        few = len(res.down_files) + len(res.up_files) <= 8
+        if res.downloaded and few:  # a few files in this pass: one entry each
             for p in res.down_files:
                 self.cb.activity("download", t("Drive: downloaded: {name}", name=p), str(self._abs(p)))
         elif res.downloaded:
             self.cb.activity("download", t("Drive: downloaded {n} files", n=res.downloaded), str(self.root))
-        if res.uploaded and len(res.up_files) <= 8:
+        if res.uploaded and few:
             for p in res.up_files:
                 self.cb.activity("upload", t("Drive: uploaded: {name}", name=p), str(self._abs(p)))
         elif res.uploaded:
@@ -739,6 +763,9 @@ class DriveSyncer:
             dirty, clean = False, []
             unreadable: list[str] = []
             for dirpath, _dirs, files in os.walk(self._abs(p), onerror=lambda e: unreadable.append(str(e))):
+                for d in _dirs:
+                    if _is_link(Path(dirpath) / d):
+                        unreadable.append(f"link: {Path(dirpath) / d}")
                 rel_dir = Path(dirpath).relative_to(self.root).as_posix()
                 for f in files:
                     if ignored(f):
@@ -837,6 +864,11 @@ class DriveSyncer:
         def under(paths, top):
             return [p for p in paths if p.startswith(top + "/")]
 
+        partial = getattr(self, "_partial", set()) or set()
+
+        def touches_partial(*tops: str) -> bool:
+            return any(q == top or q.startswith(top + "/") or top.startswith(q + "/") for q in partial for top in tops)
+
         def drop_under(lst, top, key=lambda x: x):
             lst[:] = [x for x in lst if not (key(x) == top or key(x).startswith(top + "/"))]
 
@@ -849,7 +881,8 @@ class DriveSyncer:
             sig_new = {n: _signature({p[len(n) + 1:]: local[p].size for p in under(local, n) if not local[p].is_dir})
                        for n in new}
             for g, n in _pairs(sig_old, sig_new):
-                if any(n.startswith(m + "/") for m in new if m != n) or not self._remote_move(remote, g, n, res):
+                if touches_partial(g, n) or any(n.startswith(m + "/") for m in new if m != n) \
+                        or not self._remote_move(remote, g, n, res):
                     continue
                 self._rebase(base, g, n, keep_etags=False)
                 drop_under(to_cloud, g)
@@ -867,7 +900,7 @@ class DriveSyncer:
             sig_new = {n: _signature({p[len(n) + 1:]: remote[p].size for p in under(remote, n) if not remote[p].is_dir})
                        for n in new}
             for g, n in _pairs(sig_old, sig_new):
-                if not self._same_item(g, n, remote) or not self._local_move(g, n, res):
+                if touches_partial(g, n) or not self._same_item(g, n, remote) or not self._local_move(g, n, res):
                     continue  # not provably the same folder (e.g. deleted and a look-alike created)
                 self._rebase(base, g, n, keep_etags=True, remote=remote)
                 drop_under(to_pc, g)
@@ -886,7 +919,7 @@ class DriveSyncer:
                     continue
                 lo = local[n]
                 self.state.drop(g)
-                self.state.put(Base(n, False, None, base[g].size, lo.mtime, lo.size, False))
+                self.state.put(Base(n, False, base[g].etag, base[g].size, lo.mtime, lo.size, False))
                 to_cloud.remove(g)
                 uploads.remove(n)
 
@@ -974,7 +1007,7 @@ class DriveSyncer:
             if b.is_dir:
                 self.state.put(Base(q, True, etag, None, None, None, False))
             else:
-                if keep_etags and b.etag is not None:
+                if b.etag is not None:
                     etag = b.etag  # compared next pass: unchanged content is recognised, changes come down
                 self.state.put(Base(q, False, etag, b.size, b.lmtime, b.lsize, False))
 
@@ -1125,12 +1158,23 @@ class DriveSyncer:
                     raise SyncError(t("file size doesn't match"))
                 self._touch_own(target)
                 b = base.get(item.path)
+                aside = None
                 if target.exists() and target.is_file():
-                    st = target.stat()
-                    if b is None or (st.st_size, round(st.st_mtime, 2)) != (b.lsize, round(b.lmtime or 0, 2)):
-                        # changed on this PC since the scan: keep that version under a conflict name
-                        os.replace(target, self._abs(self._conflict_name(item.path)))
-                os.replace(tmp_path, target)
+                    aside = target.with_name(f"{TMP_PREFIX}old-{os.getpid()}-{threading.get_ident()}-{target.name}")
+                    os.rename(target, aside)  # moved, never overwritten (whatever is saved there right now)
+                try:
+                    os.rename(tmp_path, target)  # refuses if a file was saved there meanwhile
+                except FileExistsError:
+                    if aside is not None:  # keep the moved-aside version where the user can see it
+                        os.rename(aside, self._abs(self._conflict_name(item.path)))
+                    raise SyncError(t("{name} changed while it was downloading; tried again next time",
+                                      name=item.path))
+                if aside is not None:
+                    st = aside.stat()
+                    if b is not None and (st.st_size, round(st.st_mtime, 2)) == (b.lsize, round(b.lmtime or 0, 2)):
+                        aside.unlink()  # the version both sides had: replaced by iCloud's newer one
+                    else:  # changed on this PC since the scan: keep that version under a conflict name
+                        os.rename(aside, self._abs(self._conflict_name(item.path)))
                 if item.mtime:
                     os.utime(target, (item.mtime, item.mtime))
                 hide_like_mac(target)
