@@ -84,7 +84,6 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - iCloud Drive conflicts: the PC copy's new "(PC conflict …)" name is taken with a rename that refuses an existing file, so a file another program saves there at that moment is never overwritten.
   - Interrupted moves: a retry keeps iCloud's size/time from when the move first started, so an iCloud edit made in between is always downloaded; a finished move updates the database and drops its record in one transaction; anything still unsettled is kept out of the rest of the pass (no duplicates); records from the previous build are completed from the database; an incomplete listing of the Drive's top level holds every pending move; switching the Drive folder forgets the moves written down for the old one.
   - A failed download no longer looks like "Sync stopped": sign-in loss, iCloud access problems and database errors are reported again.
-  - Build: PyInstaller runs with only Windows' own folders on PATH, so no DLL from another program can end up in the package.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

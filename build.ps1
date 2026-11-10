@@ -31,17 +31,12 @@ if (Test-Path $data) {
     Move-Item $data $parked
 }
 
-# Only Windows' own folders on PATH while packaging: a DLL from another program's folder (e.g. an
-# ICU or OpenSSL build) must never be picked up and shipped instead of the one Qt/Python needs.
-$savedPath = $env:PATH
-$env:PATH = "$venv\Scripts;$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
 & $py -m PyInstaller --noconfirm --clean --windowed --onedir --name Skyfold `
     --icon "$PSScriptRoot\skyfold.ico" --collect-submodules pyicloud --collect-data pyicloud `
     --collect-data fido2 --collect-data certifi --collect-data tzdata `
     --exclude-module PIL --exclude-module pytest `
     --distpath "$PSScriptRoot\dist" --workpath (Join-Path $work "build") --specpath $work "$PSScriptRoot\run.py"
 $ok = $LASTEXITCODE -eq 0
-$env:PATH = $savedPath
 if (Test-Path $parked) {
     New-Item -ItemType Directory -Force "dist\Skyfold" | Out-Null
     Move-Item $parked $data
