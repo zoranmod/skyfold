@@ -169,6 +169,11 @@ class SyncWorker(QObject):
         self.cancel()
         self._stop_watchers()
 
+    def _stop_requested(self, service: str) -> bool:
+        """Was the pass of this service asked to stop (quit, pause)? Each pass clears its flag when it starts."""
+        s = {t("iCloud Drive"): self.drive, t("Notes"): self.notes}.get(service, self.syncer)
+        return s is not None and s.cancel_flag.is_set()
+
     def cancel(self) -> None:
         """Thread-safe: may be called directly from the UI thread."""
         for s in (self.syncer, self.drive, self.notes):
@@ -604,6 +609,11 @@ class SyncWorker(QObject):
         """Shared error handling. Returns False if the whole cycle must stop. `api` is the session the
         failing pass used (a pass may still finish after a new sign-in replaced it)."""
         failed_api = api if api is not None else self.api
+        if not isinstance(exc, Cancelled) and self._stop_requested(service):
+            # Quitting or pausing cut the pass short (e.g. Python refuses new work while shutting
+            # down): that is a stop, not a sync error to show in the panel.
+            log.info("%s stopped while quitting/pausing (%s)", service, type(exc).__name__)
+            exc = Cancelled()
         if isinstance(exc, Cancelled):
             self._set_state("idle", t("Sync stopped."), svc)
             return False

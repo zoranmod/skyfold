@@ -79,6 +79,7 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - iCloud's version is taken over only when size and modified time prove it is the same file; an edit made in iCloud meanwhile is downloaded, even one of the same size.
   - An item deleted in iCloud before the move was settled is deleted on the PC as well (Recycle Bin, with the usual approval for many files) instead of being uploaded again.
   - When the PC copy is still the one that was moved, the move is finished right away.
+- Quitting or pausing while a pass runs no longer shows a "Sync error" in the panel (e.g. "cannot schedule new futures after shutdown"); it is a stop.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.
