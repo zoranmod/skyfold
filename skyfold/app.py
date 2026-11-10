@@ -53,6 +53,10 @@ class _RedactEmails(logging.Filter):
     # whole header lines: every cookie on it, and bearer tokens
     _HEADER = _re.compile(r"(?im)\b((?:set-)?cookie\d?\s*:|authorization\s*:)[^\r\n]*")
     _HEX = _re.compile(r"\b[0-9a-fA-F]{32,}\b")  # cookie and token values written in hex
+    # http.cookiejar quotes a bad cookie-file line in its error ("invalid Set-Cookie3 format file
+    # '<file>': '<line>'"), whatever the value looks like: keep only what kind of error it was
+    _BAD_COOKIE = _re.compile(r"(?i)((?:invalid|bad)\b[^\r\n]{0,40}?cookie[^\r\n]{0,80}?(?:file|format)(?:\s+file)?\b)"
+                              r"[^\r\n]*")
     # key=value, or "key": "value" (only as a key: "the session: disk full" stays readable)
     _KEYED = _re.compile(r"""(?i)(\b(?:x-apple-[\w-]{1,40}|scnt|(?:\w{1,20}[_-]){0,3}token|session[_-]?id|password"""
                          r"""|dsid)["']?\s*(?:=|:\s*["']))[^\s;,"'&]+""")
@@ -81,6 +85,7 @@ class _RedactEmails(logging.Filter):
         text = cls._NAMES.sub(r"\1<redacted>", text)
         text = cls._SESSION_FILE.sub(r"\1<redacted>", text)
         text = cls._HEX.sub("<redacted>", text)
+        text = cls._BAD_COOKIE.sub(r"\1<redacted>", text)
 
         def long(m):
             s = m.group(0)
@@ -119,10 +124,10 @@ def _single_instance_mutex(name: str):
     return handle
 
 
-def _wait_for_exit(pid: int, seconds: float = 20.0) -> None:
-    """Wait (bounded) until the process with this id has ended."""
+def _wait_for_exit(pid: int, seconds: float = 60.0) -> bool:
+    """Wait (bounded) until the process with this id has ended; False if it is still running."""
     if sys.platform != "win32":
-        return
+        return True
     import ctypes
 
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -130,8 +135,11 @@ def _wait_for_exit(pid: int, seconds: float = 20.0) -> None:
     k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
     k32.CloseHandle.argtypes = [ctypes.c_void_p]
     handle = k32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
-    if handle:
-        k32.WaitForSingleObject(handle, int(seconds * 1000))
+    if not handle:
+        return True  # already gone
+    try:
+        return k32.WaitForSingleObject(handle, int(seconds * 1000)) == 0  # WAIT_OBJECT_0
+    finally:
         k32.CloseHandle(handle)
 
 
@@ -484,16 +492,10 @@ class Controller(QObject):
         """Start a fresh copy and quit this one (used after changing the language)."""
         from PySide6.QtCore import QProcess
 
-        global _MUTEX
         if self.server is not None:
             self.server.close()  # free the single-instance name for the new copy
-        if _MUTEX:
-            import ctypes
-
-            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            k32.CloseHandle.argtypes = [ctypes.c_void_p]
-            k32.CloseHandle(_MUTEX)
-            _MUTEX = None
+        # The lock itself is kept until this process has ended (Windows lets go of it then), so no
+        # other copy can start while this one is still finishing its work.
         handover = ["--tray", "--after", str(os.getpid())]  # the new copy waits until this one has quit
         if getattr(sys, "frozen", False):
             QProcess.startDetached(sys.executable, handover)
@@ -562,9 +564,10 @@ def main() -> int:
     if "--quit" in sys.argv:
         return 0  # nothing running
     global _MUTEX
-    if "--after" in sys.argv:  # started by a restart: let the old copy finish quitting first
+    if "--after" in sys.argv:  # started by a restart: the old copy must have ended first
         try:
-            _wait_for_exit(int(sys.argv[sys.argv.index("--after") + 1]))
+            if not _wait_for_exit(int(sys.argv[sys.argv.index("--after") + 1])):
+                return 0  # it is still running: never two copies at once
         except (IndexError, ValueError):
             pass
     _MUTEX = _single_instance_mutex(instance)

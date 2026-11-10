@@ -29,7 +29,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
-from .drive_remote import WORKERS, DriveItem, DriveRemote, MacPackage
+from .drive_remote import WORKERS, DriveItem, DriveRemote, MacPackage, is_transient
 from .engine import Callbacks, Cancelled, SyncError, check_free_space, inside_root, now_iso, transfer_text, THROTTLE
 from .i18n import t
 from .remote import AuthRequired, RemoteUnavailable
@@ -140,6 +140,9 @@ class DriveState:
     def reset(self) -> None:
         with self._lock:
             self._db.execute("DELETE FROM drive_files")
+
+
+PENDING_MOVE = "move_pending"  # a rename/move in iCloud that was started and not known to be settled
 
 
 def ignored(name: str) -> bool:
@@ -443,7 +446,8 @@ class DriveSyncer:
         everything_known = dict(base)  # before a quick pass narrows `base` to a few folders
         self._check_root(bool(base))
 
-        scope = self._scope_folders(changed) if changed else None
+        pending = self.state.get_meta(PENDING_MOVE)
+        scope = self._scope_folders(changed) if changed and not pending else None
         if scope is None:
             self.cb.status(t("Reading iCloud Drive…"))
             remote = self.remote.walk(lambda n: self.cb.status(t("Reading iCloud Drive… {n}", n=n)),
@@ -454,6 +458,12 @@ class DriveSyncer:
                 if p and p not in remote and (_parent(p) in partly or _parent(p) in kept):
                     kept[p] = self.cache[p]
             self.cache = {**kept, **remote}
+            if pending:
+                if not hasattr(self.remote, "incomplete"):
+                    self.remote.incomplete = set()
+                self._settle_pending_move(remote, partly)
+                base = self.state.all()
+                everything_known = dict(base)
             self._check_cancel()
             local = self.scan_local()
             res.full = True
@@ -1015,60 +1025,103 @@ class DriveSyncer:
         return bool(before and now and before.docwsid and before.docwsid == now.docwsid)
 
     def _remote_move(self, remote: dict[str, DriveItem], old: str, new: str, res: DriveResult) -> bool | str:
+        """Rename/move in iCloud. True: done. False: iCloud refused before anything changed (sync as
+        add + delete). "partial": iCloud changed part of it, or the answer is unknown; the database
+        follows what is known and the next pass finishes it (never a second copy)."""
         item = remote.get(old)
         parent = remote.get(_parent(new))
         if item is None or parent is None or not parent.is_dir:
             return False  # the new place doesn't exist in iCloud yet: sync as add + delete
         old_name, new_name = PurePosixPath(old).name, PurePosixPath(new).name
+        steps: list[str] = []
         if _parent(old) != _parent(new) and old_name != new_name:
             via_target = f"{_parent(new)}/{old_name}" if _parent(new) else old_name
             via_source = f"{_parent(old)}/{new_name}" if _parent(old) else new_name
             if via_target in remote or via_target.lower() in {p.lower() for p in remote}:
                 if via_source in remote or via_source.lower() in {p.lower() for p in remote}:
                     return False  # both ways pass through a taken name: sync as add + delete
-                try:  # rename where it is first, then move (the target folder has the old name)
-                    etag = self.remote.rename(item, new_name)
-                except (AuthRequired, RemoteUnavailable):
-                    raise
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("Rename in iCloud failed (%s -> %s): %s", old, new, exc)
+                steps = ["rename", "move"]  # the target folder has the old name: rename where it is first
+            else:
+                steps = ["move", "rename"]
+        elif _parent(old) != _parent(new):
+            steps = ["move"]
+        elif old_name != new_name:
+            steps = ["rename"]
+        if not steps:
+            return False
+        # Written down before iCloud is touched: after a crash or an unknown answer the next full
+        # pass finds the item by its id and the database follows where it really is.
+        self.state.set_meta(PENDING_MOVE, json.dumps({"old": old, "new": new,
+                                                     "id": item.docwsid or item.drivewsid}))
+        here = old
+        etag = item.etag
+        for n, step in enumerate(steps):
+            try:
+                if step == "move":
+                    got = self.remote.move(item, parent)
+                    here = f"{parent.path}/{PurePosixPath(here).name}" if parent.path else PurePosixPath(here).name
+                else:
+                    got = self.remote.rename(item, new_name)
+                    here = f"{_parent(here)}/{new_name}" if _parent(here) else new_name
+            except Exception as exc:  # noqa: BLE001
+                unknown = isinstance(exc, (AuthRequired, RemoteUnavailable)) or is_transient(exc)
+                log.warning("%s in iCloud failed (%s -> %s): %s", "Move" if step == "move" else "Rename",
+                            here, new, exc)
+                if n == 0 and not unknown:
+                    self.state.set_meta(PENDING_MOVE, None)  # refused: nothing changed in iCloud
                     return False
-                item = DriveItem(via_source, item.drivewsid, item.docwsid, item.zone, etag or item.etag,
-                                 item.is_dir, item.size, item.mtime)
-                try:
-                    self.remote.move(item, parent)
-                except Exception as exc:  # noqa: BLE001 - renamed but not moved: remember where it is now
-                    log.warning("Move in iCloud failed after the rename (%s -> %s): %s", via_source, new, exc)
-                    self._half_moved(old, via_source, etag)
+                if n > 0:  # the first step is done: the database follows iCloud
+                    self._half_moved(old, here, etag)
                     self._forget_cached(old)
                     res.followup = True
-                    if isinstance(exc, (AuthRequired, RemoteUnavailable)):
-                        raise
-                    return "partial"
-                self._forget_cached(old)
-                res.moved += 1
-                res.followup = True
-                self.cb.activity("upload", t("Drive: renamed/moved in iCloud: {old} → {new}", old=old, new=new),
-                                 str(self._abs(new)))
-                return True
-        try:
-            if _parent(old) != _parent(new):
-                etag = self.remote.move(item, parent)
-                item = DriveItem(item.path, item.drivewsid, item.docwsid, item.zone, etag or item.etag,
-                                 item.is_dir, item.size, item.mtime)
-            if PurePosixPath(old).name != PurePosixPath(new).name:
-                self.remote.rename(item, PurePosixPath(new).name)
-        except (AuthRequired, RemoteUnavailable):
-            raise
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Rename in iCloud failed (%s -> %s): %s", old, new, exc)
-            return False
+                # Stays written down with where the database has it now: the next full pass finds
+                # the item by its id and learns its iCloud version (changed by the step that worked).
+                self.state.set_meta(PENDING_MOVE, json.dumps({"old": old, "new": new, "at": here,
+                                                             "id": item.docwsid or item.drivewsid}))
+                if isinstance(exc, (AuthRequired, RemoteUnavailable)):
+                    raise
+                return "partial"
+            etag = got or etag
+            item = DriveItem(here, item.drivewsid, item.docwsid, item.zone, etag,
+                             item.is_dir, item.size, item.mtime)
+        self.state.set_meta(PENDING_MOVE, None)
         self._forget_cached(old)
         res.moved += 1
         res.followup = True  # the next pass learns the new iCloud versions
         self.cb.activity("upload", t("Drive: renamed/moved in iCloud: {old} → {new}", old=old, new=new),
                          str(self._abs(new)))
         return True
+
+    def _settle_pending_move(self, remote: dict[str, DriveItem], partly: set[str]) -> None:
+        """A rename/move in iCloud that may have been cut short (crash, unknown answer): find the item
+        by its id and let the database follow where it is now."""
+        raw = self.state.get_meta(PENDING_MOVE)
+        if not raw:
+            return
+        try:
+            j = json.loads(raw)
+            old, ident = j.get("at") or j["old"], j["id"]
+        except (ValueError, KeyError, TypeError, AttributeError):
+            self.state.set_meta(PENDING_MOVE, None)
+            return
+        hit = next((r for r in remote.values() if ident and ident in (r.docwsid, r.drivewsid)), None)
+        if hit is None:
+            if partly:  # maybe in a folder iCloud didn't list completely: decide when it does
+                for p in (old, j.get("new") or old):
+                    q = _parent(p)
+                    self.remote.incomplete.add(q)
+                return
+            self.state.set_meta(PENDING_MOVE, None)  # gone from iCloud: synced as a deletion
+            return
+        rows = self.state.all()
+        row = rows.get(old)
+        if row is not None and (hit.path != old or hit.etag != row.etag):
+            log.info("Drive: an interrupted rename/move in iCloud is picked up where iCloud has it")
+            # iCloud's version is taken over only when it is still the same file (same size); an
+            # edit made in iCloud meanwhile then still shows as a change instead of being missed
+            same = hit.is_dir or row.size is None or row.size == hit.size
+            self._half_moved(old, hit.path, hit.etag if same else None)
+        self.state.set_meta(PENDING_MOVE, None)
 
     def _half_moved(self, old: str, now: str, etag: str | None) -> None:
         """iCloud renamed the item but didn't move it: the database follows iCloud, so the next pass

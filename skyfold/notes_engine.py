@@ -946,10 +946,10 @@ class NotesSyncer:
             Path(tmp).unlink(missing_ok=True)
         if aside is not None:
             recorded = self.state.get("index_digest")
-            if recorded and _digest(aside) != recorded:
-                self._trash(aside)  # edited since Skyfold wrote it: recoverable from the Recycle Bin
-            else:
-                aside.unlink(missing_ok=True)
+            if recorded and _digest(aside) == recorded:
+                aside.unlink(missing_ok=True)  # exactly what Skyfold wrote
+            else:  # edited, or unknown (no fingerprint saved, e.g. after a crash): recoverable
+                self._trash(aside)
         self.state.set("index_digest", written)
 
 

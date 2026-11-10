@@ -138,11 +138,16 @@ def test_a_restart_hands_over_the_single_instance_lock(monkeypatch):
     started = []
     monkeypatch.setattr(QProcess, "startDetached", lambda exe, args: started.append(args) or True)
     app.Controller.restart(SimpleNamespace(server=None, quit=lambda: None))
-    assert app._MUTEX is None and "--after" in started[0] and str(os.getpid()) in started[0]
+    assert "--after" in started[0] and str(os.getpid()) in started[0]
+    # review 9: the lock stays with the old copy until it has ended; nothing else can start meanwhile
+    assert app._MUTEX == handle
     code = f"from skyfold.app import _single_instance_mutex; print(_single_instance_mutex({name!r}) is False)"
     child = subprocess.run([sys.executable, "-c", code], cwd=Path(app.__file__).parent.parent,
                            text=True, capture_output=True, timeout=60)
-    assert child.stdout.strip() == "False"  # the new copy can take the lock
+    assert child.stdout.strip() == "True"
+    import ctypes
+
+    ctypes.WinDLL("kernel32").CloseHandle(ctypes.c_void_p(handle))
 
 
 def test_the_new_copy_waits_for_the_old_one_only_while_it_runs():

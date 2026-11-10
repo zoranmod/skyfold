@@ -171,7 +171,8 @@ def test_pages_from_before_are_recognised_after_the_database_is_rebuilt(notes_en
     s.run()
     s.state.reset()
     s.run()
-    assert not trashed
+    # note pages are recognised; only the old index (fingerprint unknown now) goes to the Recycle Bin
+    assert all("index" in name for name in trashed) and len(trashed) <= 1
 
 
 def test_private_files_left_by_a_crash_are_tidied(notes_env):  # noqa: F811

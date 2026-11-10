@@ -68,6 +68,11 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - Log: lines from a damaged cookie file and long hex values never reach the log.
   - Restart (after changing the language): the old copy lets go of the single-instance lock and the new one waits for it to quit.
   - Sign-in and first-run windows fit small screens at high scaling.
+- Seventh follow-up review (tests in tests/test_review9_fixes.py):
+  - Notes: the previous index is deleted only when it is provably exactly what Skyfold wrote; if its fingerprint is unknown (e.g. after a crash or a rebuilt database) it goes to the Recycle Bin.
+  - iCloud Drive: a rename/move in iCloud is written down before it starts. If it is cut short (refused halfway, a crash, an answer that never arrived), the next full pass finds the item by its iCloud id and continues from where it really is, in either order of the two steps, never leaving two copies.
+  - Log: an error about a damaged cookie file never quotes the cookie, whatever the value looks like.
+  - Restart: the old copy keeps the single-instance lock until it has ended; the new copy waits for that and gives up if the old one doesn't end, so two copies never run at once.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.
