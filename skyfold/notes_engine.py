@@ -631,10 +631,11 @@ class NotesSyncer:
             seen.add(n.id)
             old = known.get(n.id)
             if n.deleted:
-                if old:
-                    self._remove(old, res)
+                if old and self._remove(old, res):
                     self.state.drop(n.id)
                 continue
+            if not res.full and self.state.get(f"missing:{n.id}"):
+                self.state.set(f"missing:{n.id}", None)  # seen alive: an earlier absence doesn't count
             folder = folders.get(n.folder_id or "", "Notes")
             modified = n.modified.isoformat() if n.modified else None
             if n.locked:
@@ -691,9 +692,9 @@ class NotesSyncer:
                 res.errors += 1  # the cursor isn't advanced; the next full read decides again
             else:
                 for nid in gone:
-                    self._remove(known[nid], res)
-                    self.state.drop(nid)
-                    self.state.set(f"missing:{nid}", None)
+                    if self._remove(known[nid], res):
+                        self.state.drop(nid)
+                        self.state.set(f"missing:{nid}", None)
         if not res.more and not res.errors and (res.full or self.state.get("orphan_sweep") != "1"):
             self._remove_leftover_pages(res)
             self.state.set("orphan_sweep", "1")
@@ -754,19 +755,25 @@ class NotesSyncer:
             k += 1
         return cand
 
-    def _remove(self, row: tuple, res: NotesResult, count: bool = True) -> None:
+    def _remove(self, row: tuple, res: NotesResult, count: bool = True) -> bool:
+        """Page to the Recycle Bin. False when it couldn't be removed (the note is remembered and tried again)."""
         if not row[1]:
-            return
+            return True
         p = self.root / row[1]
+        if not inside_root(self.root, p.parent):
+            log.warning("Notes: %s leads outside the notes folder; not removed", row[1])
+            return True  # nothing of ours to remove there
         try:
             if p.exists():
                 self._trash(p)
             if count:
                 res.removed += 1
                 self.cb.activity("trash", t("Notes: removed {name}", name=row[2] or row[1]))
+            return True
         except OSError as exc:
             res.errors += 1
             self.cb.activity("error", t("Couldn't delete {name}: {error}", name=row[1], error=exc))
+            return False
 
     # index page ------------------------------------------------------------------------
     def write_index(self) -> None:

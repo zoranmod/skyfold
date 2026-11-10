@@ -20,7 +20,7 @@ LIGHT = {
     "border": "#e2e8f0", "border_strong": "#cbd5e1",
     "text": "#0f172a", "muted": "#556070", "disabled": "#94a3b8",
     "accent": ACCENT, "accent_hover": "#2563eb", "accent_pressed": "#1d4ed8",
-    "btn": "#2563eb", "btn_hover": "#1d4ed8", "btn_pressed": "#1e40af", "focus": "#0f172a",
+    "btn": "#2563eb", "btn_hover": "#1d4ed8", "btn_pressed": "#1e40af", "focus": "#0f172a", "focus_ring": "#1d4ed8",
     "accent_fg": "#2563eb",  # accent used as text or thin icon on a light background
     "accent_text": "#ffffff", "accent_soft": "#eff6ff", "accent_soft_border": "#bfdbfe",
     "warn_bg": "#fffbeb", "warn_border": "#fcd34d", "warn_text": "#92400e",
@@ -34,7 +34,7 @@ DARK = {  # true black for OLED screens
     "border": "#232327", "border_strong": "#3a3a41",
     "text": "#f3f4f6", "muted": "#9ca3af", "disabled": "#55555c",
     "accent": ACCENT, "accent_hover": "#4f8ff7", "accent_pressed": "#2563eb",
-    "btn": "#2563eb", "btn_hover": "#1d4ed8", "btn_pressed": "#1e40af", "focus": "#ffffff",
+    "btn": "#2563eb", "btn_hover": "#1d4ed8", "btn_pressed": "#1e40af", "focus": "#ffffff", "focus_ring": "#93c5fd",
     "accent_fg": "#60a5fa",
     "accent_text": "#ffffff", "accent_soft": "#0d1a30", "accent_soft_border": "#1e3a6b",
     "warn_bg": "#1c1505", "warn_border": "#a16207", "warn_text": "#fcd34d",
@@ -132,7 +132,8 @@ QToolButton#Bar {{ background: transparent; border: none; border-radius: 8px; pa
 QToolButton#Bar:hover {{ background: {c['hover']}; }}
 QToolButton#Bar:pressed {{ background: {c['border']}; }}
 QToolButton#Bar:disabled {{ color: {c['disabled']}; }}
-QToolButton#Bar:focus {{ border: 2px solid {c['btn_hover']}; }}
+QToolButton#Bar:focus {{ border: 2px solid {c['focus_ring']}; }}
+QToolButton#Bar[primary="true"]:disabled {{ color: {c['disabled']}; font-weight: 600; }}
 QToolButton#Bar[primary="true"] {{ color: {c['accent_fg']}; font-weight: 600; }}
 QFrame#FileTile {{ background: {c['surface2']}; border: 1px solid {c['border']}; border-radius: 8px; }}
 QLabel#RowTitle {{ font-size: 9.5pt; font-weight: 600; }}

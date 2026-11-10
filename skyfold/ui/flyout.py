@@ -309,7 +309,9 @@ class ActivityRow(QFrame):
 
         title = self.title_text + (f"  (×{self.count})" if self.count > 1 else "")
         if self.detail_text:  # one line: a file name, shortened in the middle like Explorer does
-            self.text.setText(QFontMetrics(self.text.font()).elidedText(title, Qt.ElideMiddle, 300))
+            self.text.ensurePolished()
+            self.text.setText(QFontMetrics(self.text.font()).elidedText(title, Qt.ElideMiddle, 270))
+            self.text.setToolTip(title)
         else:
             self.text.setText(short_text(title, 110))
 
@@ -664,7 +666,7 @@ class Flyout(QWidget):
         self.sync_btn.setIcon(glyph(name, self.c["accent_fg"] if state != "paused" else self.c["disabled"]))
         self.sync_btn.setEnabled(state != "paused")  # one way to continue: Resume
         self._status_line()
-        self._fit()
+        self._size_list()
 
     def _status_line(self) -> None:
         state = self._dot_state()
@@ -929,6 +931,7 @@ class Flyout(QWidget):
         self.raise_()
         self.activateWindow()
         self.setFocus(Qt.OtherFocusReason)  # the panel itself, not its first button
+        QTimer.singleShot(0, lambda: (self._fit(), self._place()))  # final size known: keep it on screen
 
     def event(self, e) -> bool:  # noqa: N802
         if e.type() == QEvent.WindowDeactivate:

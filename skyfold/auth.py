@@ -174,8 +174,7 @@ def start_login(apple_id: str, password: str) -> LoginStep:
     if api.requires_2sa and not api.requires_2fa:
         raise LoginError(t("This account uses the old two-step verification, which isn't supported."))
     if not api.requires_2fa:
-        SIGNED_OUT.unlink(missing_ok=True)
-        make_current(api)  # this sign-in replaces the old one on disk
+        return LoginStep(api, needs_code=False)
         return LoginStep(api, needs_code=False)
 
     # A security key is a property of the Apple account (not of USB devices plugged into this PC).
@@ -214,6 +213,10 @@ def submit_code(api: Any, code: str) -> None:
         raise LoginError(t("That code isn't right. Try again."))
     if not api.is_trusted_session:
         api.trust_session()
+
+
+def commit_login(api: Any) -> None:
+    """The user's sign-in is complete and accepted: it becomes the one in use."""
     SIGNED_OUT.unlink(missing_ok=True)
     make_current(api)
 

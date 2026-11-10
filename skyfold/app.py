@@ -306,7 +306,7 @@ class Controller(QObject):
                                           "other account's files; choose a new, empty folder in Settings to turn them "
                                           "on again.", services=", ".join(turned_off))))
             self._login_api = api  # Find My uses it right away, even while the worker is still busy
-            auth.make_current(api)  # the old session must not overwrite this one on disk
+            auth.commit_login(api)  # the old session must not overwrite this one on disk
             self.worker.cancel()  # so the worker switches to the new sign-in now, not after a long pass
             self.settings.apple_id = apple_id
             self.settings.save()

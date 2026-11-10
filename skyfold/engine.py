@@ -495,19 +495,24 @@ class Syncer:
                         self.remote.download(res, tmp_path, on_bytes)
                         if res.size and tmp_path.stat().st_size != res.size:
                             raise SyncError(t("file size doesn't match"))
-                        if rel in self._verify:  # a file is already there: adopt it only if it's identical
+                        adopted = False
+                        while rel in self._verify:  # a file is already there: adopt it only if identical
                             self._verify.discard(rel)
                             import filecmp
 
                             if filecmp.cmp(tmp_path, target, shallow=False):
-                                self.state.add_file(FileRow(a.id, res.key, rel, res.size, res.is_video,
-                                                            a.date.isoformat()), now_iso())
-                                taken.add(rel.lower())
-                                continue
-                            taken.add(rel.lower())  # someone else's file: the photo gets the next free name
-                            rel = self._place(a, res, taken) or rel
-                            self._verify.discard(rel)
+                                adopted = True
+                                break
+                            taken.add(rel.lower())  # someone else's file: try the next name (it may be taken too)
+                            rel = self._place(a, res, taken)
                             target = self._abs(rel)
+                        if adopted:
+                            self.state.add_file(FileRow(a.id, res.key, rel, res.size, res.is_video,
+                                                        a.date.isoformat()), now_iso())
+                            taken.add(rel.lower())
+                            continue
+                        if target.exists():  # never replace a file that isn't ours
+                            raise SyncError(t("{name} already exists; not replaced", name=rel))
                         os.replace(tmp_path, target)  # watcher ignores it: the source is a temp file
                         ts = a.date.timestamp()
                         os.utime(target, (ts, ts))
@@ -594,6 +599,9 @@ class Syncer:
             src = self._abs(source[rel])
             if not src.exists():
                 continue
+            if not inside_root(self.root, target.parent):
+                log.warning("Album folder %s leads outside the photos folder; skipped", rel)
+                continue
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
                 if target.exists():
@@ -615,6 +623,9 @@ class Syncer:
 
     def _unlink_album(self, rel: str) -> None:
         p = self._abs(rel)
+        if not inside_root(self.root, p.parent):
+            self.state.drop_album_link(rel)  # leads elsewhere now: forget it, touch nothing there
+            return
         try:
             if p.exists():
                 self._touch_own(p)

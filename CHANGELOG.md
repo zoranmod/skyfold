@@ -28,6 +28,12 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - Notes: a note missing from Apple's answer is removed only when the next full read confirms it; the index page is recognised by a mark at its top and is written through a uniquely named temporary file.
   - Sign out is remembered even if a session file can't be deleted, so a leftover session is never used.
   - Planning many folder deletions is fast.
+- Second follow-up review (tests in tests/test_review4_fixes.py):
+  - Photos: every file name that is already taken is compared with the photo, and an existing file is never replaced; album folders never lead outside the photos folder.
+  - iCloud Drive: the sync database remembers which folder it synced, and another folder starts afresh; an approval is skipped when a file and a folder swapped places; edits on both sides close together keep both versions; nothing at all is decided inside a folder iCloud listed only partly; the spelling already synced keeps winning among names that differ only in letter case.
+  - Notes: a note seen alive again isn't removed because of an earlier absence; a page that couldn't be removed is tried again.
+  - Sign-in: only an accepted sign-in clears the "signed out" mark (a cancelled one doesn't).
+  - Panel: brighter keyboard focus ring in dark mode, sections come back when there is room again, the panel is placed again after its final size is known, long file names are shortened safely.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

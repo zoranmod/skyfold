@@ -51,6 +51,7 @@ def test_icloud_folder_rename_vs_pc_edit_inside(env25):
     write(root, "F/f0.txt", b"PC edit of f0", age=30)
     s.run()
     s.run()
+    s.run()  # iCloud's tag changed too, so the PC edit is kept as a "(PC conflict …)" copy and goes up
     assert cloud(d).get("G/f0.txt") == b"PC edit of f0" or any(
         v == b"PC edit of f0" for v in cloud(d).values()), (files(root), cloud(d))
 

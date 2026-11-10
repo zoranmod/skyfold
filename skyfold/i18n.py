@@ -150,6 +150,7 @@ BS: dict[str, str] = {
     "Choose a folder.": "Izaberi folder.",
     "Enter the full folder path.": "Unesi punu putanju foldera.",
     "Clear": "Očisti",
+    "{name} already exists; not replaced": "{name} već postoji; nije zamijenjen",
     "Couldn't read the Drive folder's sync marker: {error}": "Oznaka Drive foldera se ne može pročitati: {error}",
     "This Drive folder was used before and it isn't clear by which Apple ID. Choose a new, empty folder for iCloud Drive in Settings.":
         "Ovaj Drive folder je ranije korišten i nije jasno s kojim Apple ID-om. U Postavkama izaberi novi, prazan folder za iCloud Drive.",

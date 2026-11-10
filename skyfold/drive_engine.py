@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS drive_files (
     lsize   INTEGER,
     pending INTEGER NOT NULL DEFAULT 0  -- 1: PC version must be uploaded (iCloud copy was trashed)
 );
+CREATE TABLE IF NOT EXISTS drive_meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
 
@@ -112,6 +113,15 @@ class DriveState:
                 prefix = path + "/"
                 self._db.execute("DELETE FROM drive_files WHERE path=? OR substr(path, 1, ?)=?",
                                  (path, len(prefix), prefix))
+
+    def get_meta(self, key: str) -> str | None:
+        with self._lock:
+            row = self._db.execute("SELECT value FROM drive_meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str | None) -> None:
+        with self._lock:
+            self._db.execute("INSERT OR REPLACE INTO drive_meta VALUES(?,?)", (key, value))
 
     def drop_one(self, path: str) -> None:
         """Forget only this row, not what is below it."""
@@ -373,11 +383,18 @@ class DriveSyncer:
         """Full sync, or a quick one limited to the folders around `changed` local paths."""
         self.cancel_flag.clear()
         self._late = None
+        root_id = os.path.normcase(os.path.abspath(self.root))
+        synced_root = self.state.get_meta("root")
+        if synced_root is not None and synced_root != root_id:
+            log.info("Drive: another folder than the one this database synced; starting afresh")
+            self.state.reset()  # what it remembers is about the other folder
+            self.cache = {}
+        self.state.set_meta("root", root_id)
         self._prev = dict(self.cache)  # iCloud as of the last read: identities for rename detection
         if hasattr(self.remote, "incomplete"):
             self.remote.incomplete = set()
         res = DriveResult()
-        base = self.state.all()
+        base = self.state.all()  # (after the folder check above)
         self._check_root(bool(base))
 
         scope = self._scope_folders(changed) if changed else None
@@ -426,13 +443,14 @@ class DriveSyncer:
         to_pc: list[str] = []  # delete on PC
         mkdir_local: list[DriveItem] = []  # new folders in iCloud
 
-        twins = self._case_twins(remote)
+        twins = self._case_twins({**self.cache, **remote}, base)
         if twins:
             def in_twin(p: str) -> bool:
                 return any(p == q or p.startswith(q + "/") for q in twins)
 
             remote = {p: r for p, r in remote.items() if not in_twin(p)}
             base = {p: b for p, b in base.items() if not in_twin(p)}
+            local = {p: lo for p, lo in local.items() if not in_twin(p)}
         partial = set(getattr(self.remote, "incomplete", set()) or ())
         if partial:
             log.warning("Drive: iCloud listed %d folders only partly; no deletions decided there", len(partial))
@@ -468,6 +486,8 @@ class DriveSyncer:
             paths = [p for p in paths if _parent(p) in dirs]  # only the re-read folders' contents
         for path in paths:
             r, lo, b = remote.get(path), local.get(path), base.get(path)
+            if partial and (r is None or lo is None) and (listed_partly(path) or path in partial):
+                continue  # iCloud didn't list this folder completely: decide next time
             if r and not lo and not b and self._skip_unsupported(path):
                 continue
             if r and lo and r.is_dir != lo.is_dir:
@@ -498,7 +518,7 @@ class DriveSyncer:
 
             settled = lo is not None and not (0 <= now - lo.mtime < SETTLE_SECONDS)
             if r and lo:
-                same = r.size == lo.size and (r.mtime is None or abs(r.mtime - lo.mtime) < 2.5)
+                same = r.size == lo.size and (r.mtime is None or abs(r.mtime - lo.mtime) < 1.0)
                 if b is None:
                     if same:  # same file on both sides (e.g. first sync): adopt
                         self.state.put(Base(path, False, r.etag, r.size, lo.mtime, lo.size, False))
@@ -518,12 +538,9 @@ class DriveSyncer:
                 else:
                     remote_changed = r.etag != b.etag
                 local_changed = (lo.size, round(lo.mtime, 2)) != (b.lsize, round(b.lmtime or 0, 2))
-                if remote_changed and b.etag is not None and r.size == b.size and r.mtime is not None                         and b.lmtime is not None and abs(r.mtime - b.lmtime) < 2.5:
+                if remote_changed and not local_changed and b.etag is not None and r.size == b.size                         and r.mtime is not None and b.lmtime is not None and abs(r.mtime - b.lmtime) < 1.0:
                     # only iCloud's version tag moved (opened on a phone, folder renamed): content as before
                     self.state.put(Base(path, False, r.etag, r.size, b.lmtime, b.lsize, False))
-                    remote_changed = False
-                    if local_changed and settled:
-                        uploads.append(path)
                     continue
                 if remote_changed and not local_changed and same and r.mtime is not None and r.size == b.size:
                     # Only iCloud's version tag changed (e.g. the file was opened on the iPhone, which
@@ -651,12 +668,13 @@ class DriveSyncer:
         self.state_set_last_sync()
         return res
 
-    def _case_twins(self, remote: dict[str, DriveItem]) -> list[str]:
+    def _case_twins(self, remote: dict[str, DriveItem], base: dict[str, Base] | None = None) -> list[str]:
         """iCloud paths that Windows would merge with another spelling (Docs/ and docs/): the first
         spelling syncs, the others are left in iCloud with a message."""
         first: dict[str, str] = {}
         twins: list[str] = []
-        for p in sorted(remote, key=lambda x: (x.count("/"), x)):
+        synced = base or {}
+        for p in sorted(remote, key=lambda x: (x.count("/"), x not in synced, x)):  # the synced spelling wins
             if not p or any(p.startswith(q + "/") for q in twins):
                 continue
             key = p.lower()
@@ -1025,8 +1043,8 @@ class DriveSyncer:
                     self._check_cancel()
                     target = self._abs(p)
                     b = base.get(p)
-                    if b is not None and not b.is_dir and target.is_dir():
-                        self.state.drop(p)  # was a file, is a folder now: not what was approved
+                    if b is not None and ((not b.is_dir and target.is_dir()) or (b.is_dir and target.is_file())):
+                        self.state.drop(p)  # file and folder swapped since the question: not what was approved
                         continue
                     if b is not None and not b.is_dir and target.is_file():
                         try:
