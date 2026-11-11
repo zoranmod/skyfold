@@ -999,9 +999,11 @@ class DriveSyncer:
                 if touches_partial(g, n):
                     self._deferred |= {g, n}
                     continue
-                if not self._same_item(g, n, remote) or not self._local_move(g, n, res):
+                if not self._same_item(g, n, remote) or not self._pc_move(g, n, res, remote):
                     continue  # not provably the same folder (e.g. deleted and a look-alike created)
-                self._rebase(base, g, n, keep_etags=True, remote=remote)
+                with self.state.transaction():  # rows and the move's record together
+                    self._rebase(base, g, n, keep_etags=True, remote=remote)
+                    self._journal_put(self._pc_key, None)
                 drop_under(to_pc, g)
                 drop_under(mkdir_local, n, key=lambda r: r.path)
                 drop_under(downloads, n, key=lambda r: r.path)
@@ -1037,12 +1039,14 @@ class DriveSyncer:
             key_old = {g: (base[g].size, round(base[g].lmtime or 0)) for g in gone}
             key_new = {r.path: (r.size, round(r.mtime or 0)) for r in new}
             for g, n in _pairs(key_old, key_new):
-                if not self._same_item(g, n, remote) or not self._local_move(g, n, res):
+                if not self._same_item(g, n, remote) or not self._pc_move(g, n, res, remote):
                     continue
                 r = remote[n]
                 st = self._abs(n).stat()
-                self.state.drop(g)
-                self.state.put(Base(n, False, r.etag, r.size, st.st_mtime, st.st_size, False))
+                with self.state.transaction():  # rows and the move's record together
+                    self.state.drop(g)
+                    self.state.put(Base(n, False, r.etag, r.size, st.st_mtime, st.st_size, False))
+                    self._journal_put(self._pc_key, None)
                 to_pc.remove(g)
                 downloads[:] = [d for d in downloads if d.path != n]
 
@@ -1178,6 +1182,15 @@ class DriveSyncer:
         while iCloud lists any of the folders involved only partly."""
         for ident, e in list(self._journal().items()):
             old, new = e["old"], e["new"]
+            if e.get("kind") == "pc":  # renamed on this PC to follow iCloud: did the rename happen?
+                done = self._exact_exists(new) and not self._exact_exists(old)
+                if done:
+                    log.info("Drive: an interrupted rename on this PC is picked up")
+                    self._move_rows(old, new, None, ident, None)
+                else:
+                    with self.state.transaction():
+                        self._journal_put(ident, None)
+                continue
             at = e.get("at") or old
             if "rows" not in e:  # written by an earlier build: the database still has the rows
                 known = self.state.all()
@@ -1204,6 +1217,10 @@ class DriveSyncer:
             if not finish:
                 continue
             moved = self._remote_move(remote, hit.path, new, res)  # keeps its own journal entry
+            if moved is False:  # refused, or the target folder is gone: synced as add + delete instead
+                with self.state.transaction():
+                    self._journal_put(ident, None)
+                continue
             if moved is True:
                 for p in [p for p in list(remote) if p == hit.path or p.startswith(hit.path + "/")]:
                     r = remote.pop(p)
@@ -1235,6 +1252,27 @@ class DriveSyncer:
         prefix = path + "/"
         for p in [p for p in self.cache if p == path or p.startswith(prefix)]:
             del self.cache[p]
+
+    def _pc_move(self, old: str, new: str, res: DriveResult, remote: dict[str, DriveItem]) -> bool:
+        """Rename on this PC what iCloud renamed, written down first: after a crash right after the
+        rename the next full pass lets the database follow (never "new on the PC" = upload again)."""
+        r = remote[new]
+        self._pc_key = "pc:" + (r.docwsid or r.drivewsid or new)
+        with self.state.transaction():
+            self._journal_put(self._pc_key, {"kind": "pc", "old": old, "new": new})
+        if self._local_move(old, new, res):
+            return True
+        with self.state.transaction():
+            self._journal_put(self._pc_key, None)
+        return False
+
+    def _exact_exists(self, rel: str) -> bool:
+        """Exists under exactly this name (Windows names ignore letter case)."""
+        p = self._abs(rel)
+        try:
+            return p.name in os.listdir(p.parent)
+        except OSError:
+            return False
 
     def _local_move(self, old: str, new: str, res: DriveResult) -> bool:
         src, dst = self._abs(old), self._abs(new)
@@ -1459,8 +1497,9 @@ class DriveSyncer:
             if self.cancel_flag.is_set() or abort.is_set():
                 raise Cancelled()
 
-        def fetch(item: DriveItem) -> Path:
-            """Runs on a worker thread: download to a temporary file and put it in place."""
+        def fetch(item: DriveItem) -> tuple[Path, int, float]:
+            """Runs on a worker thread: download to a temporary file and put it in place. Returns the
+            size and time of the version put there (an edit made right after stays an edit)."""
             if self.cancel_flag.is_set() or abort.is_set():
                 raise Cancelled()
             target = self._abs(item.path)
@@ -1485,6 +1524,7 @@ class DriveSyncer:
                 if target.exists() and target.is_file():
                     aside = target.with_name(_aside_name(target))
                     os.rename(target, aside)  # moved, never overwritten (whatever is saved there right now)
+                put = tmp_path.stat()  # the rename keeps size and time
                 try:
                     try:
                         os.rename(tmp_path, target)  # refuses if a file was saved there meanwhile
@@ -1505,7 +1545,7 @@ class DriveSyncer:
                     else:  # changed on this PC since the scan: keep that version under a conflict name
                         self._release_aside(aside, item.path, restore=False)
                 hide_like_mac(target)
-                return target
+                return target, put.st_size, put.st_mtime
             finally:
                 if tmp_path.exists():
                     tmp_path.unlink(missing_ok=True)
@@ -1534,7 +1574,7 @@ class DriveSyncer:
                     item = running.pop(fut)
                     finished += 1
                     try:
-                        target = fut.result()
+                        target, lsize, lmtime = fut.result()
                     except MacPackage:
                         self.mac_packages.add(item.path)
                         self.cb.activity("info", t("Mac package left in iCloud (it only works on a Mac): {name}",
@@ -1547,8 +1587,7 @@ class DriveSyncer:
                         res.errors += 1
                         self.cb.activity("error", t("Download failed ({name}): {error}", name=item.path, error=exc))
                         continue
-                    st = target.stat()
-                    self.state.put(Base(item.path, False, item.etag, item.size, st.st_mtime, st.st_size, False))
+                    self.state.put(Base(item.path, False, item.etag, item.size, lmtime, lsize, False))
                     res.downloaded += 1
                     res.last_down = str(target) if not res.downloaded - 1 else str(self.root)
                     res.down_files.append(item.path)

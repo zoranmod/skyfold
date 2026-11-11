@@ -31,12 +31,21 @@ if (Test-Path $data) {
     Move-Item $data $parked
 }
 
+# A program folder on PATH that ships its own ICU (e.g. Poppler's icuuc.dll) would be packaged
+# instead of the one Qt needs and break QtCore/QtPdf. Leave out only such folders; Windows' own
+# folders and everything else on PATH stay, so the packaged files are otherwise unchanged.
+$savedPath = $env:PATH
+$env:PATH = ($env:PATH -split ';' | Where-Object {
+    -not $_ -or $_ -like "$env:SystemRoot*" -or
+    -not (Get-ChildItem -LiteralPath $_ -Filter 'icu*.dll' -ErrorAction SilentlyContinue | Select-Object -First 1)
+}) -join ';'
 & $py -m PyInstaller --noconfirm --clean --windowed --onedir --name Skyfold `
     --icon "$PSScriptRoot\skyfold.ico" --collect-submodules pyicloud --collect-data pyicloud `
     --collect-data fido2 --collect-data certifi --collect-data tzdata `
     --exclude-module PIL --exclude-module pytest `
     --distpath "$PSScriptRoot\dist" --workpath (Join-Path $work "build") --specpath $work "$PSScriptRoot\run.py"
 $ok = $LASTEXITCODE -eq 0
+$env:PATH = $savedPath
 if (Test-Path $parked) {
     New-Item -ItemType Directory -Force "dist\Skyfold" | Out-Null
     Move-Item $parked $data

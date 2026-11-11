@@ -84,6 +84,12 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - iCloud Drive conflicts: the PC copy's new "(PC conflict …)" name is taken with a rename that refuses an existing file, so a file another program saves there at that moment is never overwritten.
   - Interrupted moves: a retry keeps iCloud's size/time from when the move first started, so an iCloud edit made in between is always downloaded; a finished move updates the database and drops its record in one transaction; anything still unsettled is kept out of the rest of the pass (no duplicates); records from the previous build are completed from the database; an incomplete listing of the Drive's top level holds every pending move; switching the Drive folder forgets the moves written down for the old one.
   - A failed download no longer looks like "Sync stopped": sign-in loss, iCloud access problems and database errors are reported again.
+- Tenth follow-up review (tests in tests/test_review12_codex_probes.py and tests/test_review12_fixes.py):
+  - iCloud Drive downloads: the database records the size and time of the version Skyfold put in place, so an edit another program makes a moment later is uploaded instead of being taken as already synced.
+  - A rename or move coming from iCloud is written down before the PC file or folder is renamed, and the database follows in one transaction: a crash in between can no longer make the folder look new on the PC and upload it again (e.g. after it was deleted in iCloud).
+  - A rename that can't be finished in iCloud (e.g. the target folder was deleted there) is let go and synced as add + delete instead of waiting forever.
+  - Pause: no further Drive pass starts after Pause; the changes waiting stay queued for Resume.
+  - Build: folders on PATH that bring their own ICU (e.g. Poppler) are left out while packaging, so Qt always gets its own ICU.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

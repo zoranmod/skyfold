@@ -509,6 +509,8 @@ class SyncWorker(QObject):
             with self._drive_lock:
                 if self.drive is None:
                     break
+                if self.settings.paused:
+                    break  # paused meanwhile: the waiting changes stay queued for Resume
                 if self._drive_want_full:
                     self._drive_want_full, changed = False, None
                 elif self._drive_changes:
