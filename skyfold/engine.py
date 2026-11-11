@@ -361,24 +361,74 @@ class Syncer:
             by_asset[r.asset_id].append(r)
         deleted_assets: list[str] = []
         lone_videos: list[FileRow] = []
+        # A file with the same name and size elsewhere in the folder may be this photo, moved - or
+        # someone's own file. Only the content tells: iCloud's copy is downloaded and compared.
+        maybe = {}
         for r in missing:
             key = (PurePosixPath(r.rel_path).name.lower(), r.size or -1)
-            new_rel = index.pop(key, None)
+            if key in index:
+                maybe[(r.asset_id, r.resource_key)] = index.pop(key)
+        confirmed, unknown = self._confirm_moves(maybe) if maybe else ({}, set())
+        local_only: list[FileRow] = []
+        for r in missing:
+            where = (r.asset_id, r.resource_key)
+            if where in unknown:
+                continue  # couldn't be compared now: nothing is decided about it this pass
+            new_rel = confirmed.get(where)
             if new_rel:
                 self.state.move_file(r.asset_id, r.resource_key, new_rel)
                 moved += 1
                 continue
-            if r.resource_key == "original":
+            if r.resource_key == "original" and where in maybe:
+                # A look-alike exists but isn't this photo. Whether the photo was deleted or changed and
+                # moved can't be told, so nothing is deleted in iCloud: it is only forgotten on this PC.
+                local_only.append(r)
+            elif r.resource_key == "original":
                 deleted_assets.append(r.asset_id)
             else:
                 lone_videos.append(r)
+        for r in local_only:
+            self._forget_local_only(r.asset_id, by_asset[r.asset_id])
+            self.cb.activity("local", t("Deleted on this PC only: {name}", name=PurePosixPath(r.rel_path).name))
         for r in lone_videos:
-            if r.asset_id in deleted_assets:
+            if r.asset_id in deleted_assets or any(x.asset_id == r.asset_id for x in local_only):
                 continue  # the photo is gone too: decided together (and brought back together if asked)
             # Only the Live Photo video was removed: forget it and don't bring it back.
             self.state.remove_file(r.asset_id, r.resource_key)
             self.state.exclude(f"{r.asset_id}#{r.resource_key}", "video deleted on PC")
         return sorted(set(deleted_assets)), moved
+
+    def _confirm_moves(self, maybe: dict[tuple[str, str], str]) -> tuple[dict[tuple[str, str], str], set]:
+        """Which of the look-alike files really are the missing photos? Returns (confirmed moves,
+        the ones that couldn't be checked). A file that differs is left alone as someone's own."""
+        import filecmp
+
+        confirmed: dict[tuple[str, str], str] = {}
+        unknown: set[tuple[str, str]] = set()
+        assets = self.remote.lookup(sorted({a for a, _ in maybe}))
+        for (aid, key), rel in maybe.items():
+            self._check_cancel()
+            asset = assets.get(aid)
+            res = next((x for x in asset.resources if x.key == key), None) if asset else None
+            if res is None:
+                unknown.add((aid, key))  # no answer from iCloud is not "it isn't this photo"
+                continue
+            fd, tmp = tempfile.mkstemp(prefix=TMP_PREFIX, dir=self.root)
+            os.close(fd)
+            tmp_path = Path(tmp)
+            try:
+                self.remote.download(res, tmp_path, lambda n: self._check_cancel())
+                if (not res.size or tmp_path.stat().st_size == res.size) \
+                        and filecmp.cmp(tmp_path, self._abs(rel), shallow=False):
+                    confirmed[(aid, key)] = rel
+            except (AuthRequired, RemoteUnavailable, Cancelled):
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log.info("Photos: couldn't compare %s with iCloud's copy: %s", rel, brief(exc))
+                unknown.add((aid, key))
+            finally:
+                tmp_path.unlink(missing_ok=True)
+        return confirmed, unknown
 
     def _trash(self, path: Path) -> None:
         self._touch_own(path)

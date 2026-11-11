@@ -250,6 +250,8 @@ class ICloudDrive:
                     raise RuntimeError(Text("iCloud gave no download link"))
                 data = d.session.get(token["url"], params=d.params, stream=True, timeout=180)
                 d._raise_if_error(data)
+                if data.status_code == 206:  # only a part of the file: never taken for the file
+                    raise RuntimeError(Text("iCloud sent only a part of the file"))
                 for chunk in data.iter_content(1 << 20):
                     fh.write(chunk)
                     on_bytes(len(chunk))

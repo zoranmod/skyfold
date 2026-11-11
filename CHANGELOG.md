@@ -118,6 +118,13 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - Cost: such files are downloaded once more just to compare them. Slower, but nothing is assumed.
   - Logs: an error's message is shown only when Skyfold worded it itself or when it is a plain Windows/database error about a file - decided by where the text comes from, not by the kind of error. Apple's refusal codes are reduced to short symbolic codes.
   - Quit can't be undone by a pass that is just starting: each service has a stop that is never cleared once quitting began.
+- Sixteenth follow-up review: the PC side is checked by content too (tests in tests/test_review18_codex_probes.py and tests/test_review18_fixes.py):
+  - Notes: a previous page is deleted only when it is provably Skyfold's (its recorded fingerprint, or byte for byte the page just written); a page from before 1.0.6 without a fingerprint goes to the Recycle Bin.
+  - iCloud Drive: before a PC file is replaced by a download or sent to the Recycle Bin because it was deleted in iCloud, its content is compared with the fingerprint; a file changed while keeping its size and time is kept (as a conflict copy, or uploaded). The comparison during a download also checks that the file is still the very same file afterwards. Each full pass re-reads up to 64 MB of files that look in sync, in turn, to find such silent edits and upload them.
+  - A content check counts only when the whole file arrived (length checked; a partial HTTP answer is refused).
+  - Photos: a file with the same name and size elsewhere in the folder is taken as the moved photo only when its content equals iCloud's copy. If it differs, the photo is forgotten on this PC only; nothing is deleted in iCloud and the other file is left alone.
+  - Quit while an upload is being prepared: nothing is trashed or uploaded any more.
+  - Disk space: downloads that only compare, or replace a file of the same size, no longer need free space for the whole batch - only for what really grows plus the files in flight.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

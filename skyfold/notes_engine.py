@@ -839,14 +839,11 @@ class NotesSyncer:
         """Our previous page: deleted when unchanged since Skyfold wrote it, else to the Recycle Bin."""
         recorded = self.state.get(f"page:{nid}")
         try:
-            if recorded:
-                unchanged = _digest(aside) == recorded
-            else:  # written before 1.0.6: it carries the note's modified time (as last exported), edits change that
-                times = [datetime.fromisoformat(old[4]).timestamp()] if old and old[4] else []
-                if modified is not None:
-                    times.append(modified.timestamp())
-                mtime = aside.stat().st_mtime
-                unchanged = any(abs(mtime - w) < 2 for w in times)
+            # Only a page that is provably Skyfold's is deleted: it has the recorded fingerprint, or it is
+            # byte for byte the page just written in its place. Otherwise (e.g. a page from before
+            # 1.0.6 without a fingerprint) nothing proves that: it goes to the Recycle Bin.
+            had = _digest(aside)
+            unchanged = (bool(recorded) and had == recorded) or (target.is_file() and had == _digest(target))
         except (OSError, ValueError):
             unchanged = False
         if unchanged:

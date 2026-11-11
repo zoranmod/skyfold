@@ -41,6 +41,7 @@ log = logging.getLogger(__name__)
 
 MARKER = ".skyfold-drive"
 TMP_PREFIX = ".skyfold-tmp-"
+SCRUB_BYTES = 64 * 1024 * 1024  # PC files re-read per full pass to catch edits that kept size and time
 ASIDE_PREFIX = f"{TMP_PREFIX}old-"  # the PC's file while a download is put in its place
 IGNORE = ["desktop.ini", "Thumbs.db", ".DS_Store", "~$*", "*.tmp", "*.crdownload", "*.partial",
           ".~lock.*", f"{TMP_PREFIX}*", MARKER, "Icon\r"]
@@ -274,7 +275,10 @@ class DriveSyncer:
                 self._check_cancel()
 
             self.remote.download(r, tmp_path, on_bytes)
-            got = file_hash(tmp_path)
+            if r.size is None or r.size < 0 or tmp_path.stat().st_size != r.size:
+                got = None  # not the whole file (or its size is unknown): proves nothing
+            else:
+                got = file_hash(tmp_path)
         except (AuthRequired, RemoteUnavailable, Cancelled):
             raise
         except Exception as exc:  # noqa: BLE001
@@ -285,6 +289,49 @@ class DriveSyncer:
                 tmp_path.unlink(missing_ok=True)
         self._hashes[key] = got
         return got
+
+    def _pc_has_synced_content(self, b: Base | None, p: Path) -> bool:
+        """Before a PC file is replaced or sent to the Recycle Bin as "the old synced version": is it?
+        Size and time must match the database; when its fingerprint is known, the content must too
+        (a file can be changed while keeping size and time). Unreadable: no."""
+        try:
+            st = p.stat()
+            if b is None or (st.st_size, round(st.st_mtime, 2)) != (b.lsize, round(b.lmtime or 0, 2)):
+                return False
+            return not b.hash or file_hash(p) == b.hash
+        except OSError:
+            return False
+
+    def _scrub(self, remote: dict[str, DriveItem], local: dict[str, "Local"], base: dict[str, Base],
+               uploads: list[str]) -> None:
+        """A change on this PC that kept the file's size and time is invisible to the normal scan.
+        Each full pass therefore re-reads a bounded amount of files that look in sync (in turn, so
+        all of them come round) and compares them with their fingerprints; a file that differs is a
+        change made on this PC and goes up."""
+        cands = sorted(p for p, b in base.items()
+                       if not b.is_dir and b.hash and not b.pending and b.etag is not None
+                       and p in remote and remote[p].etag == b.etag and p in local and p not in uploads
+                       and (local[p].size, round(local[p].mtime, 2)) == (b.lsize, round(b.lmtime or 0, 2)))
+        if not cands:
+            return
+        cursor = self.state.get_meta("scrub_cursor") or ""
+        order = [p for p in cands if p > cursor] + [p for p in cands if p <= cursor]
+        spent, last = 0, None
+        for p in order:
+            size = local[p].size or 0
+            if last is not None and spent + size > SCRUB_BYTES:
+                break
+            self._check_cancel()
+            try:
+                changed = file_hash(self._abs(p)) != base[p].hash
+            except OSError:
+                continue
+            spent, last = spent + size, p
+            if changed:
+                log.info("Drive: %s changed on this PC without a new size or time; uploading it", p)
+                uploads.append(p)
+        if last is not None:
+            self.state.set_meta("scrub_cursor", last)
 
     def _is_synced_content(self, b: Base | None, r: DriveItem) -> bool:
         """Is iCloud's copy, whatever its version tag says, exactly the content this PC last synced?
@@ -713,6 +760,9 @@ class DriveSyncer:
                     self.state.drop(path)  # deleted in iCloud, but edited on this PC since: keep the edit
                     if settled:
                         uploads.append(path)
+                elif b and b.etag is not None and b.hash and not self._pc_has_synced_content(b, self._abs(path)):
+                    self.state.drop(path)  # deleted in iCloud, but changed here keeping size and time: keep it
+                    uploads.append(path)
                 elif b and b.etag is not None:
                     to_pc.append(path)  # deleted in iCloud
                 elif b and (lo.size, round(lo.mtime, 2)) != (b.lsize, round(b.lmtime or 0, 2)):
@@ -730,6 +780,8 @@ class DriveSyncer:
             elif b:
                 self.state.drop(path)
 
+        if scope is None and not partial:
+            self._scrub(remote, local, base, uploads)
         if scope is not None and any(base.get(p) is not None and base[p].is_dir for p in to_cloud + to_pc):
             # A folder went away on one side. A quick pass doesn't see what is inside it (or where it
             # went, if it was renamed): only a full read can decide safely.
@@ -902,7 +954,8 @@ class DriveSyncer:
                     except OSError:
                         dirty = True
                         continue
-                    if fb is None or (st.st_size, round(st.st_mtime, 2)) != (fb.lsize, round(fb.lmtime or 0, 2)):
+                    if fb is None or (st.st_size, round(st.st_mtime, 2)) != (fb.lsize, round(fb.lmtime or 0, 2)) \
+                            or not self._pc_has_synced_content(fb, Path(dirpath) / f):
                         dirty = True
                         if fb is not None:
                             self.state.drop(rel)
@@ -1551,7 +1604,17 @@ class DriveSyncer:
         if not items:
             return
         total_bytes = sum(i.size for i in items)
-        check_free_space(self.root, total_bytes)
+        # Needed: what the downloads add to the disk (a file that replaces one, or only gets compared
+        # with one, adds little or nothing) plus room for the temporary files of one batch.
+        growth = 0
+        for i in items:
+            try:
+                have = self._abs(i.path).stat().st_size
+            except OSError:
+                have = 0
+            growth += max(0, (i.size or 0) - have)
+        staging = sum(sorted(((i.size or 0) for i in items), reverse=True)[:WORKERS])
+        check_free_space(self.root, growth + staging)
         total = total_bytes or len(items)
         done = 0
         done_lock = threading.Lock()
@@ -1583,6 +1646,7 @@ class DriveSyncer:
             target = self._abs(item.path)
             target.parent.mkdir(parents=True, exist_ok=True)
             self._check_inside(target.parent)
+            check_free_space(self.root, item.size or 0)  # again, right before this file takes its space
             fd, tmp = tempfile.mkstemp(prefix=TMP_PREFIX, dir=target.parent)
             os.close(fd)
             tmp_path = Path(tmp)
@@ -1595,14 +1659,19 @@ class DriveSyncer:
                         raise MacPackage(item.path)  # iCloud zipped a Mac package (e.g. .xcodeproj) for us
                     raise SyncError(t("file size doesn't match"))
                 digest = file_hash(tmp_path)
+                b = base.get(item.path)
                 if target.is_file() and not _is_link(target):
                     # Already this very content on the PC (only iCloud's version tag was new, or it is
                     # our own upload/download): leave the file alone, just remember the version.
                     st0 = target.stat()
-                    if st0.st_size == tmp_path.stat().st_size and file_hash(target) == digest:
-                        st1 = target.stat()
-                        if (st1.st_size, st1.st_mtime) == (st0.st_size, st0.st_mtime):
-                            return target, st0.st_size, st0.st_mtime, digest, False
+                    same = st0.st_size == tmp_path.stat().st_size and file_hash(target) == digest
+                    st1 = target.stat()
+                    if same and _snapshot(st0) == _snapshot(st1):  # the very file that was read, untouched
+                        return target, st0.st_size, st0.st_mtime, digest, False
+                    if b is not None and b.hash and digest == b.hash:
+                        # iCloud holds exactly the synced content (only its tag is new). What is on this
+                        # PC now is this PC's own change: it stays and goes up (time -1 = "changed here").
+                        return target, b.lsize, -1.0, digest, False
                 if item.mtime:
                     os.utime(tmp_path, (item.mtime, item.mtime))  # kept by the rename below
                 self._touch_own(target)
@@ -1623,10 +1692,9 @@ class DriveSyncer:
                         self._release_aside(aside, item.path)  # back in place, or kept as a conflict copy
                     raise
                 if aside is not None:
-                    st = aside.stat()
-                    if b is not None and (st.st_size, round(st.st_mtime, 2)) == (b.lsize, round(b.lmtime or 0, 2)):
-                        # Most likely the version both sides had, but only its size and time say so:
-                        # it goes to the Recycle Bin, never deleted for good.
+                    if self._pc_has_synced_content(b, aside):
+                        # The version both sides had (by its fingerprint when one is known, else by
+                        # size and time): it goes to the Recycle Bin, never deleted for good.
                         with done_lock:
                             replaced.append((aside, item.path))
                     else:  # another version on this PC (changed, or never synced): kept under a conflict name
@@ -1769,11 +1837,13 @@ class DriveSyncer:
             try:
                 self._check_inside(self._abs(path))
                 data = self._abs(path).read_bytes()  # locked or unreadable: fail before touching iCloud
+                self._check_cancel()  # reading can take a while: stop here, before iCloud is touched
                 if existing is not None:
                     # Replacing a file: move the old iCloud version to Recently Deleted first.
                     # Mark the row "pending" so a failed upload is retried, never mistaken for a deletion.
                     self.state.put(Base(path, False, None, existing.size, lo.mtime, lo.size, True))
                     self.remote.trash(existing)
+                    self._check_cancel()  # (the row stays "pending": the upload is done next time)
                 self.remote.upload(parent, self._abs(path), data)
                 # the tag iCloud gives it isn't known yet; what it must contain is
                 self.state.put(Base(path, False, None, len(data), lo.mtime, lo.size, False,
@@ -1781,7 +1851,7 @@ class DriveSyncer:
                 res.uploaded += 1
                 res.last_up = res.last_up or str(self._abs(path))
                 res.up_files.append(path)
-            except (AuthRequired, RemoteUnavailable):
+            except (AuthRequired, RemoteUnavailable, Cancelled):
                 raise
             except Exception as exc:  # noqa: BLE001
                 res.errors += 1
@@ -1925,6 +1995,11 @@ def _aside_original(name: str) -> str:
     rest = name[len(ASIDE_PREFIX):]
     m = re.match(r"(?:\d+-\d+-|[0-9a-f]{8}-)(.+)", rest)
     return m.group(1) if m else (rest or "file")
+
+
+def _snapshot(st: os.stat_result) -> tuple:
+    """Enough of a file's state to tell that it is the same, untouched file: size, time and identity."""
+    return st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev
 
 
 def file_hash(p: Path) -> str:
