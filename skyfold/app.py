@@ -94,8 +94,46 @@ class _RedactEmails(logging.Filter):
 
         return cls._LONG.sub(long, text)
 
+    @staticmethod
+    def _foreign(record: logging.LogRecord) -> str:
+        """A record written by another library (pyicloud, requests…). Its wording can't be trusted:
+        Apple's answers end up in messages, in format arguments and in exceptions used as the
+        message. Kept: the library's own format string (code, not data) with numbers; every other
+        argument is blanked; anything else is withheld. Always with the place it came from."""
+        from .safelog import describe
+
+        def safe(value: object) -> object:
+            if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
+                return value
+            if isinstance(value, BaseException):
+                return describe(value, frames=0)
+            return "…"
+
+        msg, args, text = record.msg, record.args, None
+        if isinstance(msg, BaseException):
+            text = describe(msg, frames=0)
+        elif isinstance(msg, str) and args:
+            try:
+                if isinstance(args, dict):
+                    text = msg % {k: safe(v) for k, v in args.items()}
+                else:
+                    text = msg % tuple(safe(a) for a in (args if isinstance(args, tuple) else (args,)))
+            except (TypeError, ValueError, KeyError):
+                text = None
+        if text is None:  # one finished string (or something odd): no telling what is in it
+            text = "(message withheld: it may contain Apple's answer)"
+        if record.exc_info and record.exc_info[1] is not None:
+            text += f" | {describe(record.exc_info[1], frames=8)}"
+        return f"{text} [{record.name}, {record.filename}:{record.lineno}]"
+
     def filter(self, record: logging.LogRecord) -> bool:
         from .safelog import brief, describe
+
+        if not record.name.startswith("skyfold"):
+            record.msg = self._foreign(record)
+            record.args, record.exc_info, record.exc_text = (), None, None
+        elif isinstance(record.msg, BaseException):  # an error used as the message itself
+            record.msg, record.args = brief(record.msg), ()
 
         # An error handed to the log is written as safelog describes it, never with Apple's text
         if isinstance(record.args, tuple) and any(isinstance(a, BaseException) for a in record.args):

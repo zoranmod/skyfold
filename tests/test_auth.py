@@ -51,6 +51,12 @@ def test_log_never_contains_the_apple_id():
 
     from skyfold.app import _RedactEmails
 
-    rec = logging.LogRecord("x", logging.INFO, "", 0, "Sign-in rejected for %s", ("someone@example.com",), None)
+    rec = logging.LogRecord("skyfold.auth", logging.INFO, "", 0, "Sign-in rejected for %s",
+                            ("someone@example.com",), None)
     _RedactEmails().filter(rec)
     assert "someone@example.com" not in rec.getMessage() and "<apple-id>" in rec.getMessage()
+    # a record of another library keeps its format string, but no text argument at all
+    rec = logging.LogRecord("pyicloud.base", logging.INFO, "", 0, "Sign-in rejected for %s",
+                            ("someone@example.com",), None)
+    _RedactEmails().filter(rec)
+    assert "someone@example.com" not in rec.getMessage() and "Sign-in rejected for" in rec.getMessage()

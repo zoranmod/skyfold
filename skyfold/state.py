@@ -50,6 +50,7 @@ class FileRow:
     size: int | None
     is_video: bool
     asset_date: str | None
+    hash: str | None = None  # SHA-256 of the file as Skyfold downloaded it (None: from before 1.0.6)
 
 
 class State:
@@ -59,6 +60,8 @@ class State:
         self._db = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(SCHEMA)
+        if "hash" not in {r[1] for r in self._db.execute("PRAGMA table_info(files)")}:
+            self._db.execute("ALTER TABLE files ADD COLUMN hash TEXT")  # databases from before 1.0.6
         cols = {r[1] for r in self._db.execute("PRAGMA table_info(activity)")}
         if "target" not in cols:  # what clicking the entry opens (a file or folder); added in 1.1
             self._db.execute("ALTER TABLE activity ADD COLUMN target TEXT NOT NULL DEFAULT ''")
@@ -80,9 +83,9 @@ class State:
     def files(self) -> list[FileRow]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT asset_id, resource_key, rel_path, size, is_video, asset_date FROM files"
+                "SELECT asset_id, resource_key, rel_path, size, is_video, asset_date, hash FROM files"
             ).fetchall()
-        return [FileRow(r[0], r[1], r[2], r[3], bool(r[4]), r[5]) for r in rows]
+        return [FileRow(r[0], r[1], r[2], r[3], bool(r[4]), r[5], r[6]) for r in rows]
 
     def asset_ids(self) -> set[str]:
         with self._lock:
@@ -95,8 +98,10 @@ class State:
     def add_file(self, row: FileRow, synced_at: str) -> None:
         with self._lock:
             self._db.execute(
-                "INSERT OR REPLACE INTO files VALUES(?,?,?,?,?,?,?)",
-                (row.asset_id, row.resource_key, row.rel_path, row.size, int(row.is_video), row.asset_date, synced_at),
+                "INSERT OR REPLACE INTO files(asset_id, resource_key, rel_path, size, is_video, asset_date, "
+                "synced_at, hash) VALUES(?,?,?,?,?,?,?,?)",
+                (row.asset_id, row.resource_key, row.rel_path, row.size, int(row.is_video), row.asset_date,
+                 synced_at, row.hash),
             )
 
     def move_file(self, asset_id: str, resource_key: str, new_rel_path: str) -> None:

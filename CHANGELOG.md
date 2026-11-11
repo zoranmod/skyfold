@@ -136,6 +136,9 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - iCloud Drive: a folder deleted in iCloud is looked into again right before it goes to the Recycle Bin; files added or changed in it meanwhile stay and are uploaded.
   - Pause takes effect the moment it is pressed, also while a sync cycle is busy: no further service starts.
 - Safer default: new installations ask before deleting more than 5 items at once (was 25). Existing settings are kept.
+- Nineteenth follow-up review (tests in tests/test_review21_codex_probes.py and tests/test_review21_fixes.py):
+  - Log: what other libraries (pyicloud, requests…) write is no longer trusted. Only their own format string and numbers are kept, with the place in the code; every text argument is blanked, a finished one-piece message is withheld, and an error used as the message is reduced to its kind. Apple's answers can no longer reach the log that way.
+  - Photos: Skyfold remembers a fingerprint (SHA-256) of every photo and video it downloads. Before a file goes to the Recycle Bin because the photo was deleted in iCloud (or as a leftover), its content is compared: a photo edited on this PC stays, also when the edit didn't change its size. Photos downloaded by earlier versions have no fingerprint yet; for them only the size can be compared.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

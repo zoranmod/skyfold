@@ -150,6 +150,17 @@ def check_free_space(folder: Path, needed: int) -> None:
                           need=size_text(needed), free=size_text(free), drive=probe.anchor or str(probe)))
 
 
+def _file_hash(p: Path) -> str:
+    """SHA-256 of a file's content."""
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(p, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 class Cancelled(Exception):
     pass
 
@@ -551,7 +562,7 @@ class Syncer:
                     # remove the leftover Live Photo video, if any (never a photo put back meanwhile)
                     for r in rows_by_asset[a]:
                         p = self._abs(r.rel_path)
-                        if r.resource_key != "original" and p.exists():
+                        if r.resource_key != "original" and p.exists() and not self._changed_on_pc(r):
                             try:
                                 self._trash_inside(p)
                             except OSError:
@@ -669,6 +680,7 @@ class Syncer:
                         self.remote.download(res, tmp_path, on_bytes)
                         if res.size and tmp_path.stat().st_size != res.size:
                             raise SyncError(t("file size doesn't match"))
+                        digest = _file_hash(tmp_path)  # what Skyfold downloaded: compared before it is ever recycled
                         adopted = False
                         while rel in self._verify:  # a file is already there: adopt it only if identical
                             self._verify.discard(rel)
@@ -682,7 +694,7 @@ class Syncer:
                             target = self._abs(rel)
                         if adopted:
                             self.state.add_file(FileRow(a.id, res.key, rel, res.size, res.is_video,
-                                                        a.date.isoformat()), now_iso())
+                                                        a.date.isoformat(), digest), now_iso())
                             taken.add(rel.lower())
                             continue
                         for _attempt in range(20):
@@ -702,7 +714,7 @@ class Syncer:
                         if tmp_path.exists():
                             tmp_path.unlink(missing_ok=True)
                     self.state.add_file(
-                        FileRow(a.id, res.key, rel, res.size, res.is_video, a.date.isoformat()), now_iso()
+                        FileRow(a.id, res.key, rel, res.size, res.is_video, a.date.isoformat(), digest), now_iso()
                     )
                     self.state.set(f"failed:{a.id}#{res.key}", None)
                     taken.add(rel.lower())
@@ -926,12 +938,21 @@ class Syncer:
             n += 1
 
     def _changed_on_pc(self, r: FileRow) -> bool:
-        """Right before a photo deleted in iCloud goes to the Recycle Bin: is the PC file still the
-        size Skyfold downloaded? (An edited photo stays.)"""
+        """Right before a photo file goes to the Recycle Bin: is it still what Skyfold downloaded?
+        Another size, or (when the fingerprint is known) another content, means it was edited on this
+        PC and stays. A file that can't be read is left alone too."""
+        p = self._abs(r.rel_path)
         try:
-            return bool(r.size) and os.stat(self._abs(r.rel_path)).st_size != r.size
+            if r.size and os.stat(p).st_size != r.size:
+                return True
         except OSError:
-            return False
+            return False  # not there: nothing to keep
+        if not r.hash:
+            return False  # downloaded before fingerprints existed: only the size can be compared
+        try:
+            return _file_hash(p) != r.hash
+        except OSError:
+            return True
 
     def _original_is_back(self, rows: list[FileRow]) -> bool:
         """Asked right before a "deleted on this PC" decision is carried out: the photo was missing
@@ -941,7 +962,7 @@ class Syncer:
     def _forget_local_only(self, asset_id: str, rows: list[FileRow]) -> None:
         for r in rows:
             p = self._abs(r.rel_path)
-            if p.exists():
+            if p.exists() and not self._changed_on_pc(r):
                 try:
                     self._trash_inside(p)
                 except OSError:
