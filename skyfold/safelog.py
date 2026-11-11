@@ -47,12 +47,25 @@ def describe(exc: BaseException, frames: int = 3) -> str:
     return " <- ".join(parts) + (f" at {at}" if at else "")
 
 
-def code(value: object) -> str:
-    """A short symbolic code from Apple (e.g. CONFLICT, ITEM_NOT_FOUND) or "?": never free text."""
-    import re
+KNOWN_CODES = (
+    "OK", "SUCCESS", "ERROR", "FAILED", "FAILURE", "UNKNOWN", "CONFLICT", "ETAG_CONFLICT", "NAME_CONFLICT",
+    "ITEM_EXISTS", "ALREADY_EXISTS", "EXISTS", "NOT_FOUND", "ITEM_NOT_FOUND", "ZONE_NOT_FOUND", "ACCESS_DENIED",
+    "PERMISSION_DENIED", "QUOTA_EXCEEDED", "OVER_QUOTA", "INVALID_NAME", "INVALID_REQUEST", "BAD_REQUEST",
+    "THROTTLED", "TRY_AGAIN_LATER", "SERVICE_UNAVAILABLE", "INTERNAL_ERROR", "PRIVATE_DB_DISABLED",
+)
 
-    text = str(value or "")
-    return text if re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", text) else "?"
+
+def code(value: object) -> str:
+    """One of the codes Apple is known to answer with (CONFLICT, ITEM_NOT_FOUND…), a plain number,
+    or "other". Whatever else the field holds is never kept: it is Apple's text, not ours."""
+    if isinstance(value, bool):
+        return "other"
+    if isinstance(value, int):
+        return str(value)
+    text = str(value or "").strip().upper()
+    if text.isdigit() and len(text) <= 6:
+        return text
+    return text if text in KNOWN_CODES else "other"
 
 
 def value(v: object, allowed: tuple[str, ...] = ()) -> str:

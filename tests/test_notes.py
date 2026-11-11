@@ -240,7 +240,12 @@ def test_leftover_numbered_pages_are_cleaned_up(env):
     r.put("n1", "Dijana")
     r.put("n2", "Dijana")
     s.run()
-    (root / "Notes/Dijana (3).html").write_text('<style id="skyfold"></style>old copy', encoding="utf-8")  # ours, left behind
+    import shutil
+
+    shutil.copy2(root / "Notes/Dijana (2).html", root / "Notes/Dijana (3).html")  # ours, left behind: a page Skyfold wrote
+    shutil.copy2(root / "Notes/Dijana.html", root / "Notes/Dijana - my copy.html")  # the user's copy: another name
+    annotated = root / "Notes/Dijana (4).html"  # named like ours, but changed by the user
+    annotated.write_text((root / "Notes/Dijana.html").read_text(encoding="utf-8") + "my notes", encoding="utf-8")
     (root / "Notes/my own file.txt").write_text("not ours", encoding="utf-8")
     (root / "Notes/my report.html").write_text("<html>the user's own page</html>", encoding="utf-8")
     s.state.set("orphan_sweep", None)
@@ -248,6 +253,7 @@ def test_leftover_numbered_pages_are_cleaned_up(env):
     assert trashed == ["Dijana (3).html"]
     assert (root / "Notes/Dijana.html").exists() and (root / "Notes/Dijana (2).html").exists()
     assert (root / "Notes/my own file.txt").exists() and (root / "Notes/my report.html").exists()
+    assert (root / "Notes/Dijana - my copy.html").exists() and annotated.exists()
 
 
 def test_no_cleanup_while_notes_are_still_downloading(env):

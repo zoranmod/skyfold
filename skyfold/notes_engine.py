@@ -516,6 +516,12 @@ class NotesState:
             row = self._db.execute("SELECT value FROM notes_meta WHERE key=?", (key,)).fetchone()
         return row[0] if row else None
 
+    def page_digests(self) -> set[str]:
+        """Fingerprints of the note pages Skyfold wrote (recorded when each was put in place)."""
+        with self._lock:
+            rows = self._db.execute("SELECT value FROM notes_meta WHERE key LIKE 'page:%'").fetchall()
+        return {r[0] for r in rows if r[0]}
+
     def set(self, key: str, value: str | None) -> None:
         with self._lock:
             self._db.execute("INSERT OR REPLACE INTO notes_meta VALUES(?,?)", (key, value))
@@ -772,6 +778,24 @@ class NotesSyncer:
             self.cb.activity("download", text, str(target))
         return res
 
+    def _is_leftover(self, p: Path, tracked: set[str], written: set[str]) -> bool:
+        """A page Skyfold left behind when same-titled notes were numbered differently: it is named like
+        a note's page in that folder ("Title.html", "Title (3).html") AND is byte for byte a page
+        Skyfold wrote. A copy the user made (another name) or changed (other content) is theirs."""
+        import re
+
+        def stem(name: str) -> str:
+            return re.sub(r" \(\d+\)$", "", name[:-5] if name.lower().endswith(".html") else name).lower()
+
+        folder = p.parent.relative_to(self.root).as_posix().lower()
+        stems = {stem(PurePosixPath(r).name) for r in tracked if str(PurePosixPath(r).parent).lower() == folder}
+        if stem(p.name) not in stems:
+            return False
+        try:
+            return _digest(p) in written
+        except OSError:
+            return False
+
     def _remove_leftover_pages(self, res: NotesResult) -> None:  # noqa: C901
         """Note pages on disk that no note uses any more (e.g. "Title (3).html" left behind when
         same-titled notes were numbered differently) go to the Recycle Bin. Only .html pages inside
@@ -781,6 +805,7 @@ class NotesSyncer:
         if not tracked or any(r[4] is None and not r[5] for r in rows.values()):
             return  # nothing known yet, or notes still waiting to be downloaded
         note_dirs = {str(PurePosixPath(r).parent).lower() for r in tracked}
+        written = self.state.page_digests()  # fingerprints of the pages Skyfold wrote
         leftovers = []
         for dirpath, dirs, files in os.walk(self.root):
             dirs[:] = [d for d in dirs if d != ASSETS and not _is_link(Path(dirpath) / d)]  # never through a link
@@ -792,7 +817,8 @@ class NotesSyncer:
                     continue
                 p = Path(dirpath) / f
                 rel = p.relative_to(self.root).as_posix()
-                if rel.lower() not in tracked and inside_root(self.root, p) and _is_our_page(p):
+                if rel.lower() not in tracked and inside_root(self.root, p) and _is_our_page(p) \
+                        and self._is_leftover(p, tracked, written):
                     leftovers.append(p)
         if len(leftovers) > max(10, len(tracked) // 2):
             log.warning("Not removing %d untracked note pages: too many, looks wrong", len(leftovers))

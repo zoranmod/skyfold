@@ -214,6 +214,18 @@ class Requests(QObject):
     trashDrivePaths = Signal(list)
 
 
+def _close_stale_settings(controller) -> None:
+    """The account changed: windows still open show the previous one's settings, devices and waiting
+    deletions. They are closed; nothing in them may be applied to the new account."""
+    for key in ("settings", "findmy", "pending"):
+        dlg = getattr(controller, "_dialogs", {}).get(key)
+        if dlg is not None:
+            try:
+                dlg.close()
+            except RuntimeError:
+                pass  # already destroyed
+
+
 class Controller(QObject):
     """Lives on the UI thread. Being a QObject matters: worker signals connected to its
     methods are queued onto the UI thread instead of running inside the worker thread."""
@@ -426,6 +438,8 @@ class Controller(QObject):
 
         def logged_in(api, apple_id: str) -> None:
             _RedactEmails.remember(apple_id)
+            if apple_id.lower() != (self.settings.apple_id or "").lower():
+                _close_stale_settings(self)  # it shows the other account's settings
             if self.settings.apple_id and apple_id.lower() != self.settings.apple_id.lower():
                 turned_off = [name for on, name in ((self.settings.drive_enabled, t("iCloud Drive")),
                                                     (self.settings.notes_enabled, t("Notes"))) if on]
@@ -458,9 +472,15 @@ class Controller(QObject):
         dlg = SettingsDialog(self.settings, self.c, storage=getattr(self.worker, "_storage", None),
                              get_api=lambda: self.worker.api)
         dlg.nav.setCurrentRow(page)
+        opened_for = (self.settings.apple_id or "").lower()
 
         def saved() -> None:
+            if (self.settings.apple_id or "").lower() != opened_for:
+                # Another Apple ID signed in (or out) while this window was open: what it shows belongs
+                # to the other account - its folders, its choices. Nothing of it is applied.
+                return
             new = dlg.result_settings()
+            new.apple_id = self.settings.apple_id  # who is signed in is decided by signing in, never here
             if new.start_with_windows != self.settings.start_with_windows:
                 try:
                     set_start_with_windows(new.start_with_windows)
@@ -494,6 +514,7 @@ class Controller(QObject):
         self._login_api = None
 
     def sign_out(self) -> None:
+        _close_stale_settings(self)
         self._login_api = None
         self.worker.cancel()  # stop the running pass now; the rest happens on the worker thread
         # Right now, not queued: a sign-in made while the worker is still busy must never be undone by it.

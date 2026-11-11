@@ -360,8 +360,9 @@ class SyncWorker(QObject):
             self.drive.on_pending = self._drivePendingSeen.emit
             import hashlib
 
-            self.drive.account = hashlib.sha256(s.apple_id.strip().lower().encode()).hexdigest()[:16] \
-                if s.apple_id else ""
+            # whose Drive this is comes from the session actually in use, not from the settings
+            owner = str(getattr(self.api, "account_name", "") or s.apple_id or "")
+            self.drive.account = hashlib.sha256(owner.strip().lower().encode()).hexdigest()[:16] if owner else ""
             self._drive_last = 0.0
         self.drive.delete_threshold = s.delete_threshold
         self.drive.folders = list(s.drive_folders) if s.drive_folders is not None else None
