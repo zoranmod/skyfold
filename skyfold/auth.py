@@ -57,13 +57,19 @@ def _describe(exc: BaseException) -> str:
     while e is not None and id(e) not in seen and len(parts) < 6:
         seen.add(id(e))
         code = getattr(e, "code", None)
-        if code is None:
-            code = getattr(getattr(e, "response", None), "status_code", None)
         try:
             code = int(str(code).strip()) if code is not None else None
         except ValueError:
-            code = None
-        parts.append(type(e).__name__ + (f" ({code})" if code is not None else ""))
+            code = None  # Apple's own text codes are left out
+        http = getattr(getattr(e, "response", None), "status_code", None)
+        http = http if isinstance(http, int) else None
+        if code is None:
+            code, http = http, None
+        errno = getattr(e, "winerror", None) or getattr(e, "errno", None)
+        extra = [f"HTTP {http}"] if http is not None and http != code else []
+        extra += [f"errno {errno}"] if isinstance(errno, int) else []
+        label = type(e).__name__ + (f" ({code})" if code is not None else "")
+        parts.append(label + (f" [{', '.join(extra)}]" if extra else ""))
         e = e.__cause__ or e.__context__
     where = traceback.extract_tb(exc.__traceback__)[-3:] if exc.__traceback__ else []
     at = ", ".join(f"{_P(f.filename).name}:{f.lineno}" for f in where)

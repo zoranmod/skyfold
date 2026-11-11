@@ -1156,7 +1156,8 @@ class DriveSyncer:
         self.state.set_meta(PENDING_MOVE, json.dumps(j) if j else None)
 
     def _move_rows(self, src: str, dst: str, top_etag: str | None, ident: str, entry: dict | None,
-                   snapshot: dict | None = None, remote: dict[str, DriveItem] | None = None) -> None:
+                   snapshot: dict | None = None, remote: dict[str, DriveItem] | None = None,
+                   seen: dict | None = None) -> None:
         """Let the database rows of `src` (and below) follow the item to `dst`, and update its
         journal entry, in one transaction. Rows that are missing are rebuilt from the snapshot taken
         when the move started. top_etag: iCloud's version, only when it is known to be the same file."""
@@ -1174,8 +1175,9 @@ class DriveSyncer:
                     self.state.put(Base(q, True, None, None, None, None, False))
                 else:
                     etag = (top_etag or r.etag) if p == src else r.etag
-                    if remote is not None and q in remote and remote[q].size == r.size:
-                        etag = remote[q].etag  # renamed in iCloud (new version tag), same file
+                    known = (seen or {}).get(q[len(dst):])
+                    if remote is not None and q in remote and known == [remote[q].etag, remote[q].docwsid]:
+                        etag = remote[q].etag  # the version iCloud had when the rename was decided
                     self.state.put(Base(q, False, etag, r.size, r.lmtime, r.lsize, False))
             self._journal_put(ident, entry)
 
@@ -1200,12 +1202,18 @@ class DriveSyncer:
                     with self.state.transaction():  # the rename never happened
                         self._journal_put(ident, None)
                     continue
+                if now_new is None and now_old is not None:
+                    # something else under the old name and nothing under the new one: can't show the
+                    # rename happened -- treated as not done (no deletion is decided from it)
+                    with self.state.transaction():
+                        self._journal_put(ident, None)
+                    continue
                 # Otherwise the rename happened. The database follows iCloud's item to the new name
                 # and the usual rules take it from there: deleted there since -> a deletion on this PC
                 # (to iCloud, with the usual approval); saved over since (an editor's save gives a new
                 # file id) -> an edit, uploaded; something new under the old name -> a new file.
                 log.info("Drive: an interrupted rename on this PC is picked up")
-                self._move_rows(old, new, None, ident, None, remote=remote)
+                self._move_rows(old, new, None, ident, None, remote=remote, seen=e.get("seen"))
                 continue
             at = e.get("at") or old
             if "rows" not in e:  # written by an earlier build: the database still has the rows
@@ -1279,8 +1287,11 @@ class DriveSyncer:
             fid = [st.st_dev, st.st_ino] if st.st_ino else None  # 0: this file system has none
         except OSError:
             fid = None
+        # iCloud's versions (and item ids) at the new name now: only these may later be taken as
+        # "what this PC has" -- anything changed or replaced in iCloud after this stays a change
+        seen = {p[len(new):]: [it.etag, it.docwsid] for p, it in remote.items() if p == new or p.startswith(new + "/")}
         with self.state.transaction():
-            self._journal_put(self._pc_key, {"kind": "pc", "old": old, "new": new, "fid": fid})
+            self._journal_put(self._pc_key, {"kind": "pc", "old": old, "new": new, "fid": fid, "seen": seen})
         if self._local_move(old, new, res):
             return True
         with self.state.transaction():

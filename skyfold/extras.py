@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from .auth import _describe
 from .i18n import t
 from .remote import AuthRequired, RemoteUnavailable, _translate
 
@@ -77,7 +78,7 @@ def devices(api: Any, refresh: bool = False) -> list[Device]:
             if any(isinstance(e, (PyiCloudFailedLoginException, PyiCloudAuthRequiredException))
                    or getattr(e, "code", None) in (401, 421, 450) for e in chain):
                 cause = exc.__cause__ or exc.__context__
-                log.info("Find My wants a fresh sign-in: %s (cause: %r)", exc, getattr(cause, "__context__", cause))
+                log.info("Find My wants a fresh sign-in: %s", _describe(exc))
                 api._devices = None
                 raise FindMyNeedsSignIn(sign_in_again_text()) from exc
             raise
@@ -85,7 +86,7 @@ def devices(api: Any, refresh: bool = False) -> list[Device]:
             try:
                 mgr.refresh(locate=False)
             except Exception as exc:  # noqa: BLE001 - the previous data is still useful
-                log.info("Find My refresh failed: %s", exc)
+                log.info("Find My refresh failed: %s", _describe(exc))
         out: list[Device] = []
         for dev_id, dev in mgr.devices.items():
             data = dev.data

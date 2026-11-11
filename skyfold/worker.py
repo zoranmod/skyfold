@@ -170,6 +170,9 @@ class SyncWorker(QObject):
         self.cancel()
         self._stop_watchers()
 
+    def _closing_now(self) -> bool:
+        return bool(getattr(self, "_closing", False))
+
     def _stop_requested(self, service: str) -> bool:
         """Was the pass of this service asked to stop (quit, pause)? Each pass clears its flag when it starts."""
         s = {t("iCloud Drive"): self.drive, t("Notes"): self.notes}.get(service, self.syncer)
@@ -594,10 +597,18 @@ class SyncWorker(QObject):
 
     def _cycle(self, full: bool, force_drive: bool) -> None:
         problems: list[str] = []
+        if self._closing_now():
+            return
         if not self._run_photos(full, problems):
             return  # session/auth state already shown
+        if self._closing_now():
+            return
         self._refresh_storage(force=full)
+        if self._closing_now():
+            return  # quitting: no further service starts (a new pass would clear the stop)
         if self.notes is not None and not self._run_notes(full, problems):
+            return
+        if self._closing_now():
             return
         drive_due = self.drive is not None and (
             # 0 = never read yet (monotonic() counts from boot, so it may still be < the interval)

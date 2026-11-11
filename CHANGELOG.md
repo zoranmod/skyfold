@@ -101,6 +101,10 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - A rename from iCloud that was cut short on this PC is settled by simple rules: only when the original item is still under the old name did the rename not happen; otherwise the database follows to the new name and the usual rules apply (deleted on this PC since -> deleted in iCloud with the usual approval; saved over by an editor -> uploaded). A file that can't be read for a moment is shown as an error and checked again. File ids are stored with their volume, and file systems without ids are handled.
   - Sign-in: errors are logged and shown only as error kinds, HTTP status codes and code locations, never Apple's page text (which can carry names, e-mail addresses or sign-in values).
   - Quit: the worker is marked as closing first, so a sync cycle still finishing can't start new iCloud Drive work.
+- Thirteenth follow-up review (tests in tests/test_review15_codex_probes.py):
+  - Recovering an interrupted rename from iCloud takes over iCloud's version only when it is exactly the one recorded before the rename (same version tag and item id); an iCloud edit or replacement made since stays a change and is downloaded or kept as a conflict, never trashed. Something new under the old name with nothing under the new one is no longer read as "renamed and then deleted".
+  - Quit: a sync cycle still finishing doesn't start Notes, watchers or iCloud Drive any more.
+  - Find My errors are logged as error kinds and codes only (never Apple's page text). Error summaries also keep the HTTP status and Windows error numbers.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.
