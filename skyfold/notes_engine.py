@@ -26,7 +26,7 @@ from typing import Any, Protocol
 
 from .engine import Callbacks, Cancelled, SyncError, _is_link, inside_root, now_iso
 from .i18n import t
-from .safelog import brief
+from .safelog import brief, value
 from .remote import AuthRequired, RemoteUnavailable, _translate
 
 log = logging.getLogger(__name__)
@@ -198,6 +198,12 @@ def _prefer_full_images() -> None:
         log.info("Could not prefer full note images: %s", exc)
 
 
+_IMAGE_FORMATS = ("png", "jpeg", "jpg", "heic", "heif", "gif", "tiff", "bmp", "webp", "pdf", "svg")
+_SKETCH_FIELDS = ("FallbackImage", "FallbackPDF", "PreviewImages", "PreviewAppearances", "PreviewScales",
+                  "PreviewWidths", "PreviewHeights", "PreviewUpdateDate", "PaperBundle", "PaperAssets", "Image",
+                  "Media", "SizeHeight", "SizeWidth", "Orientation")
+
+
 # Pen drawings (com.apple.paper): attachment id -> download URL of the full "fallback" bitmap.
 # Filled while a note is read; used right after its export (see ICloudNotes.export).
 _SKETCH_FALLBACKS: dict[str, str] = {}
@@ -230,18 +236,22 @@ def _prefer_vector_sketches() -> None:
                         return hasattr(x, "downloadURL") or (isinstance(x, dict) and "downloadURL" in x)
 
                     def nbytes(x):
-                        return str(x.get("size", "?") if isinstance(x, dict) else getattr(x, "size", "?"))
+                        n = x.get("size") if isinstance(x, dict) else getattr(x, "size", None)
+                        return str(n) if isinstance(n, int) and not isinstance(n, bool) else "?"
 
                     parts = []
                     for k in fields:
                         v = getattr(fields.get_field(k), "value", None)
+                        # field names and values come from Apple: known names and numbers only
+                        name = k if isinstance(k, str) and k in _SKETCH_FIELDS else "other"
                         if isinstance(v, (list, tuple)) and v and is_asset(v[0]):
-                            parts.append(f"{k}[{','.join(nbytes(x) for x in v)} B]")
+                            parts.append(f"{name}[{','.join(nbytes(x) for x in v[:20])} B]")
                         elif is_asset(v):
-                            parts.append(f"{k}[{nbytes(v)} B]")
-                        elif k.startswith(("Fallback", "Preview", "Paper", "Image", "Size", "Orientation")):
-                            parts.append(k if isinstance(v, (bytes, bytearray)) else f"{k}={v!r}"[:60])
-                    _SKETCH_INFO[rec.recordName] = "; ".join(parts)
+                            parts.append(f"{name}[{nbytes(v)} B]")
+                        elif isinstance(k, str) and k.startswith(("Fallback", "Preview", "Paper", "Image", "Size",
+                                                                   "Orientation")):
+                            parts.append(f"{name}={value(v)}")
+                    _SKETCH_INFO[rec.recordName] = "; ".join(parts[:30])
                 except Exception:  # noqa: BLE001
                     pass
                 fld = fields.get_field("FallbackImage")
@@ -426,8 +436,8 @@ def upgrade_sketches(page: Path, fallbacks: dict[str, str], download) -> int:
             del reader
             preview_w = QImageReader(str(current)).size().width()
             if not ok or size.width() <= preview_w:
-                log.info("Drawing in %s: full image not used (readable=%s, %sx%s, format=%r, %d bytes; "
-                         "preview %s px)", page.name, ok, size.width(), size.height(), fmt, new.stat().st_size,
+                log.info("Drawing in %s: full image not used (readable=%s, %sx%s, format=%s, %d bytes; "
+                         "preview %s px)", page.name, ok, size.width(), size.height(), value(fmt, _IMAGE_FORMATS), new.stat().st_size,
                          preview_w)
                 new.unlink(missing_ok=True)
                 return tag

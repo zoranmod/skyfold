@@ -12,6 +12,7 @@ from .config import PRIVATE_DIR, SESSION_DIR
 
 SIGNED_OUT = PRIVATE_DIR / "signed-out"  # set by Sign out; a session left behind is then never used
 from .i18n import t
+from .safelog import value
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +43,9 @@ def make_current(api: Any) -> None:
                 session._save_session_data()
             except Exception as exc:  # noqa: BLE001
                 log.warning("Couldn't save the session: %s", _describe(exc))
+
+
+_DELIVERY = ("sms", "voice", "trusted_device", "device", "security_key", "unknown")  # known ways a code is sent
 
 
 def _describe(exc: BaseException) -> str:
@@ -185,7 +189,7 @@ def restore(apple_id: str) -> Any | None:
         raise Offline("Apple's servers answered with an error")
     if api.requires_2fa or api.requires_2sa:
         log.warning("Session restore: Apple asks for two-factor authentication again (trusted=%s)",
-                    getattr(api, "is_trusted_session", "?"))
+                    value(getattr(api, "is_trusted_session", None)))
         return None
     make_current(api)
     return api
@@ -246,7 +250,7 @@ def start_login(apple_id: str, password: str) -> LoginStep:
         raise LoginError(t("Sign-in failed: {error}", error=_describe(exc).split(" at ")[0])) from None
 
     log.info("Sign-in: password accepted (2FA required=%s, 2SA=%s, trusted=%s)",
-             api.requires_2fa, api.requires_2sa, getattr(api, "is_trusted_session", "?"))
+             value(api.requires_2fa), value(api.requires_2sa), value(getattr(api, "is_trusted_session", None)))
     if api.requires_2sa and not api.requires_2fa:
         raise LoginError(t("This account uses the old two-step verification, which isn't supported."))
     if not api.requires_2fa:
@@ -259,8 +263,8 @@ def start_login(apple_id: str, password: str) -> LoginStep:
     notice = t("Enter the 6-digit code shown on your iPhone, iPad or Mac.")
     try:
         sent = api.request_2fa_code()
-        log.info("Sign-in: code requested (sent=%s, via %s)", sent,
-                 getattr(api, "two_factor_delivery_method", "?"))
+        log.info("Sign-in: code requested (sent=%s, via %s)", value(sent),
+                 value(getattr(api, "two_factor_delivery_method", None), _DELIVERY))
         if not sent:
             # Apple usually shows the code on trusted devices on its own; ask for it anyway.
             api.use_existing_trusted_device_code()
@@ -283,7 +287,7 @@ def submit_code(api: Any, code: str) -> None:
     except ex.PyiCloudException as exc:
         log.warning("Sign-in: code check failed: %s", _describe(exc))
         raise LoginError(t("Code check failed: {error}", error=_describe(exc).split(" at ")[0])) from None
-    log.info("Sign-in: code accepted=%s", ok)
+    log.info("Sign-in: code accepted=%s", value(ok))
     if not ok:
         raise LoginError(t("That code isn't right. Try again."))
     if not api.is_trusted_session and not api.trust_session():

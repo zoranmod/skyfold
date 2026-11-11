@@ -55,6 +55,23 @@ def code(value: object) -> str:
     return text if re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", text) else "?"
 
 
+def value(v: object, allowed: tuple[str, ...] = ()) -> str:
+    """A value that came from Apple (a status, a flag, a field), made safe for the log: real
+    booleans and numbers as they are; text only when it is one of the words `allowed` for that
+    field (anything else is "invalid", however harmless it looks); a container is only counted."""
+    if v is None or isinstance(v, bool):
+        return str(v)
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, str):
+        return v if v in allowed else "invalid"
+    if isinstance(v, (list, tuple, set, frozenset, dict)):
+        return f"{type(v).__name__} of {len(v)}"
+    if isinstance(v, (bytes, bytearray)):
+        return f"{len(v)} bytes"
+    return type(v).__name__
+
+
 def brief(exc: BaseException) -> str:
     """One line for an activity entry or a log line. The message is used only when Skyfold wrote it
     (a Text) or when it is a plain Windows/database error about a file; that is decided by where the
