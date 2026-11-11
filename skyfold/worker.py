@@ -26,6 +26,7 @@ from .notes_engine import ICloudNotes, NotesState, NotesSyncer
 from . import extras
 from .engine import MARKER, TMP_PREFIX, Callbacks, Cancelled, Pending, SyncError, Syncer, now_iso
 from .i18n import t
+from .safelog import brief, describe
 from .remote import AuthRequired, ICloudRemote, RemoteUnavailable
 from .state import State
 
@@ -130,12 +131,15 @@ class SyncWorker(QObject):
         self._state_lock = threading.Lock()
         self._drive_thread: threading.Thread | None = None
         self._drive_want_full = False
+        self._closing = False  # set first thing on Quit: nothing is started after that
         self._last_silent_refresh = -1e9
         self._silent_refreshes: list[float] = []
 
     # lifecycle --------------------------------------------------------------
     @Slot()
     def start(self) -> None:
+        if self._closing_now():
+            return
         self.state = State(STATE_DB)
         self.drive_state = DriveState(STATE_DB)
         self.notes_state = NotesState(STATE_DB)
@@ -157,6 +161,8 @@ class SyncWorker(QObject):
         self._driveChange.connect(self.drive_debounce.start)
         self._authLost.connect(self._on_auth_lost, Qt.QueuedConnection)  # after the current cycle
         self._drivePendingSeen.connect(self._on_drive_pending, Qt.QueuedConnection)
+        if self._closing_now():
+            return  # Quit came while the database was being opened
         self._apply_timers()
         self._ensure_watchers()
         self._emit_stats()
@@ -235,6 +241,8 @@ class SyncWorker(QObject):
     # session ----------------------------------------------------------------
     @Slot()
     def restore_session(self) -> None:
+        if self._closing_now():
+            return
         if not self.settings.photos_dir_confirmed:
             self._set_state("setup", t("Choose where your photos should be kept before the first sync."))
             return
@@ -458,6 +466,8 @@ class SyncWorker(QObject):
     def _ensure_watchers(self) -> None:
         """(Re)start folder watchers once the folders exist (the first sync creates them; a
         drive can also disappear and come back), so this is checked again after every sync."""
+        if self._closing_now():
+            return
         wanted = {"photos": (self.settings.photos_dir, self._photos_hit)}
         if self.settings.drive_enabled:
             wanted["drive"] = (self.settings.drive_dir, self._drive_hit)
@@ -542,6 +552,8 @@ class SyncWorker(QObject):
     @Slot()
     @Slot(object)
     def _on_auth_lost(self, failed_api: Any = None) -> None:
+        if self._closing_now():
+            return
         """Apple rejected a request. Often that's a short-lived web token that just needs renewing
         (HTTP 421/450), not an expired sign-in: renew it quietly from the saved session first and
         only ask the user to sign in when that fails."""
@@ -573,6 +585,8 @@ class SyncWorker(QObject):
         self.notify.emit(t("Sign-in required"), t("Your iCloud session has expired. Click to sign in again."))
 
     def _request(self, full: bool, manual: bool, force_drive: bool = False) -> None:
+        if self._closing_now():
+            return
         if not self.settings.photos_dir_confirmed:
             self._set_state("setup", t("Choose where your photos should be kept before the first sync."))
             return
@@ -649,16 +663,17 @@ class SyncWorker(QObject):
             # Defer: we may be inside a sync cycle; renewing replaces the session objects.
             self._authLost.emit(failed_api)
             return False
-        text = str(exc)
+        text = brief(exc)  # Skyfold's own messages as they are; Apple's answers only by kind and code
         if isinstance(exc, (RemoteUnavailable, SyncError)):
             problems.append(f"{service}: {text}")
             self.log("error", f"{service}: {text}")
             return True
-        log.exception("Sync failed (%s)", service)
+        log.error("Sync failed (%s): %s", service, describe(exc, frames=8))
         from pyicloud.exceptions import PyiCloudConnectionException
 
+        raw = str(exc)
         if isinstance(exc, PyiCloudConnectionException) or "ConnectionError" in type(exc).__name__ \
-                or "Connection" in text or "timed out" in text:
+                or "Timeout" in type(exc).__name__ or "Connection" in raw or "timed out" in raw:
             self._set_state("offline", t("Can't reach iCloud. Will retry shortly."), svc)
             return False
         problems.append(t("Error: {error}", error=f"{service}: {text[:200]}"))
@@ -707,7 +722,7 @@ class SyncWorker(QObject):
             self._storage = extras.storage(self.api)
             self._storage_at = time.monotonic()
         except Exception as exc:  # noqa: BLE001 - purely informational
-            log.info("Storage info unavailable: %s", exc)
+            log.info("Storage info unavailable: %s", describe(exc))
 
     def _run_notes(self, full: bool, problems: list[str]) -> bool:
         assert self.notes is not None
@@ -835,7 +850,7 @@ class SyncWorker(QObject):
                     self.drive._trash_local(target)
                     self.log("trash", t("Drive: moved to the Recycle Bin (no longer synced): {name}", name=rel))
             except OSError as exc:
-                self.log("error", t("Couldn't delete {name}: {error}", name=rel, error=exc))
+                self.log("error", t("Couldn't delete {name}: {error}", name=rel, error=brief(exc)))
 
     @Slot()
     def clear_activity(self) -> None:

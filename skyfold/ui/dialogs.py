@@ -47,17 +47,30 @@ class _Signals(QObject):
     failed = Signal(str)
 
 
+_EPOCH = [0]  # raised on Quit: tasks made before that never start
+
+
+def stop_tasks() -> None:
+    """Quit: background tasks still waiting for a free thread are dropped when their turn comes."""
+    _EPOCH[0] += 1
+
+
 class _Task(QRunnable):
     def __init__(self, fn: Callable[[], Any]) -> None:
         super().__init__()
         self.fn = fn
         self.signals = _Signals()
+        self.epoch = _EPOCH[0]
 
     def run(self) -> None:
+        if self.epoch != _EPOCH[0]:
+            return  # the app is quitting
         try:
             result = self.fn()
         except Exception as exc:  # noqa: BLE001
-            self.signals.failed.emit(str(exc))
+            from ..safelog import brief
+
+            self.signals.failed.emit(brief(exc))
         else:
             self.signals.done.emit(result)
 

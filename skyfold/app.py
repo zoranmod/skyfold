@@ -95,6 +95,14 @@ class _RedactEmails(logging.Filter):
         return cls._LONG.sub(long, text)
 
     def filter(self, record: logging.LogRecord) -> bool:
+        from .safelog import brief, describe
+
+        # An error handed to the log is written as safelog describes it, never with Apple's text
+        if isinstance(record.args, tuple) and any(isinstance(a, BaseException) for a in record.args):
+            record.args = tuple(brief(a) if isinstance(a, BaseException) else a for a in record.args)
+        if record.exc_info and record.exc_info[1] is not None:  # no traceback text (messages are in it)
+            record.msg = f"{record.getMessage()} | {describe(record.exc_info[1], frames=8)}"
+            record.args, record.exc_info, record.exc_text = (), None, None
         text = record.getMessage()
         clean = self.clean(text)
         if clean != text:
@@ -482,6 +490,9 @@ class Controller(QObject):
 
     def quit(self) -> None:
         self.worker._closing = True  # first: a cycle still finishing must not start new work
+        from .ui.dialogs import stop_tasks
+
+        stop_tasks()  # background requests still waiting for a free thread (Find My…) never start
         self.worker.cancel()
         self.worker._stop_watchers()
         self.tray.hide()

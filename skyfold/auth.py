@@ -41,39 +41,14 @@ def make_current(api: Any) -> None:
             try:
                 session._save_session_data()
             except Exception as exc:  # noqa: BLE001
-                log.warning("Couldn't save the session: %s", exc)
+                log.warning("Couldn't save the session: %s", _describe(exc))
 
 
 def _describe(exc: BaseException) -> str:
-    """What went wrong, safe for the log and the window: kinds of errors, HTTP status codes and
-    where it happened, never message texts (Apple's answers can carry names, e-mail addresses,
-    phone numbers and sign-in values)."""
-    import traceback
-    from pathlib import Path as _P
+    """What went wrong, safe for the log and the window (see safelog)."""
+    from .safelog import describe
 
-    parts: list[str] = []
-    seen: set[int] = set()
-    e: BaseException | None = exc
-    while e is not None and id(e) not in seen and len(parts) < 6:
-        seen.add(id(e))
-        code = getattr(e, "code", None)
-        try:
-            code = int(str(code).strip()) if code is not None else None
-        except ValueError:
-            code = None  # Apple's own text codes are left out
-        http = getattr(getattr(e, "response", None), "status_code", None)
-        http = http if isinstance(http, int) else None
-        if code is None:
-            code, http = http, None
-        errno = getattr(e, "winerror", None) or getattr(e, "errno", None)
-        extra = [f"HTTP {http}"] if http is not None and http != code else []
-        extra += [f"errno {errno}"] if isinstance(errno, int) else []
-        label = type(e).__name__ + (f" ({code})" if code is not None else "")
-        parts.append(label + (f" [{', '.join(extra)}]" if extra else ""))
-        e = e.__cause__ or e.__context__
-    where = traceback.extract_tb(exc.__traceback__)[-3:] if exc.__traceback__ else []
-    at = ", ".join(f"{_P(f.filename).name}:{f.lineno}" for f in where)
-    return " <- ".join(parts) + (f" at {at}" if at else "")
+    return describe(exc)
 
 
 def _server_code(code: Any) -> bool:
@@ -195,7 +170,7 @@ def restore(apple_id: str) -> Any | None:
                               refresh_interval=None)  # no background Find My polling
         api.authenticate()
     except (PyiCloudConnectionException, RequestsConnectionError, Timeout) as exc:
-        raise Offline(str(exc)) from exc
+        raise Offline(_describe(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - anything else means "sign in again"
         # pyicloud falls back to a password login when validating the token fails, and a 5xx there
         # then ends as "No password set": an outage seen on the way is still an outage

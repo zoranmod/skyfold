@@ -26,6 +26,7 @@ from typing import Any, Protocol
 
 from .engine import Callbacks, Cancelled, SyncError, _is_link, inside_root, now_iso
 from .i18n import t
+from .safelog import brief
 from .remote import AuthRequired, RemoteUnavailable, _translate
 
 log = logging.getLogger(__name__)
@@ -425,11 +426,9 @@ def upgrade_sketches(page: Path, fallbacks: dict[str, str], download) -> int:
             del reader
             preview_w = QImageReader(str(current)).size().width()
             if not ok or size.width() <= preview_w:
-                with open(new, "rb") as fh:
-                    head = fh.read(16)
-                log.info("Drawing in %s: full image not used (readable=%s, %sx%s, format=%r, %d bytes, starts %r; "
+                log.info("Drawing in %s: full image not used (readable=%s, %sx%s, format=%r, %d bytes; "
                          "preview %s px)", page.name, ok, size.width(), size.height(), fmt, new.stat().st_size,
-                         head, preview_w)
+                         preview_w)
                 new.unlink(missing_ok=True)
                 return tag
             ext = ".jpg" if fmt == "jpeg" else "." + fmt
@@ -719,7 +718,7 @@ class NotesSyncer:
                     continue
                 self.state.set(key, modified or "?")
                 res.errors += 1
-                self.cb.activity("error", t("Couldn't export note ({name}): {error}", name=n.title or n.id, error=exc))
+                self.cb.activity("error", t("Couldn't export note ({name}): {error}", name=n.title or n.id, error=brief(exc)))
                 continue
             self.state.set(f"failed:{n.id}", None)
             if old and old[1] and old[1].lower() != rel.lower() and (self.root / old[1]).exists():
@@ -896,7 +895,7 @@ class NotesSyncer:
             return True
         except OSError as exc:
             res.errors += 1
-            self.cb.activity("error", t("Couldn't delete {name}: {error}", name=row[1], error=exc))
+            self.cb.activity("error", t("Couldn't delete {name}: {error}", name=row[1], error=brief(exc)))
             return False
 
     # index page ------------------------------------------------------------------------

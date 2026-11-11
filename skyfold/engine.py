@@ -20,6 +20,7 @@ from pathlib import Path, PurePosixPath
 
 from .config import Settings
 from .i18n import t
+from .safelog import brief
 from .remote import AuthRequired, Remote, RemoteAsset, RemoteResource, RemoteUnavailable
 from .state import FileRow, State
 
@@ -475,7 +476,7 @@ class Syncer:
                         raise
                     except Exception as exc:  # noqa: BLE001
                         result.errors += 1
-                        self.cb.activity("error", t("Couldn't delete in iCloud ({name}): {error}", name=remote_assets[a].filename, error=exc))
+                        self.cb.activity("error", t("Couldn't delete in iCloud ({name}): {error}", name=remote_assets[a].filename, error=brief(exc)))
                         continue
                     # remove the leftover Live Photo video, if any
                     for r in rows_by_asset[a]:
@@ -516,7 +517,7 @@ class Syncer:
                             except OSError as exc:
                                 ok = False
                                 result.errors += 1
-                                self.cb.activity("error", t("Couldn't delete {name}: {error}", name=r.rel_path, error=exc))
+                                self.cb.activity("error", t("Couldn't delete {name}: {error}", name=r.rel_path, error=brief(exc)))
                     if ok:
                         self.state.remove_asset(a)
                         result.deleted_local += 1
@@ -637,7 +638,7 @@ class Syncer:
                     result.errors += 1
                     parked += 1
                     self.state.set(f"failed:{a.id}#{res.key}", now_iso())  # retried on the next full read
-                    self.cb.activity("error", t("Download failed ({name}): {error}", name=res.filename, error=exc))
+                    self.cb.activity("error", t("Download failed ({name}): {error}", name=res.filename, error=brief(exc)))
             if result.downloaded:
                 text = (t("Downloaded 1 new file") if result.downloaded == 1
                         else t("Downloaded {n} new files", n=result.downloaded))
@@ -654,7 +655,7 @@ class Syncer:
             raise
         except Exception as exc:  # noqa: BLE001 - albums are a convenience; never fail the sync
             log.warning("Album folders: %s", exc)
-            self.cb.activity("error", t("Album folders couldn't be updated: {error}", error=exc))
+            self.cb.activity("error", t("Album folders couldn't be updated: {error}", error=brief(exc)))
         return result
 
     # album folders ------------------------------------------------------------------------

@@ -33,6 +33,7 @@ from pathlib import Path, PurePosixPath
 from .drive_remote import WORKERS, DriveItem, DriveRemote, MacPackage, is_transient
 from .engine import Callbacks, Cancelled, SyncError, check_free_space, inside_root, now_iso, transfer_text, THROTTLE
 from .i18n import t
+from .safelog import brief
 from .remote import AuthRequired, RemoteUnavailable
 
 log = logging.getLogger(__name__)
@@ -261,7 +262,7 @@ class DriveSyncer:
         try:
             text = marker.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
-            raise SyncError(t("Couldn't read the Drive folder's sync marker: {error}", error=exc)) from exc
+            raise SyncError(t("Couldn't read the Drive folder's sync marker: {error}", error=brief(exc))) from exc
         owner = next((ln.split(":", 1)[1].strip() for ln in text.splitlines() if ln.startswith("account:")), None)
         if owner is None and not has_base:
             # made by an older version, and this sync database never synced it (e.g. another Apple ID
@@ -287,7 +288,7 @@ class DriveSyncer:
         try:
             text = marker.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
-            raise SyncError(t("Couldn't read the Drive folder's sync marker: {error}", error=exc)) from exc
+            raise SyncError(t("Couldn't read the Drive folder's sync marker: {error}", error=brief(exc))) from exc
         owner = next((ln.split(":", 1)[1].strip() for ln in text.splitlines() if ln.startswith("account:")), None)
         if owner is None:
             raise SyncError(t("This Drive folder was used before and it isn't clear by which Apple ID. Choose a "
@@ -624,8 +625,8 @@ class DriveSyncer:
                 else:
                     remote_changed = r.etag != b.etag
                 local_changed = (lo.size, round(lo.mtime, 2)) != (b.lsize, round(b.lmtime or 0, 2))
-                if remote_changed and not local_changed and b.etag is not None and r.size == b.size                         and r.mtime is not None and b.lmtime is not None and abs(r.mtime - b.lmtime) < 1.0:
-                    # only iCloud's version tag moved (opened on a phone, folder renamed): content as before
+                if remote_changed and not local_changed and _tag_only(b, r):
+                    # only iCloud's version tag moved (renamed/moved, opened on a phone): content as before
                     self.state.put(Base(path, False, r.etag, r.size, b.lmtime, b.lsize, False))
                     continue
                 if remote_changed and not local_changed and same and r.mtime is not None and r.size == b.size:
@@ -644,7 +645,7 @@ class DriveSyncer:
                 elif local_changed and settled:
                     uploads.append(path)
             elif r and not lo:
-                if b and not b.pending and b.etag is not None and r.etag != b.etag:
+                if b and not b.pending and b.etag is not None and r.etag != b.etag and not _tag_only(b, r):
                     self.state.drop(path)
                     downloads.append(r)  # deleted on PC, but edited in iCloud since: keep the edit
                 elif b and not b.pending:
@@ -703,7 +704,7 @@ class DriveSyncer:
                 hide_like_mac(self._abs(r.path))
             except OSError as exc:
                 res.errors += 1
-                self.cb.activity("error", t("Couldn't create folder ({name}): {error}", name=r.path, error=exc))
+                self.cb.activity("error", t("Couldn't create folder ({name}): {error}", name=r.path, error=brief(exc)))
                 continue
             self.state.put(Base(r.path, True, r.etag, None, None, None, False))
 
@@ -758,7 +759,7 @@ class DriveSyncer:
                 raise
             except Exception as exc:  # noqa: BLE001
                 res.errors += 1
-                self.cb.activity("error", t("Couldn't create folder in iCloud ({name}): {error}", name=path, error=exc))
+                self.cb.activity("error", t("Couldn't create folder in iCloud ({name}): {error}", name=path, error=brief(exc)))
 
         downloads = self._without_case_twins(downloads, local)
         self._downloads(downloads, base, res)
@@ -896,7 +897,7 @@ class DriveSyncer:
                 out.append(p)  # nothing inside listed (e.g. a quick pass): judged by its files' rows
                 continue
             changed = [q for q in inside if known.get(q) is None
-                       or known[q].etag not in (None, remote[q].etag)]
+                       or (known[q].etag not in (None, remote[q].etag) and not _tag_only(known[q], remote[q]))]
             if not changed:
                 out.append(p)
                 continue
@@ -923,7 +924,7 @@ class DriveSyncer:
                 continue  # another program saved a file there just now: pick another name
             except OSError as exc:
                 res.errors += 1
-                self.cb.activity("error", t("Couldn't resolve conflict ({name}): {error}", name=path, error=exc))
+                self.cb.activity("error", t("Couldn't resolve conflict ({name}): {error}", name=path, error=brief(exc)))
                 return
         else:
             res.errors += 1
@@ -1087,14 +1088,9 @@ class DriveSyncer:
         # pass finds the item by its id and the database follows where it really is.
         ident = item.docwsid or item.drivewsid
         rows = self.state.all()
-        entry = {"old": old, "new": new, "at": old, "size": item.size, "mtime": item.mtime,
+        entry = {"old": old, "new": new, "at": old,
                  "rows": [[p[len(old):], b.is_dir, b.etag, b.size, b.lmtime, b.lsize]
                           for p, b in rows.items() if p == old or p.startswith(old + "/")]}
-        prior = self._journal().get(ident)
-        if prior is not None:
-            # A retry of a move that was cut short: iCloud's size/time from when it first started stay
-            # the evidence (what is in iCloud now may be an edit the PC hasn't got yet).
-            entry["size"], entry["mtime"] = prior.get("size"), prior.get("mtime")
         with self.state.transaction():
             self._journal_put(ident, entry)
         here = old
@@ -1109,7 +1105,7 @@ class DriveSyncer:
             except Exception as exc:  # noqa: BLE001
                 unknown = isinstance(exc, (AuthRequired, RemoteUnavailable)) or is_transient(exc)
                 log.warning("%s in iCloud failed (%s -> %s): %s", "Move" if step == "move" else "Rename",
-                            here, new, exc)
+                            here, new, brief(exc))
                 if n == 0 and not unknown:
                     with self.state.transaction():
                         self._journal_put(ident, None)  # refused: nothing changed in iCloud
@@ -1155,12 +1151,13 @@ class DriveSyncer:
             j[ident] = entry
         self.state.set_meta(PENDING_MOVE, json.dumps(j) if j else None)
 
-    def _move_rows(self, src: str, dst: str, top_etag: str | None, ident: str, entry: dict | None,
-                   snapshot: dict | None = None, remote: dict[str, DriveItem] | None = None,
-                   seen: dict | None = None) -> None:
+    def _move_rows(self, src: str, dst: str, _unused: object, ident: str, entry: dict | None,
+                   snapshot: dict | None = None, remote: dict[str, DriveItem] | None = None) -> None:
         """Let the database rows of `src` (and below) follow the item to `dst`, and update its
         journal entry, in one transaction. Rows that are missing are rebuilt from the snapshot taken
-        when the move started. top_etag: iCloud's version, only when it is known to be the same file."""
+        when the move started. Every row keeps the version it had (the database says what this PC
+        has); iCloud's new tag is taken only under the one rule for that, _tag_only: size and
+        modified time are those of the synced version, so the rename/move is all that happened."""
         with self.state.transaction():
             rows = self.state.all()
             mine = {p: r for p, r in rows.items() if p == src or p.startswith(src + "/")}
@@ -1174,10 +1171,7 @@ class DriveSyncer:
                 if r.is_dir:
                     self.state.put(Base(q, True, None, None, None, None, False))
                 else:
-                    etag = (top_etag or r.etag) if p == src else r.etag
-                    known = (seen or {}).get(q[len(dst):])
-                    if remote is not None and q in remote and known == [remote[q].etag, remote[q].docwsid]:
-                        etag = remote[q].etag  # the version iCloud had when the rename was decided
+                    etag = remote[q].etag if remote is not None and _tag_only(r, remote.get(q)) else r.etag
                     self.state.put(Base(q, False, etag, r.size, r.lmtime, r.lsize, False))
             self._journal_put(ident, entry)
 
@@ -1213,7 +1207,7 @@ class DriveSyncer:
                 # (to iCloud, with the usual approval); saved over since (an editor's save gives a new
                 # file id) -> an edit, uploaded; something new under the old name -> a new file.
                 log.info("Drive: an interrupted rename on this PC is picked up")
-                self._move_rows(old, new, None, ident, None, remote=remote, seen=e.get("seen"))
+                self._move_rows(old, new, None, ident, None, remote=remote)
                 continue
             at = e.get("at") or old
             if "rows" not in e:  # written by an earlier build: the database still has the rows
@@ -1230,14 +1224,10 @@ class DriveSyncer:
                 dst = new if os.path.lexists(self._abs(new)) else at
                 self._move_rows(at, dst, None, ident, None, snapshot=e)
                 continue
-            # iCloud's version is taken over only when provably the same file (size and modified time
-            # as when the move started); otherwise the old version stays, so an edit made in iCloud
-            # meanwhile shows as a change and is downloaded
-            same = hit.is_dir or (hit.size == e.get("size") and hit.mtime == e.get("mtime"))
             log.info("Drive: an interrupted rename/move in iCloud is picked up where iCloud has it")
             finish = hit.path != new and self._still_moved_copy(new, at, e)
-            self._move_rows(at, hit.path, hit.etag if same else None, ident,
-                            {**e, "at": hit.path} if finish else None, snapshot=e)
+            self._move_rows(at, hit.path, None, ident, {**e, "at": hit.path} if finish else None,
+                            snapshot=e, remote=remote)
             if not finish:
                 continue
             moved = self._remote_move(remote, hit.path, new, res)  # keeps its own journal entry
@@ -1287,11 +1277,8 @@ class DriveSyncer:
             fid = [st.st_dev, st.st_ino] if st.st_ino else None  # 0: this file system has none
         except OSError:
             fid = None
-        # iCloud's versions (and item ids) at the new name now: only these may later be taken as
-        # "what this PC has" -- anything changed or replaced in iCloud after this stays a change
-        seen = {p[len(new):]: [it.etag, it.docwsid] for p, it in remote.items() if p == new or p.startswith(new + "/")}
         with self.state.transaction():
-            self._journal_put(self._pc_key, {"kind": "pc", "old": old, "new": new, "fid": fid, "seen": seen})
+            self._journal_put(self._pc_key, {"kind": "pc", "old": old, "new": new, "fid": fid})
         if self._local_move(old, new, res):
             return True
         with self.state.transaction():
@@ -1307,8 +1294,8 @@ class DriveSyncer:
                 return None
             st = os.lstat(p)
             return [st.st_dev, st.st_ino]
-        except FileNotFoundError:
-            return None
+        except (FileNotFoundError, NotADirectoryError):
+            return None  # (a parent that is an ordinary file now: nothing can be below it)
         except OSError:
             return False
 
@@ -1465,7 +1452,7 @@ class DriveSyncer:
                         raise
                     except Exception as exc:  # noqa: BLE001
                         res.errors += 1
-                        self.cb.activity("error", t("Couldn't delete in iCloud ({name}): {error}", name=p, error=exc))
+                        self.cb.activity("error", t("Couldn't delete in iCloud ({name}): {error}", name=p, error=brief(exc)))
                         continue
                     self.state.drop(p)
                     self._forget_cached(p)
@@ -1501,7 +1488,7 @@ class DriveSyncer:
                             self._trash_local(target)
                     except OSError as exc:
                         res.errors += 1
-                        self.cb.activity("error", t("Couldn't delete {name}: {error}", name=p, error=exc))
+                        self.cb.activity("error", t("Couldn't delete {name}: {error}", name=p, error=brief(exc)))
                         continue
                     self.state.drop(p)
                     res.deleted_local += 1
@@ -1623,7 +1610,7 @@ class DriveSyncer:
                         continue
                     except Exception as exc:  # noqa: BLE001
                         res.errors += 1
-                        self.cb.activity("error", t("Download failed ({name}): {error}", name=item.path, error=exc))
+                        self.cb.activity("error", t("Download failed ({name}): {error}", name=item.path, error=brief(exc)))
                         continue
                     self.state.put(Base(item.path, False, item.etag, item.size, lmtime, lsize, False))
                     res.downloaded += 1
@@ -1725,7 +1712,7 @@ class DriveSyncer:
                 raise
             except Exception as exc:  # noqa: BLE001
                 res.errors += 1
-                self.cb.activity("error", t("Upload failed ({name}): {error}", name=path, error=exc))
+                self.cb.activity("error", t("Upload failed ({name}): {error}", name=path, error=brief(exc)))
 
 
 _BAD_CHARS = set('<>:"|?*\\') | {chr(c) for c in range(32)}
@@ -1865,6 +1852,17 @@ def _aside_original(name: str) -> str:
     rest = name[len(ASIDE_PREFIX):]
     m = re.match(r"(?:\d+-\d+-|[0-9a-f]{8}-)(.+)", rest)
     return m.group(1) if m else (rest or "file")
+
+
+def _tag_only(b: Base | None, r: DriveItem | None) -> bool:
+    """iCloud shows another version tag than the one synced, but size and modified time are those
+    of the synced version: only the tag moved (the item was renamed/moved, or opened on a phone),
+    the content is what this PC got. The ONE place where a new iCloud tag is accepted without
+    downloading; everything else that differs is an edit made in iCloud."""
+    return bool(b is not None and r is not None and not b.is_dir and not r.is_dir
+                and b.etag is not None and r.etag != b.etag
+                and r.size == b.size and r.mtime is not None and b.lmtime is not None
+                and abs(r.mtime - b.lmtime) < 1.0)
 
 
 def _overlaps(a: str, b: str) -> bool:
