@@ -201,8 +201,8 @@ BS: dict[str, str] = {
         "Folder {name} nedostaje na ovom PC-u, preuzima se ponovo (u iCloudu se ne briše).",
     "Couldn't create folder ({name}): {error}": "Folder se ne može napraviti ({name}): {error}",
     "Deleted in iCloud, but changed on this PC: kept {name}": "Obrisano u iCloudu, ali izmijenjeno na ovom PC-u: zadržano {name}",
-    "Drive: can't tell whether {old} was renamed to {new} on this PC; both are left alone":
-        "Drive: ne može se utvrditi da li je {old} na ovom PC-u preimenovan u {new}; oba su ostavljena kako jesu",
+    "Drive: can't read {name} on this PC right now; it is left alone and checked again next time":
+        "Drive: {name} se trenutno ne može pročitati na ovom PC-u; ostavljeno je kako jeste i provjerava se ponovo sljedeći put",
     "Deleted on this PC, but changed in iCloud: kept {name}": "Obrisano na ovom PC-u, ali izmijenjeno u iCloudu: zadržano {name}",
     "Waiting for sign-in": "Čeka prijavu",
     "Not set up yet": "Još nije podešeno",

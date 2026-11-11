@@ -481,6 +481,7 @@ class Controller(QObject):
         self._show_dialog("pending", dlg)
 
     def quit(self) -> None:
+        self.worker._closing = True  # first: a cycle still finishing must not start new work
         self.worker.cancel()
         self.worker._stop_watchers()
         self.tray.hide()

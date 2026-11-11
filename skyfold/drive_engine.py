@@ -1156,7 +1156,7 @@ class DriveSyncer:
         self.state.set_meta(PENDING_MOVE, json.dumps(j) if j else None)
 
     def _move_rows(self, src: str, dst: str, top_etag: str | None, ident: str, entry: dict | None,
-                   snapshot: dict | None = None) -> None:
+                   snapshot: dict | None = None, remote: dict[str, DriveItem] | None = None) -> None:
         """Let the database rows of `src` (and below) follow the item to `dst`, and update its
         journal entry, in one transaction. Rows that are missing are rebuilt from the snapshot taken
         when the move started. top_etag: iCloud's version, only when it is known to be the same file."""
@@ -1174,6 +1174,8 @@ class DriveSyncer:
                     self.state.put(Base(q, True, None, None, None, None, False))
                 else:
                     etag = (top_etag or r.etag) if p == src else r.etag
+                    if remote is not None and q in remote and remote[q].size == r.size:
+                        etag = remote[q].etag  # renamed in iCloud (new version tag), same file
                     self.state.put(Base(q, False, etag, r.size, r.lmtime, r.lsize, False))
             self._journal_put(ident, entry)
 
@@ -1185,23 +1187,25 @@ class DriveSyncer:
         for ident, e in list(self._journal().items()):
             old, new = e["old"], e["new"]
             if e.get("kind") == "pc":  # renamed on this PC to follow iCloud: did the rename happen?
-                now_new, now_old, fid = self._exact_id(new), self._exact_id(old), e.get("fid")
-                if now_new is False or now_old is False:
-                    continue  # couldn't look: kept (and held below) until it can be decided
-                if now_new is not None and (now_new == fid if fid else now_old is None):
-                    # the moved item itself is under the new name (whatever was made at the old one since)
-                    log.info("Drive: an interrupted rename on this PC is picked up")
-                    self._move_rows(old, new, None, ident, None)
-                elif now_old is not None and (now_old == fid if fid else now_new is None):
+                now_old, now_new = self._exact_id(old), self._exact_id(new)
+                fid = e.get("fid")
+                if not isinstance(fid, list) or not fid[-1]:
+                    fid = None  # recorded by an earlier build, or no file ids on this file system
+                if now_old is False or now_new is False:  # couldn't look: kept (held below), shown
+                    res.errors += 1
+                    self.cb.activity("error", t("Drive: can't read {name} on this PC right now; it is left "
+                                                "alone and checked again next time", name=new))
+                    continue
+                if now_old is not None and (now_old == fid if fid else now_new is None):
                     with self.state.transaction():  # the rename never happened
                         self._journal_put(ident, None)
-                elif now_new is None and now_old is None:
-                    with self.state.transaction():  # both gone: an ordinary deletion on this PC
-                        self._journal_put(ident, None)
-                else:  # can't tell which is the synced item: held, nothing is deleted or uploaded there
-                    res.errors += 1
-                    self.cb.activity("error", t("Drive: can't tell whether {old} was renamed to {new} on this "
-                                                "PC; both are left alone", old=old, new=new))
+                    continue
+                # Otherwise the rename happened. The database follows iCloud's item to the new name
+                # and the usual rules take it from there: deleted there since -> a deletion on this PC
+                # (to iCloud, with the usual approval); saved over since (an editor's save gives a new
+                # file id) -> an edit, uploaded; something new under the old name -> a new file.
+                log.info("Drive: an interrupted rename on this PC is picked up")
+                self._move_rows(old, new, None, ident, None, remote=remote)
                 continue
             at = e.get("at") or old
             if "rows" not in e:  # written by an earlier build: the database still has the rows
@@ -1271,7 +1275,8 @@ class DriveSyncer:
         r = remote[new]
         self._pc_key = "pc:" + (r.docwsid or r.drivewsid or new)
         try:
-            fid = os.lstat(self._abs(old)).st_ino  # NTFS file id: stays the same through a rename
+            st = os.lstat(self._abs(old))  # file id (with its volume): stays the same through a rename
+            fid = [st.st_dev, st.st_ino] if st.st_ino else None  # 0: this file system has none
         except OSError:
             fid = None
         with self.state.transaction():
@@ -1282,14 +1287,15 @@ class DriveSyncer:
             self._journal_put(self._pc_key, None)
         return False
 
-    def _exact_id(self, rel: str) -> int | None | bool:
-        """The file id of what is under exactly this name (Windows names ignore letter case);
+    def _exact_id(self, rel: str) -> list | None | bool:
+        """[volume, file id] of what is under exactly this name (Windows names ignore letter case);
         None: nothing there; False: couldn't be read (unknown)."""
         p = self._abs(rel)
         try:
             if p.name not in os.listdir(p.parent):
                 return None
-            return os.lstat(p).st_ino
+            st = os.lstat(p)
+            return [st.st_dev, st.st_ino]
         except FileNotFoundError:
             return None
         except OSError:

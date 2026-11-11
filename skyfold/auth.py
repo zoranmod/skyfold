@@ -44,6 +44,32 @@ def make_current(api: Any) -> None:
                 log.warning("Couldn't save the session: %s", exc)
 
 
+def _describe(exc: BaseException) -> str:
+    """What went wrong, safe for the log and the window: kinds of errors, HTTP status codes and
+    where it happened, never message texts (Apple's answers can carry names, e-mail addresses,
+    phone numbers and sign-in values)."""
+    import traceback
+    from pathlib import Path as _P
+
+    parts: list[str] = []
+    seen: set[int] = set()
+    e: BaseException | None = exc
+    while e is not None and id(e) not in seen and len(parts) < 6:
+        seen.add(id(e))
+        code = getattr(e, "code", None)
+        if code is None:
+            code = getattr(getattr(e, "response", None), "status_code", None)
+        try:
+            code = int(str(code).strip()) if code is not None else None
+        except ValueError:
+            code = None
+        parts.append(type(e).__name__ + (f" ({code})" if code is not None else ""))
+        e = e.__cause__ or e.__context__
+    where = traceback.extract_tb(exc.__traceback__)[-3:] if exc.__traceback__ else []
+    at = ", ".join(f"{_P(f.filename).name}:{f.lineno}" for f in where)
+    return " <- ".join(parts) + (f" at {at}" if at else "")
+
+
 def _server_code(code: Any) -> bool:
     """429 or 5xx, also when Apple sends the number as text ("503")."""
     try:
@@ -168,9 +194,10 @@ def restore(apple_id: str) -> Any | None:
         # pyicloud falls back to a password login when validating the token fails, and a 5xx there
         # then ends as "No password set": an outage seen on the way is still an outage
         if _server_trouble(exc) or _had_trouble(api):
-            log.warning("Session restore: Apple's servers answered with an error; trying again later")
-            raise Offline(str(exc)) from exc
-        log.warning("Session restore failed (%s): %s", type(exc).__name__, exc)
+            log.warning("Session restore: Apple's servers answered with an error (%s); trying again later",
+                        _describe(exc))
+            raise Offline(_describe(exc)) from exc
+        log.warning("Session restore failed: %s", _describe(exc))
         return None
     if (api.requires_2fa or api.requires_2sa) and _had_trouble(api):
         log.warning("Session restore: Apple's servers had trouble; trying again later")
@@ -226,16 +253,16 @@ def start_login(apple_id: str, password: str) -> LoginStep:
         raise LoginError(t("This Apple account is locked. Unlock it at iforgot.apple.com.")) from exc
     except ex.PyiCloudFailedLoginException as exc:
         if _server_trouble(exc):  # an Apple outage, not a wrong password
-            log.warning("Sign-in: Apple's servers failed: %s", exc)
+            log.warning("Sign-in: Apple's servers failed: %s", _describe(exc))
             raise LoginError(t("Can't reach Apple's servers. Check your internet connection.")) from exc
-        log.warning("Sign-in rejected: %s", exc)
+        log.warning("Sign-in rejected: %s", _describe(exc))
         raise LoginError(t("Wrong Apple ID or password.")) from exc
     except ex.PyiCloudConnectionException as exc:
-        log.warning("Sign-in: Apple unreachable: %s", exc)
+        log.warning("Sign-in: Apple unreachable: %s", _describe(exc))
         raise LoginError(t("Can't reach Apple's servers. Check your internet connection.")) from exc
     except Exception as exc:  # noqa: BLE001
-        log.exception("Sign-in failed")
-        raise LoginError(t("Sign-in failed: {error}", error=exc)) from exc
+        log.warning("Sign-in failed: %s", _describe(exc))  # no traceback text: Apple's page could be in it
+        raise LoginError(t("Sign-in failed: {error}", error=_describe(exc).split(" at ")[0])) from None
 
     log.info("Sign-in: password accepted (2FA required=%s, 2SA=%s, trusted=%s)",
              api.requires_2fa, api.requires_2sa, getattr(api, "is_trusted_session", "?"))
@@ -259,7 +286,7 @@ def start_login(apple_id: str, password: str) -> LoginStep:
         elif getattr(api, "two_factor_delivery_method", "") == "sms":
             notice = t("We sent a code by SMS to your phone number. Enter it below.")
     except Exception as exc:  # noqa: BLE001 - the code may still arrive on a trusted device
-        log.warning("Sign-in: requesting the code failed (%s): %s", type(exc).__name__, exc)
+        log.warning("Sign-in: requesting the code failed: %s", _describe(exc))
         try:
             api.use_existing_trusted_device_code()
         except Exception:  # noqa: BLE001
@@ -273,8 +300,8 @@ def submit_code(api: Any, code: str) -> None:
     try:
         ok = api.validate_2fa_code(code.strip().replace(" ", ""))
     except ex.PyiCloudException as exc:
-        log.warning("Sign-in: code check failed: %s", exc)
-        raise LoginError(t("Code check failed: {error}", error=exc)) from exc
+        log.warning("Sign-in: code check failed: %s", _describe(exc))
+        raise LoginError(t("Code check failed: {error}", error=_describe(exc).split(" at ")[0])) from None
     log.info("Sign-in: code accepted=%s", ok)
     if not ok:
         raise LoginError(t("That code isn't right. Try again."))

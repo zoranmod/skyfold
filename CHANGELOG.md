@@ -97,6 +97,10 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - Session restore: an Apple server error seen while the saved sign-in is checked keeps it an outage (Skyfold retries) instead of ending as "No password set" and asking to sign in; error codes sent as text ("503") count too.
   - Stop and Quit: no further iCloud Drive pass starts after Stop or Quit; the next sync request starts it again.
 - Autostart: the Windows Run entry is written only when it changes (e.g. the app was moved), not on every start.
+- Twelfth follow-up review (tests in tests/test_review14_codex_probes.py):
+  - A rename from iCloud that was cut short on this PC is settled by simple rules: only when the original item is still under the old name did the rename not happen; otherwise the database follows to the new name and the usual rules apply (deleted on this PC since -> deleted in iCloud with the usual approval; saved over by an editor -> uploaded). A file that can't be read for a moment is shown as an error and checked again. File ids are stored with their volume, and file systems without ids are handled.
+  - Sign-in: errors are logged and shown only as error kinds, HTTP status codes and code locations, never Apple's page text (which can carry names, e-mail addresses or sign-in values).
+  - Quit: the worker is marked as closing first, so a sync cycle still finishing can't start new iCloud Drive work.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

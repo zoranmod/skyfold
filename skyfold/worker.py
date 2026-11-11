@@ -496,6 +496,8 @@ class SyncWorker(QObject):
     # Drive runs in its own thread so a long read (a big Drive takes ~10 min) never holds up Photos.
     def _kick_drive(self, full: bool) -> None:
         with self._drive_lock:
+            if getattr(self, "_closing", False):
+                return  # quitting: nothing new starts
             self._drive_stopped = False  # a new request to sync
             if full:
                 self._drive_want_full = True
