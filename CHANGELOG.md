@@ -125,6 +125,11 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - Photos: a file with the same name and size elsewhere in the folder is taken as the moved photo only when its content equals iCloud's copy. If it differs, the photo is forgotten on this PC only; nothing is deleted in iCloud and the other file is left alone.
   - Quit while an upload is being prepared: nothing is trashed or uploaded any more.
   - Disk space: downloads that only compare, or replace a file of the same size, no longer need free space for the whole batch - only for what really grows plus the files in flight.
+- Seventeenth follow-up review (tests in tests/test_review19_codex_probes.py):
+  - Photos moved inside the folder: every file with the same name and size is compared with iCloud's copy (not just the first one found), each file is matched to one photo only, and a download that didn't arrive completely decides nothing. When no look-alike is the photo, Skyfold only stops tracking it on this PC: nothing is deleted in iCloud and no file (e.g. its Live Photo video) is touched.
+  - iCloud Drive: right before an approved deletion is carried out, the PC file's content is checked again (a file edited after the question, even with the same size and time, stays).
+  - Quit or Pause: no further change in iCloud starts - not the next new folder, and not the second step of a move (it stays written down and is finished next time).
+  - Disk space for downloads running at the same time is reserved in one place, and the free space is read afresh for each file (a replaced version stays on the disk, in the Recycle Bin).
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

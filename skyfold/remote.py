@@ -283,6 +283,8 @@ class ICloudRemote:
                 else:
                     resp = self.photos.session.get(resource.url, stream=True, timeout=120)
                     resp.raise_for_status()
+                    if resp.status_code == 206:  # only a part of the file: never taken for the file
+                        raise ValueError("partial content")
                     for chunk in resp.iter_content(1 << 20):
                         fh.write(chunk)
                         on_bytes(len(chunk))

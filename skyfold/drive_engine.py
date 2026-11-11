@@ -845,6 +845,7 @@ class DriveSyncer:
             parent = remote.get(str(PurePosixPath(path).parent) if "/" in path else "")
             if parent is None:
                 continue  # parent is being created this round; next run creates this one
+            self._check_cancel()  # (before every change in iCloud)
             try:
                 self.remote.mkdir(parent, PurePosixPath(path).name)
                 self.state.put(Base(path, True, None, None, None, None, False))
@@ -1200,6 +1201,14 @@ class DriveSyncer:
             self._journal_put(ident, entry)
         here = old
         for n, step in enumerate(steps):
+            if self._stopped():  # quitting/paused between the steps: nothing more is changed in iCloud
+                if n == 0:
+                    with self.state.transaction():
+                        self._journal_put(ident, None)  # nothing was changed
+                else:  # half done: stays written down with where it is now, finished next time
+                    self._move_rows(old, here, None, ident, {**entry, "at": here})
+                    self._forget_cached(old)
+                raise Cancelled()
             try:
                 if step == "move":
                     got = self.remote.move(item, parent)
@@ -1580,12 +1589,10 @@ class DriveSyncer:
                         self.state.drop(p)  # file and folder swapped since the question: not what was approved
                         continue
                     if b is not None and not b.is_dir and target.is_file():
-                        try:
-                            st = target.stat()
-                            if (st.st_size, round(st.st_mtime, 2)) != (b.lsize, round(b.lmtime or 0, 2)):
-                                self.state.drop(p)  # edited on this PC meanwhile: keep it (it goes up)
-                                continue
-                        except OSError:
+                        # still the synced content? (size, time and - when known - the fingerprint; time
+                        # has passed since it was decided, and since the user was asked)
+                        if not self._pc_has_synced_content(b, target):
+                            self.state.drop(p)  # edited on this PC meanwhile, or unreadable: keep it (it goes up)
                             continue
                     try:
                         if target.exists():
@@ -1627,6 +1634,8 @@ class DriveSyncer:
                 self._recycle_previous(p, rel)
 
         abort = threading.Event()  # one download failed for good: the others stop (not a user stop)
+        space_lock = threading.Lock()
+        in_flight = [0]  # bytes of downloads started and not finished: their space is spoken for
         kept_both: list[str] = []  # the PC had another version: both kept
 
         def on_bytes(k: int) -> None:
@@ -1646,7 +1655,6 @@ class DriveSyncer:
             target = self._abs(item.path)
             target.parent.mkdir(parents=True, exist_ok=True)
             self._check_inside(target.parent)
-            check_free_space(self.root, item.size or 0)  # again, right before this file takes its space
             fd, tmp = tempfile.mkstemp(prefix=TMP_PREFIX, dir=target.parent)
             os.close(fd)
             tmp_path = Path(tmp)
@@ -1707,6 +1715,20 @@ class DriveSyncer:
                 if tmp_path.exists():
                     tmp_path.unlink(missing_ok=True)
 
+        def fetch_reserved(item: DriveItem) -> tuple[Path, int, float, str, bool]:
+            """fetch(), with this file's space set aside first. Each download is checked against the
+            free space left after all downloads still running (a replaced version stays on the disk,
+            in the Recycle Bin, so the free space is read afresh every time)."""
+            need = max(0, item.size or 0)
+            with space_lock:
+                check_free_space(self.root, in_flight[0] + need)
+                in_flight[0] += need
+            try:
+                return fetch(item)
+            finally:
+                with space_lock:
+                    in_flight[0] -= need
+
         # Several files at once: most Drive files are small, so waiting on Apple is the slow part.
         # Only the worker threads talk to the network; the database and messages stay on this thread.
         from .ui_text import Rate
@@ -1722,7 +1744,7 @@ class DriveSyncer:
                     item = next(todo, None)
                     if item is None:
                         break
-                    running[pool.submit(fetch, item)] = item
+                    running[pool.submit(fetch_reserved, item)] = item
                 if not running:
                     break
                 ready, _ = wait(running, timeout=0.3, return_when=FIRST_COMPLETED)

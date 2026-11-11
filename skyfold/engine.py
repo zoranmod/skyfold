@@ -340,7 +340,7 @@ class Syncer:
         # The user may have moved files around inside the folder: follow them by name + size.
         tracked = {r.rel_path.lower() for r in rows}
         album_entries = {rel.lower() for rel in self.state.album_links()}  # same name and size as the originals
-        index: dict[tuple[str, int], str] = {}
+        index: dict[tuple[str, int], list[str]] = defaultdict(list)  # every look-alike, not just one
         for dirpath, dirs, files in os.walk(self.root):
             dirs[:] = [d for d in dirs if not _is_link(Path(dirpath) / d)]  # a junction may lead anywhere
             for fn in files:
@@ -351,7 +351,7 @@ class Syncer:
                 if rel.lower() in tracked or rel.lower() in album_entries:
                     continue
                 try:
-                    index.setdefault((fn.lower(), full.stat().st_size), rel)
+                    index[(fn.lower(), full.stat().st_size)].append(rel)
                 except OSError:
                     pass
 
@@ -363,13 +363,13 @@ class Syncer:
         lone_videos: list[FileRow] = []
         # A file with the same name and size elsewhere in the folder may be this photo, moved - or
         # someone's own file. Only the content tells: iCloud's copy is downloaded and compared.
-        maybe = {}
+        maybe: dict[tuple[str, str], list[str]] = {}
         for r in missing:
             key = (PurePosixPath(r.rel_path).name.lower(), r.size or -1)
-            if key in index:
-                maybe[(r.asset_id, r.resource_key)] = index.pop(key)
+            if index.get(key):
+                maybe[(r.asset_id, r.resource_key)] = index[key]  # shared: each file is claimed once
         confirmed, unknown = self._confirm_moves(maybe) if maybe else ({}, set())
-        local_only: list[FileRow] = []
+        untracked: list[FileRow] = []
         for r in missing:
             where = (r.asset_id, r.resource_key)
             if where in unknown:
@@ -380,33 +380,38 @@ class Syncer:
                 moved += 1
                 continue
             if r.resource_key == "original" and where in maybe:
-                # A look-alike exists but isn't this photo. Whether the photo was deleted or changed and
-                # moved can't be told, so nothing is deleted in iCloud: it is only forgotten on this PC.
-                local_only.append(r)
+                # Look-alikes exist but none is this photo. Whether it was deleted or changed and
+                # moved can't be told: nothing is deleted in iCloud and no file is touched; Skyfold
+                # only stops tracking the photo on this PC.
+                untracked.append(r)
             elif r.resource_key == "original":
                 deleted_assets.append(r.asset_id)
             else:
                 lone_videos.append(r)
-        for r in local_only:
-            self._forget_local_only(r.asset_id, by_asset[r.asset_id])
+        for r in untracked:
+            self.state.remove_asset(r.asset_id)
+            self.state.exclude(r.asset_id, "deleted on PC")
             self.cb.activity("local", t("Deleted on this PC only: {name}", name=PurePosixPath(r.rel_path).name))
+        lone_videos = [r for r in lone_videos if not any(x.asset_id == r.asset_id for x in untracked)]
         for r in lone_videos:
-            if r.asset_id in deleted_assets or any(x.asset_id == r.asset_id for x in local_only):
+            if r.asset_id in deleted_assets:
                 continue  # the photo is gone too: decided together (and brought back together if asked)
             # Only the Live Photo video was removed: forget it and don't bring it back.
             self.state.remove_file(r.asset_id, r.resource_key)
             self.state.exclude(f"{r.asset_id}#{r.resource_key}", "video deleted on PC")
         return sorted(set(deleted_assets)), moved
 
-    def _confirm_moves(self, maybe: dict[tuple[str, str], str]) -> tuple[dict[tuple[str, str], str], set]:
-        """Which of the look-alike files really are the missing photos? Returns (confirmed moves,
-        the ones that couldn't be checked). A file that differs is left alone as someone's own."""
+    def _confirm_moves(self, maybe: dict[tuple[str, str], list[str]]) -> tuple[dict[tuple[str, str], str], set]:
+        """Which of the look-alike files really are the missing photos? iCloud's copy of each missing
+        photo is downloaded once and compared with every look-alike not claimed yet. Returns (confirmed
+        moves, the ones that couldn't be checked). A look-alike that matches nothing is someone's own."""
         import filecmp
 
         confirmed: dict[tuple[str, str], str] = {}
         unknown: set[tuple[str, str]] = set()
+        claimed: set[str] = set()
         assets = self.remote.lookup(sorted({a for a, _ in maybe}))
-        for (aid, key), rel in maybe.items():
+        for (aid, key), candidates in maybe.items():
             self._check_cancel()
             asset = assets.get(aid)
             res = next((x for x in asset.resources if x.key == key), None) if asset else None
@@ -418,13 +423,18 @@ class Syncer:
             tmp_path = Path(tmp)
             try:
                 self.remote.download(res, tmp_path, lambda n: self._check_cancel())
-                if (not res.size or tmp_path.stat().st_size == res.size) \
-                        and filecmp.cmp(tmp_path, self._abs(rel), shallow=False):
-                    confirmed[(aid, key)] = rel
+                if not res.size or tmp_path.stat().st_size != res.size:
+                    unknown.add((aid, key))  # not the whole photo (or its size isn't known): proves nothing
+                    continue
+                for rel in candidates:
+                    if rel not in claimed and filecmp.cmp(tmp_path, self._abs(rel), shallow=False):
+                        confirmed[(aid, key)] = rel
+                        claimed.add(rel)
+                        break
             except (AuthRequired, RemoteUnavailable, Cancelled):
                 raise
             except Exception as exc:  # noqa: BLE001
-                log.info("Photos: couldn't compare %s with iCloud's copy: %s", rel, brief(exc))
+                log.info("Photos: couldn't compare a moved photo with iCloud's copy: %s", brief(exc))
                 unknown.add((aid, key))
             finally:
                 tmp_path.unlink(missing_ok=True)
