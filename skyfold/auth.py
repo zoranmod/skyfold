@@ -44,6 +44,24 @@ def make_current(api: Any) -> None:
                 log.warning("Couldn't save the session: %s", exc)
 
 
+def _verification_page(method: str, url: str, exc: BaseException) -> Any:
+    """After the password, pyicloud asks Apple for the two-factor page (GET .../appleauth/auth as
+    HTML). Apple may answer it with 409 "verification needed" together with the page itself; pyicloud
+    would raise on that 409 and the sign-in stops. Hand pyicloud the page it asked for instead."""
+    from urllib.parse import urlparse
+
+    from pyicloud.exceptions import PyiCloudAPIResponseException
+
+    response = getattr(exc, "response", None)
+    if (not isinstance(exc, PyiCloudAPIResponseException) or str(method).upper() != "GET"
+            or response is None or getattr(response, "status_code", None) != 409
+            or not urlparse(url).path.rstrip("/").endswith("/appleauth/auth")
+            or "html" not in str(response.headers.get("Content-Type", "")).lower()):
+        return None
+    log.info("Sign-in: Apple sent the two-factor page with status 409; continuing with it")
+    return response
+
+
 def _serialize_session_saves() -> None:
     """pyicloud rewrites the session files after every request. Drive downloads run several
     requests at once, so those writes must take turns or the saved sign-in could be corrupted."""
@@ -72,7 +90,13 @@ def _serialize_session_saves() -> None:
     def request(self: Any, method: str, url: str, **kwargs: Any) -> Any:
         if kwargs.get("timeout") is None:
             kwargs["timeout"] = TIMEOUT
-        return original_request(self, method, url, **kwargs)
+        try:
+            return original_request(self, method, url, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            page = _verification_page(method, url, exc)
+            if page is None:
+                raise
+            return page
 
     PyiCloudSession._request = request  # type: ignore[method-assign]
 

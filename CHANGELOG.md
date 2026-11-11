@@ -90,6 +90,7 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - A rename that can't be finished in iCloud (e.g. the target folder was deleted there) is let go and synced as add + delete instead of waiting forever.
   - Pause: no further Drive pass starts after Pause; the changes waiting stay queued for Resume.
   - Build: folders on PATH that bring their own ICU (e.g. Poppler) are left out while packaging, so Qt always gets its own ICU.
+- Sign-in: when Apple answers the request for the two-factor page with status 409 together with the page, the sign-in continues with that page instead of stopping with "Authentication required for Account (409)".
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.
