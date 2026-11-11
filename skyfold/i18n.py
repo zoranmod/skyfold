@@ -10,6 +10,9 @@ LANGUAGES = {"en": "English", "bs": "Bosanski"}
 _lang = "en"
 
 
+from .safelog import Text  # noqa: E402
+
+
 def set_language(code: str) -> None:
     global _lang
     _lang = code if code in LANGUAGES else "en"
@@ -21,7 +24,7 @@ def language() -> str:
 
 def t(text: str, **kw) -> str:
     s = _CATALOGS.get(_lang, {}).get(text, text)
-    return s.format(**kw) if kw else s
+    return Text(s.format(**kw) if kw else s)  # marked as Skyfold's own wording (see safelog)
 
 
 BS: dict[str, str] = {

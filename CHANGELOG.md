@@ -111,6 +111,13 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - A rename that was cut short no longer waits forever when the old folder has become a file in the meantime.
   - Logs and error messages: an error that comes from Apple is written only as its kind, numeric codes and place in the code, everywhere (sync, storage, retries, Find My, sign-in); tracebacks are no longer written as text. Skyfold's own messages and Windows errors stay readable. A drawing that can't be used is logged without any of its bytes.
   - Quit: nothing starts after Quit begins, also not the start-up steps (session restore, folder watchers) or background requests still waiting for a free thread (Find My).
+- Fifteenth follow-up review: iCloud Drive decides by content, not by size and time (tests in tests/test_review17_codex_probes.py and tests/test_review17_fixes.py):
+  - Skyfold now remembers a fingerprint (SHA-256) of every file's synced content. A version in iCloud whose tag is new or unknown is treated as unknown until its content has been looked at: it is downloaded and compared. If it is what the PC already has, the PC file is left untouched (nothing goes to the Recycle Bin, no "downloaded" entry) and only the version is remembered; if it differs, it is an edit.
+  - This replaces every shortcut that took equal size and modified time as proof: after Skyfold's own upload, after a rename or move (also one cut short by a crash), for "changed on both sides", and on a first sync into a folder that already has files. A file copied or restored in iCloud with the same size and time is no longer missed.
+  - Deleting on the PC a file or folder whose iCloud tag has moved: the deletion goes to iCloud only when iCloud's content is proven to be the synced one; otherwise iCloud's version is kept and comes back. Files synced before this version have no fingerprint yet, so for them nothing is assumed (they come back once).
+  - Cost: such files are downloaded once more just to compare them. Slower, but nothing is assumed.
+  - Logs: an error's message is shown only when Skyfold worded it itself or when it is a plain Windows/database error about a file - decided by where the text comes from, not by the kind of error. Apple's refusal codes are reduced to short symbolic codes.
+  - Quit can't be undone by a pass that is just starting: each service has a stop that is never cleared once quitting began.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

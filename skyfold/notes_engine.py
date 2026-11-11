@@ -571,7 +571,8 @@ class NotesSyncer:
         self.remote = remote
         self.root = root
         self.cb = cb or Callbacks()
-        self.cancel_flag = threading.Event()
+        self.cancel_flag = threading.Event()  # this pass (cleared when the next one starts)
+        self.closing = threading.Event()  # the app is quitting: never cleared
 
     def _check_root(self) -> None:
         has = self.state.count() > 0
@@ -636,6 +637,8 @@ class NotesSyncer:
 
     def run(self, full: bool = False) -> NotesResult:
         self.cancel_flag.clear()
+        if self.closing.is_set():
+            raise Cancelled()  # quitting: this pass never starts
         res = NotesResult()
         last_page = INDEX
         self._check_root()
@@ -663,7 +666,7 @@ class NotesSyncer:
         taken = {r[1].lower() for r in known.values() if r[1]}
 
         for i, n in enumerate(notes, 1):
-            if self.cancel_flag.is_set():
+            if self.cancel_flag.is_set() or self.closing.is_set():
                 raise Cancelled()
             seen.add(n.id)
             old = known.get(n.id)

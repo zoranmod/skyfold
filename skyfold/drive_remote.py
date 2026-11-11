@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from .remote import _translate
+from .safelog import Text, code
 
 log = logging.getLogger(__name__)
 
@@ -175,7 +176,7 @@ class ICloudDrive:
                                and str(f.get("status") or "OK").upper() in ("OK", "SUCCESS")
                                and not f.get("errorCode") and not f.get("error")}
                         if set(paths) - got:
-                            raise RuntimeError("iCloud returned an incomplete folder listing")
+                            raise RuntimeError(Text("iCloud returned an incomplete folder listing"))
                         for folder in answered:
                             base = paths.get(folder.get("drivewsid"), None)
                             if base is None:
@@ -246,7 +247,7 @@ class ICloudDrive:
                 if not token.get("url"):
                     if (info.get("package_token") or {}).get("url"):
                         raise MacPackage(item.path)
-                    raise RuntimeError("iCloud gave no download link")
+                    raise RuntimeError(Text("iCloud gave no download link"))
                 data = d.session.get(token["url"], params=d.params, stream=True, timeout=180)
                 d._raise_if_error(data)
                 for chunk in data.iter_content(1 << 20):
@@ -311,7 +312,9 @@ def _check_item(item: dict[str, Any], what: str) -> None:
     """Apple answers 200 for the whole request and may still refuse the one item: never take that as done."""
     status = str(item.get("status") or "").upper()
     if item.get("errorCode") or item.get("error") or any(w in status for w in ("ERROR", "FAIL", "EXIST", "CONFLICT")):
-        raise RuntimeError(f"iCloud refused the {what}: {item.get('errorCode') or item.get('error') or status}")
+        # only a short symbolic code is kept: Apple's free text never becomes part of the message
+        why = code(item.get("errorCode")) if item.get("errorCode") else code(status)
+        raise RuntimeError(Text(f"iCloud refused the {what}: {why}"))
 
 
 def local_mtime(p: Path) -> float:

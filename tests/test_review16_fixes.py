@@ -100,7 +100,10 @@ def test_errors_from_apple_are_described_without_their_text(tmp_path, monkeypatc
     assert "PrivatePerson" in str(exc)  # the leak this guards against
     for text in (brief(exc), describe(exc)):
         assert "PrivatePerson" not in text and "500" in text
-    assert brief(SyncError("Our own message")) == "Our own message"
+    from skyfold.i18n import t
+
+    assert brief(SyncError(t("Our own message"))) == "Our own message"  # Skyfold's own wording
+    assert brief(SyncError("text from somewhere else")) == "SyncError"  # never trusted by its class
     assert "Access is denied" in brief(PermissionError(13, "Access is denied", "C:/x/a.txt"))
 
 

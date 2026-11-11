@@ -11,8 +11,12 @@ from __future__ import annotations
 import traceback
 from pathlib import Path
 
-_OWN_TEXT = ("SyncError", "RemoteUnavailable", "Cancelled", "MacPackage", "LoginError", "Offline",
-             "FindMyNeedsSignIn")
+class Text(str):
+    """A message Skyfold put together itself (i18n.t() returns one). Only such text, and what
+    Windows or the database say about a failed file operation, is ever shown or logged as text;
+    anything else about an error is reduced to kinds and codes."""
+
+    __slots__ = ()
 
 
 def describe(exc: BaseException, frames: int = 3) -> str:
@@ -43,20 +47,23 @@ def describe(exc: BaseException, frames: int = 3) -> str:
     return " <- ".join(parts) + (f" at {at}" if at else "")
 
 
-def _plain(exc: BaseException) -> bool:
-    """Skyfold's own message, or a plain Python/Windows/database error: its text is safe to show."""
-    kind = type(exc)
-    if kind.__name__ in _OWN_TEXT and kind.__module__.startswith("skyfold"):
-        return True
-    return kind.__module__ in ("builtins", "sqlite3", "zipfile", "json", "json.decoder")
+def code(value: object) -> str:
+    """A short symbolic code from Apple (e.g. CONFLICT, ITEM_NOT_FOUND) or "?": never free text."""
+    import re
+
+    text = str(value or "")
+    return text if re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", text) else "?"
 
 
 def brief(exc: BaseException) -> str:
-    """One line for an activity entry or a log line: the message when it is safe (see _plain),
-    otherwise kinds and codes only."""
-    if _plain(exc) and not getattr(exc, "response", None):
+    """One line for an activity entry or a log line. The message is used only when Skyfold wrote it
+    (a Text) or when it is a plain Windows/database error about a file; that is decided by where the
+    text comes from, never by the kind of exception. Otherwise kinds and codes only."""
+    first = exc.args[0] if getattr(exc, "args", None) else None
+    if isinstance(first, Text):
+        return str(first)[:300]
+    plain_os = isinstance(exc, OSError) and type(exc).__module__ == "builtins"
+    if (plain_os or type(exc).__module__ == "sqlite3") and getattr(exc, "response", None) is None:
         text = str(exc).strip()
-        if type(exc).__module__.startswith("skyfold"):
-            return text[:300]
         return (f"{type(exc).__name__}: {text}" if text else type(exc).__name__)[:300]
     return describe(exc, frames=0)

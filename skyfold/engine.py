@@ -263,7 +263,8 @@ class Syncer:
         self.remote = remote
         self.settings = settings
         self.cb = cb or Callbacks()
-        self.cancel_flag = threading.Event()
+        self.cancel_flag = threading.Event()  # this pass (cleared when the next one starts)
+        self.closing = threading.Event()  # the app is quitting: never cleared
         self.approved: set[str] = set()  # pending deletions the user confirmed
         self.held: set[str] = set()  # deletions currently waiting for the user's decision
         # Paths the engine itself touched recently, so the folder watcher can ignore them.
@@ -292,7 +293,7 @@ class Syncer:
         return t is not None and time.monotonic() - t < self.OWN_WINDOW
 
     def _check_cancel(self) -> None:
-        if self.cancel_flag.is_set():
+        if self.cancel_flag.is_set() or self.closing.is_set():
             raise Cancelled()
 
     def _rel_for(self, asset: RemoteAsset, res: RemoteResource) -> str:
@@ -393,6 +394,7 @@ class Syncer:
     # main entry -----------------------------------------------------------
     def run(self, force_full: bool = False) -> Result:
         self.cancel_flag.clear()
+        self._check_cancel()  # quitting: this pass never starts
         self._verify: set[str] = set()  # paths whose existing file is compared with the download first
         result = Result()
         self._check_root()
@@ -587,8 +589,7 @@ class Syncer:
                             THROTTLE.take(n)
                             done_bytes += n
                             self.cb.progress(done_bytes, total_bytes or len(todo), label)
-                            if self.cancel_flag.is_set():
-                                raise Cancelled()
+                            self._check_cancel()
 
                         self.remote.download(res, tmp_path, on_bytes)
                         if res.size and tmp_path.stat().st_size != res.size:

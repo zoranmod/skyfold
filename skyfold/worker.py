@@ -182,7 +182,7 @@ class SyncWorker(QObject):
     def _stop_requested(self, service: str) -> bool:
         """Was the pass of this service asked to stop (quit, pause)? Each pass clears its flag when it starts."""
         s = {t("iCloud Drive"): self.drive, t("Notes"): self.notes}.get(service, self.syncer)
-        return s is not None and s.cancel_flag.is_set()
+        return self._closing_now() or (s is not None and s.cancel_flag.is_set())
 
     def cancel(self) -> None:
         """Thread-safe: may be called directly from the UI thread."""
@@ -190,6 +190,8 @@ class SyncWorker(QObject):
             self._drive_stopped = True  # queued Drive work waits for the next request to sync
         for s in (self.syncer, self.drive, self.notes):
             if s:
+                if self._closing_now() and hasattr(s, "closing"):
+                    s.closing.set()  # quitting: a pass that is just starting can't clear this one
                 s.cancel_flag.set()
 
     def _set_state(self, state: str, text: str, service: str = "app") -> None:
