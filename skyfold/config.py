@@ -239,9 +239,17 @@ def set_start_with_windows(enabled: bool) -> None:
     import winreg
 
     exe = sys.executable if getattr(sys, "frozen", False) else None
+    wanted = f'"{exe}" --tray' if enabled and exe else None
+    try:  # written only when it changes (e.g. the app was moved), not on every start
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_QUERY_VALUE) as key:
+            current = winreg.QueryValueEx(key, APP_ID)[0]
+    except OSError:
+        current = None
+    if current == wanted:
+        return
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
-        if enabled and exe:
-            winreg.SetValueEx(key, APP_ID, 0, winreg.REG_SZ, f'"{exe}" --tray')
+        if wanted:
+            winreg.SetValueEx(key, APP_ID, 0, winreg.REG_SZ, wanted)
         else:
             try:
                 winreg.DeleteValue(key, APP_ID)

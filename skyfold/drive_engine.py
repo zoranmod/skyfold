@@ -1042,10 +1042,12 @@ class DriveSyncer:
                 if not self._same_item(g, n, remote) or not self._pc_move(g, n, res, remote):
                     continue
                 r = remote[n]
-                st = self._abs(n).stat()
+                b = base[g]
                 with self.state.transaction():  # rows and the move's record together
                     self.state.drop(g)
-                    self.state.put(Base(n, False, r.etag, r.size, st.st_mtime, st.st_size, False))
+                    # the synced version's size/time (a rename keeps them): an edit saved right after
+                    # the rename stays an edit and is uploaded
+                    self.state.put(Base(n, False, r.etag, r.size, b.lmtime, b.lsize, False))
                     self._journal_put(self._pc_key, None)
                 to_pc.remove(g)
                 downloads[:] = [d for d in downloads if d.path != n]
@@ -1183,13 +1185,23 @@ class DriveSyncer:
         for ident, e in list(self._journal().items()):
             old, new = e["old"], e["new"]
             if e.get("kind") == "pc":  # renamed on this PC to follow iCloud: did the rename happen?
-                done = self._exact_exists(new) and not self._exact_exists(old)
-                if done:
+                now_new, now_old, fid = self._exact_id(new), self._exact_id(old), e.get("fid")
+                if now_new is False or now_old is False:
+                    continue  # couldn't look: kept (and held below) until it can be decided
+                if now_new is not None and (now_new == fid if fid else now_old is None):
+                    # the moved item itself is under the new name (whatever was made at the old one since)
                     log.info("Drive: an interrupted rename on this PC is picked up")
                     self._move_rows(old, new, None, ident, None)
-                else:
-                    with self.state.transaction():
+                elif now_old is not None and (now_old == fid if fid else now_new is None):
+                    with self.state.transaction():  # the rename never happened
                         self._journal_put(ident, None)
+                elif now_new is None and now_old is None:
+                    with self.state.transaction():  # both gone: an ordinary deletion on this PC
+                        self._journal_put(ident, None)
+                else:  # can't tell which is the synced item: held, nothing is deleted or uploaded there
+                    res.errors += 1
+                    self.cb.activity("error", t("Drive: can't tell whether {old} was renamed to {new} on this "
+                                                "PC; both are left alone", old=old, new=new))
                 continue
             at = e.get("at") or old
             if "rows" not in e:  # written by an earlier build: the database still has the rows
@@ -1258,19 +1270,28 @@ class DriveSyncer:
         rename the next full pass lets the database follow (never "new on the PC" = upload again)."""
         r = remote[new]
         self._pc_key = "pc:" + (r.docwsid or r.drivewsid or new)
+        try:
+            fid = os.lstat(self._abs(old)).st_ino  # NTFS file id: stays the same through a rename
+        except OSError:
+            fid = None
         with self.state.transaction():
-            self._journal_put(self._pc_key, {"kind": "pc", "old": old, "new": new})
+            self._journal_put(self._pc_key, {"kind": "pc", "old": old, "new": new, "fid": fid})
         if self._local_move(old, new, res):
             return True
         with self.state.transaction():
             self._journal_put(self._pc_key, None)
         return False
 
-    def _exact_exists(self, rel: str) -> bool:
-        """Exists under exactly this name (Windows names ignore letter case)."""
+    def _exact_id(self, rel: str) -> int | None | bool:
+        """The file id of what is under exactly this name (Windows names ignore letter case);
+        None: nothing there; False: couldn't be read (unknown)."""
         p = self._abs(rel)
         try:
-            return p.name in os.listdir(p.parent)
+            if p.name not in os.listdir(p.parent):
+                return None
+            return os.lstat(p).st_ino
+        except FileNotFoundError:
+            return None
         except OSError:
             return False
 

@@ -44,6 +44,29 @@ def make_current(api: Any) -> None:
                 log.warning("Couldn't save the session: %s", exc)
 
 
+def _server_code(code: Any) -> bool:
+    """429 or 5xx, also when Apple sends the number as text ("503")."""
+    try:
+        n = int(str(code).strip())
+    except (TypeError, ValueError):
+        return False
+    return n == 429 or 500 <= n <= 599
+
+
+def _trouble_in(exc: BaseException) -> bool:
+    from pyicloud.exceptions import PyiCloudConnectionException
+    from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout
+
+    if isinstance(exc, (PyiCloudConnectionException, RequestsConnectionError, Timeout)):
+        return True
+    return _server_code(getattr(exc, "code", None)) or \
+        _server_code(getattr(getattr(exc, "response", None), "status_code", None))
+
+
+def _had_trouble(api: Any) -> bool:
+    return bool(getattr(getattr(api, "session", None), "_skyfold_trouble", False))
+
+
 def _verification_page(method: str, url: str, exc: BaseException) -> Any:
     """After the password, pyicloud asks Apple for the two-factor page (GET .../appleauth/auth as
     HTML). Apple may answer it with 409 "verification needed" together with the page itself; pyicloud
@@ -91,12 +114,17 @@ def _serialize_session_saves() -> None:
         if kwargs.get("timeout") is None:
             kwargs["timeout"] = TIMEOUT
         try:
-            return original_request(self, method, url, **kwargs)
+            response = original_request(self, method, url, **kwargs)
         except Exception as exc:  # noqa: BLE001
             page = _verification_page(method, url, exc)
             if page is None:
+                if _trouble_in(exc):
+                    self._skyfold_trouble = True  # pyicloud may swallow it and fall back to a password
                 raise
             return page
+        if _server_code(getattr(response, "status_code", None)):
+            self._skyfold_trouble = True
+        return response
 
     PyiCloudSession._request = request  # type: ignore[method-assign]
 
@@ -126,6 +154,7 @@ def restore(apple_id: str) -> Any | None:
     from pyicloud.exceptions import PyiCloudConnectionException
     from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout
 
+    api = None
     try:
         # authenticate=False skips pyicloud's Windows Credential Manager lookup (we never store
         # the password there); the saved session token is then validated explicitly.
@@ -136,11 +165,16 @@ def restore(apple_id: str) -> Any | None:
     except (PyiCloudConnectionException, RequestsConnectionError, Timeout) as exc:
         raise Offline(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - anything else means "sign in again"
-        if _server_trouble(exc):
+        # pyicloud falls back to a password login when validating the token fails, and a 5xx there
+        # then ends as "No password set": an outage seen on the way is still an outage
+        if _server_trouble(exc) or _had_trouble(api):
             log.warning("Session restore: Apple's servers answered with an error; trying again later")
             raise Offline(str(exc)) from exc
         log.warning("Session restore failed (%s): %s", type(exc).__name__, exc)
         return None
+    if (api.requires_2fa or api.requires_2sa) and _had_trouble(api):
+        log.warning("Session restore: Apple's servers had trouble; trying again later")
+        raise Offline("Apple's servers answered with an error")
     if api.requires_2fa or api.requires_2sa:
         log.warning("Session restore: Apple asks for two-factor authentication again (trusted=%s)",
                     getattr(api, "is_trusted_session", "?"))
@@ -161,7 +195,7 @@ def _server_trouble(exc: BaseException) -> bool:
         if isinstance(e, (PyiCloudConnectionException, RequestsConnectionError, Timeout)):
             return True
         code = getattr(e, "code", None)
-        if isinstance(e, PyiCloudAPIResponseException) and isinstance(code, int) and code >= 500:
+        if isinstance(e, PyiCloudAPIResponseException) and _server_code(code):
             return True
         e = e.__cause__ or e.__context__
     return False

@@ -91,6 +91,12 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - Pause: no further Drive pass starts after Pause; the changes waiting stay queued for Resume.
   - Build: folders on PATH that bring their own ICU (e.g. Poppler) are left out while packaging, so Qt always gets its own ICU.
 - Sign-in: when Apple answers the request for the two-factor page with status 409 together with the page, the sign-in continues with that page instead of stopping with "Authentication required for Account (409)".
+- Eleventh follow-up review (tests in tests/test_review13_codex_probes.py):
+  - A rename from iCloud that was cut short on this PC is decided by the item's file id: a new item made under the old name, or a folder that can't be read for a moment, never makes Skyfold forget the rename (and upload a folder deleted in iCloud again). When it can't be told, both are left alone and an error is shown.
+  - A file renamed in iCloud keeps its synced version's size/time on this PC, so an edit saved right after the rename is uploaded.
+  - Session restore: an Apple server error seen while the saved sign-in is checked keeps it an outage (Skyfold retries) instead of ending as "No password set" and asking to sign in; error codes sent as text ("503") count too.
+  - Stop and Quit: no further iCloud Drive pass starts after Stop or Quit; the next sync request starts it again.
+- Autostart: the Windows Run entry is written only when it changes (e.g. the app was moved), not on every start.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

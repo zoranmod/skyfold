@@ -166,6 +166,7 @@ class SyncWorker(QObject):
 
     @Slot()
     def shutdown(self) -> None:
+        self._closing = True  # nothing is started any more
         self.cancel()
         self._stop_watchers()
 
@@ -176,6 +177,8 @@ class SyncWorker(QObject):
 
     def cancel(self) -> None:
         """Thread-safe: may be called directly from the UI thread."""
+        if not self.settings.paused:  # (paused: Resume is what starts work again)
+            self._drive_stopped = True  # queued Drive work waits for the next request to sync
         for s in (self.syncer, self.drive, self.notes):
             if s:
                 s.cancel_flag.set()
@@ -493,6 +496,7 @@ class SyncWorker(QObject):
     # Drive runs in its own thread so a long read (a big Drive takes ~10 min) never holds up Photos.
     def _kick_drive(self, full: bool) -> None:
         with self._drive_lock:
+            self._drive_stopped = False  # a new request to sync
             if full:
                 self._drive_want_full = True
             if self._drive_thread is not None and self._drive_thread.is_alive():
@@ -509,8 +513,9 @@ class SyncWorker(QObject):
             with self._drive_lock:
                 if self.drive is None:
                     break
-                if self.settings.paused:
-                    break  # paused meanwhile: the waiting changes stay queued for Resume
+                if self.settings.paused or getattr(self, "_closing", False) \
+                        or getattr(self, "_drive_stopped", False):
+                    break  # paused, stopped or quitting meanwhile: the waiting changes stay queued
                 if self._drive_want_full:
                     self._drive_want_full, changed = False, None
                 elif self._drive_changes:
