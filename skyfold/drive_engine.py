@@ -1578,13 +1578,20 @@ class DriveSyncer:
             elif count(to_pc, base) > threshold and not set(to_pc) <= self.approved:
                 res.pending_to_pc = to_pc
             else:
-                approved_now = set(to_pc) & self.approved
-                if approved_now:  # time has passed since the question: changed files stay
-                    to_pc = self._keep_unsynced_local(to_pc, base)
-                for p in to_pc:
+                queue = list(to_pc)
+                while queue:
+                    p = queue.pop(0)
                     self._check_cancel()
                     target = self._abs(p)
                     b = base.get(p)
+                    if b is not None and b.is_dir and target.is_dir():
+                        # Time has passed since this was decided (other requests, the user's answer):
+                        # look into the folder again now. Files added or changed meanwhile stay;
+                        # only what is still the synced content goes to the Recycle Bin.
+                        still = self._keep_unsynced_local([p], base)
+                        if still != [p]:
+                            queue = still + queue
+                            continue
                     if b is not None and ((not b.is_dir and target.is_dir()) or (b.is_dir and target.is_file())):
                         self.state.drop(p)  # file and folder swapped since the question: not what was approved
                         continue

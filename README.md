@@ -96,7 +96,7 @@ To uninstall, quit Skyfold, turn off *Start with Windows* first, then delete the
 
 - Apple doesn't notify third-party apps about changes, so iCloud is **checked at intervals**: Photos every 2 minutes by default (each check only reads what changed), iCloud Drive in full once an hour or when you click **Sync now**. **Changes on the PC are sent right away.**
 - **Deletions are never permanent.** PC files go to the Recycle Bin; iCloud items go to "Recently Deleted" (30 days).
-- **Big deletions wait for you.** If more items than your limit (default 25) disappear at once, Skyfold asks before deleting anything.
+- **Big deletions wait for you.** If more items than your limit (default 5) disappear at once, Skyfold asks before deleting anything.
 - **Conflicts keep both copies.** If a Drive file changed on both sides, iCloud's version keeps the name and the PC version is saved as `name (PC conflict …)`.
 
 ## Privacy and security

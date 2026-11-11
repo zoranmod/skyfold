@@ -363,6 +363,7 @@ class Controller(QObject):
 
     def toggle_pause(self) -> None:
         self.settings.paused = not self.settings.paused
+        self.worker.set_paused(self.settings.paused)  # at once: the settings reach the worker later
         if self.settings.paused:
             self.worker.cancel()  # thread-safe; the worker thread may be busy for a long time
         self.settings.save()

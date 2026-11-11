@@ -130,6 +130,12 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - iCloud Drive: right before an approved deletion is carried out, the PC file's content is checked again (a file edited after the question, even with the same size and time, stays).
   - Quit or Pause: no further change in iCloud starts - not the next new folder, and not the second step of a move (it stays written down and is finished next time).
   - Disk space for downloads running at the same time is reserved in one place, and the free space is read afresh for each file (a replaced version stays on the disk, in the Recycle Bin).
+- Eighteenth follow-up review: a decision to delete is looked at again right before it is carried out (tests in tests/test_review20_codex_probes.py and tests/test_review20_fixes.py):
+  - Photos: a photo found missing on this PC is not deleted in iCloud if it is back by the time the deletion would start (Undo in Explorer, an editor's save), and the clean-up afterwards never touches a photo put back. A photo edited on this PC stays when it is deleted in iCloud.
+  - Photos moved inside the folder: while one comparison couldn't be made, none of the photos that share its look-alike files is decided.
+  - iCloud Drive: a folder deleted in iCloud is looked into again right before it goes to the Recycle Bin; files added or changed in it meanwhile stay and are uploaded.
+  - Pause takes effect the moment it is pressed, also while a sync cycle is busy: no further service starts.
+- Safer default: new installations ask before deleting more than 5 items at once (was 25). Existing settings are kept.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

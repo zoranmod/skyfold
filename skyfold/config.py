@@ -176,7 +176,7 @@ class Settings:
     albums_as_folders: bool = True
     delete_pc_to_cloud: bool = True
     delete_cloud_to_pc: bool = True
-    delete_threshold: int = 25
+    delete_threshold: int = 5  # more deletions than this at once are asked about first
     instant_local_deletes: bool = True
     notifications: bool = True
     start_with_windows: bool = False

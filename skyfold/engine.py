@@ -369,6 +369,10 @@ class Syncer:
             if index.get(key):
                 maybe[(r.asset_id, r.resource_key)] = index[key]  # shared: each file is claimed once
         confirmed, unknown = self._confirm_moves(maybe) if maybe else ({}, set())
+        # Photos sharing the same look-alikes are decided together: while one of them couldn't be
+        # compared, none of the others may claim a file (it might be the unknown one's) or count as deleted.
+        shared = {id(maybe[w]) for w in unknown}
+        unknown |= {w for w, files in maybe.items() if id(files) in shared}
         untracked: list[FileRow] = []
         for r in missing:
             where = (r.asset_id, r.resource_key)
@@ -524,6 +528,8 @@ class Syncer:
         if to_cloud:
             if not self.settings.delete_pc_to_cloud:
                 for a in to_cloud:
+                    if self._original_is_back(rows_by_asset[a]):
+                        continue
                     self._forget_local_only(a, rows_by_asset[a])
                     self.cb.activity("local", t("Deleted on this PC only: {name}", name=remote_assets[a].filename))
             elif len(to_cloud) > threshold and not set(to_cloud) <= self.approved:
@@ -532,6 +538,8 @@ class Syncer:
                 for i, a in enumerate(to_cloud, 1):
                     self._check_cancel()
                     self.cb.progress(i, len(to_cloud), t("Deleting in iCloud…"))
+                    if self._original_is_back(rows_by_asset[a]):
+                        continue  # restored on this PC since it was found missing: not deleted any more
                     try:
                         self.remote.delete(a)
                     except (AuthRequired, RemoteUnavailable):
@@ -540,10 +548,10 @@ class Syncer:
                         result.errors += 1
                         self.cb.activity("error", t("Couldn't delete in iCloud ({name}): {error}", name=remote_assets[a].filename, error=brief(exc)))
                         continue
-                    # remove the leftover Live Photo video, if any
+                    # remove the leftover Live Photo video, if any (never a photo put back meanwhile)
                     for r in rows_by_asset[a]:
                         p = self._abs(r.rel_path)
-                        if p.exists():
+                        if r.resource_key != "original" and p.exists():
                             try:
                                 self._trash_inside(p)
                             except OSError:
@@ -571,7 +579,14 @@ class Syncer:
                     self._check_cancel()
                     self.cb.progress(i, len(to_pc), t("Moving deleted photos to the Recycle Bin…"))
                     ok = True
-                    for r in rows_by_asset[a]:
+                    rows_now = rows_by_asset[a]
+                    if any(self._changed_on_pc(r) for r in rows_now):
+                        # edited on this PC (another size than the photo Skyfold downloaded): kept
+                        self.state.remove_asset(a)
+                        self.cb.activity("local", t("Deleted in iCloud, kept on this PC: {name}",
+                                                    name=rows_now[0].rel_path))
+                        continue
+                    for r in rows_now:
                         p = self._abs(r.rel_path)
                         if p.exists():
                             try:
@@ -909,6 +924,19 @@ class Syncer:
                     self._verify.add(cand)
                     return cand
             n += 1
+
+    def _changed_on_pc(self, r: FileRow) -> bool:
+        """Right before a photo deleted in iCloud goes to the Recycle Bin: is the PC file still the
+        size Skyfold downloaded? (An edited photo stays.)"""
+        try:
+            return bool(r.size) and os.stat(self._abs(r.rel_path)).st_size != r.size
+        except OSError:
+            return False
+
+    def _original_is_back(self, rows: list[FileRow]) -> bool:
+        """Asked right before a "deleted on this PC" decision is carried out: the photo was missing
+        when the folder was scanned - is it there again (Undo in Explorer, an editor's save)?"""
+        return any(r.resource_key == "original" and os.path.lexists(self._abs(r.rel_path)) for r in rows)
 
     def _forget_local_only(self, asset_id: str, rows: list[FileRow]) -> None:
         for r in rows:
