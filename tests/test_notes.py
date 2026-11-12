@@ -243,6 +243,11 @@ def test_leftover_numbered_pages_are_cleaned_up(env):
     import shutil
 
     shutil.copy2(root / "Notes/Dijana (2).html", root / "Notes/Dijana (3).html")  # ours, left behind: a page Skyfold wrote
+    from skyfold import notes_engine as _ne
+
+    # ... and written down as left behind, with its fingerprint (as the engine does when a rename can't finish)
+    s.state.set("obsolete:Notes/Dijana (3).html", _ne._digest(root / "Notes/Dijana (3).html"))
+    shutil.copy2(root / "Notes/Dijana (2).html", root / "Notes/Dijana (5).html")  # the same bytes, but never written down: the user's
     shutil.copy2(root / "Notes/Dijana.html", root / "Notes/Dijana - my copy.html")  # the user's copy: another name
     annotated = root / "Notes/Dijana (4).html"  # named like ours, but changed by the user
     annotated.write_text((root / "Notes/Dijana.html").read_text(encoding="utf-8") + "my notes", encoding="utf-8")
@@ -254,6 +259,7 @@ def test_leftover_numbered_pages_are_cleaned_up(env):
     assert (root / "Notes/Dijana.html").exists() and (root / "Notes/Dijana (2).html").exists()
     assert (root / "Notes/my own file.txt").exists() and (root / "Notes/my report.html").exists()
     assert (root / "Notes/Dijana - my copy.html").exists() and annotated.exists()
+    assert (root / "Notes/Dijana (5).html").exists()
 
 
 def test_no_cleanup_while_notes_are_still_downloading(env):

@@ -516,11 +516,12 @@ class NotesState:
             row = self._db.execute("SELECT value FROM notes_meta WHERE key=?", (key,)).fetchone()
         return row[0] if row else None
 
-    def page_digests(self) -> set[str]:
-        """Fingerprints of the note pages Skyfold wrote (recorded when each was put in place)."""
+    def items(self, prefix: str) -> list[tuple[str, str]]:
+        """(key, value) of every entry whose key starts with prefix and that has a value."""
         with self._lock:
-            rows = self._db.execute("SELECT value FROM notes_meta WHERE key LIKE 'page:%'").fetchall()
-        return {r[0] for r in rows if r[0]}
+            rows = self._db.execute("SELECT key, value FROM notes_meta WHERE substr(key, 1, ?)=? AND value IS NOT NULL",
+                                    (len(prefix), prefix)).fetchall()
+        return [(r[0], r[1]) for r in rows]
 
     def set(self, key: str, value: str | None) -> None:
         with self._lock:
@@ -725,6 +726,10 @@ class NotesSyncer:
                     if n.modified:
                         ts = n.modified.timestamp()
                         os.utime(self.root / staged_rel, (ts, ts))
+                    if old and old[1] and old[1].lower() != rel.lower():
+                        # the note moves to another name: its old page is written down (with its
+                        # fingerprint) until it has really been removed
+                        self.state.set(f"obsolete:{old[1]}", self.state.get(f"page:{n.id}") or "")
                     self._publish_page(self.root / staged_rel, self.root / rel, n.id, old, n.modified)
                 finally:
                     (self.root / staged_rel).unlink(missing_ok=True)
@@ -740,8 +745,9 @@ class NotesSyncer:
                 self.cb.activity("error", t("Couldn't export note ({name}): {error}", name=n.title or n.id, error=brief(exc)))
                 continue
             self.state.set(f"failed:{n.id}", None)
-            if old and old[1] and old[1].lower() != rel.lower() and (self.root / old[1]).exists():
-                self._remove(old, res, count=False)  # renamed or moved: drop the old file
+            if old and old[1] and old[1].lower() != rel.lower():
+                if not (self.root / old[1]).exists() or self._remove(old, res, count=False):
+                    self.state.set(f"obsolete:{old[1]}", None)  # renamed or moved: the old file is gone
             self.state.put(n.id, rel, n.title, folder, modified, False)
             taken.add(rel.lower())
             res.exported += 1
@@ -778,58 +784,25 @@ class NotesSyncer:
             self.cb.activity("download", text, str(target))
         return res
 
-    def _is_leftover(self, p: Path, tracked: set[str], written: set[str]) -> bool:
-        """A page Skyfold left behind when same-titled notes were numbered differently: it is named like
-        a note's page in that folder ("Title.html", "Title (3).html") AND is byte for byte a page
-        Skyfold wrote. A copy the user made (another name) or changed (other content) is theirs."""
-        import re
-
-        def stem(name: str) -> str:
-            return re.sub(r" \(\d+\)$", "", name[:-5] if name.lower().endswith(".html") else name).lower()
-
-        folder = p.parent.relative_to(self.root).as_posix().lower()
-        stems = {stem(PurePosixPath(r).name) for r in tracked if str(PurePosixPath(r).parent).lower() == folder}
-        if stem(p.name) not in stems:
-            return False
-        try:
-            return _digest(p) in written
-        except OSError:
-            return False
-
-    def _remove_leftover_pages(self, res: NotesResult) -> None:  # noqa: C901
-        """Note pages on disk that no note uses any more (e.g. "Title (3).html" left behind when
-        same-titled notes were numbered differently) go to the Recycle Bin. Only .html pages inside
-        the notes folder are touched, and never while the database looks empty or incomplete."""
-        rows = self.state.all()
-        tracked = {r[1].lower() for r in rows.values() if r[1]}
-        if not tracked or any(r[4] is None and not r[5] for r in rows.values()):
-            return  # nothing known yet, or notes still waiting to be downloaded
-        note_dirs = {str(PurePosixPath(r).parent).lower() for r in tracked}
-        written = self.state.page_digests()  # fingerprints of the pages Skyfold wrote
-        leftovers = []
-        for dirpath, dirs, files in os.walk(self.root):
-            dirs[:] = [d for d in dirs if d != ASSETS and not _is_link(Path(dirpath) / d)]  # never through a link
-            rel_dir = Path(dirpath).relative_to(self.root).as_posix()
-            if rel_dir.lower() not in note_dirs:
-                continue  # only the notes' own folders: copies kept elsewhere are the user's
-            for f in files:
-                if not f.lower().endswith(".html") or f == INDEX:
-                    continue
-                p = Path(dirpath) / f
-                rel = p.relative_to(self.root).as_posix()
-                if rel.lower() not in tracked and inside_root(self.root, p) and _is_our_page(p) \
-                        and self._is_leftover(p, tracked, written):
-                    leftovers.append(p)
-        if len(leftovers) > max(10, len(tracked) // 2):
-            log.warning("Not removing %d untracked note pages: too many, looks wrong", len(leftovers))
-            return
-        for p in leftovers:
+    def _remove_leftover_pages(self, res: NotesResult) -> None:
+        """A page Skyfold meant to remove when its note got another name or folder, and couldn't (the
+        file was in use, the app was closed in between). Each such path is written down with the
+        fingerprint of the page; here it goes to the Recycle Bin if it is still exactly that page and
+        no note uses the name. Nothing is ever recognised by its name or its look: a file that isn't
+        on that list - any copy the user made - is theirs."""
+        tracked = {r[1].lower() for r in self.state.all().values() if r[1]}
+        for key, recorded in self.state.items("obsolete:"):
+            rel = key[len("obsolete:"):]
+            p = self.root / rel
             try:
-                self._trash(p)
-                res.removed += 1
-                self.cb.activity("trash", t("Notes: removed {name}", name=p.relative_to(self.root).as_posix()))
+                if rel.lower() not in tracked and recorded and p.is_file() and not _is_link(p)                         and inside_root(self.root, p) and _digest(p) == recorded:
+                    self._trash(p)
+                    res.removed += 1
+                    self.cb.activity("trash", t("Notes: removed {name}", name=rel))
             except OSError as exc:
                 log.warning("Could not remove leftover note page %s: %s", p, exc)
+                continue  # stays written down: tried again next time
+            self.state.set(key, None)
 
     def _polish(self, rel: str, n: NoteInfo) -> None:
         p = self.root / rel
@@ -900,13 +873,21 @@ class NotesSyncer:
                     pass
 
     def _path_for(self, n: NoteInfo, folder: str, old: tuple | None, taken: set[str]) -> str:
+        """Where this note's page goes. Its own tracked page is reused; any other name is free only
+        when no note has it AND nothing exists there. A file Skyfold doesn't track - whatever it looks
+        like, also a copy of one of its own pages - is someone's file and is never written over."""
         base = f"{folder}/{_safe(n.title, t('Untitled'))}"
+        own = old[1].lower() if old and old[1] else None
+
+        def free(cand: str) -> bool:
+            here = self.root / cand
+            if own is not None and cand.lower() == own:
+                return not here.exists() or _is_our_page(here)  # this note's page (replaced by the user: not it)
+            return cand.lower() not in taken and not os.path.lexists(here)
+
         cand = f"{base}.html"
-        here = self.root / cand
-        if old and old[1] and old[1].lower() == cand.lower() and (not here.exists() or _is_our_page(here)):
-            return cand
         k = 2
-        while cand.lower() in taken or ((self.root / cand).exists() and not _is_our_page(self.root / cand)):
+        while not free(cand):
             cand = f"{base} ({k}).html"
             k += 1
         return cand
