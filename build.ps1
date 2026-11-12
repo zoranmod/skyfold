@@ -22,6 +22,8 @@ if ($running) {
     }
 }
 & $py tools_make_icon.py
+$verFile = Join-Path $work "version-info.txt"
+& $py tools_version_info.py $verFile  # name, version and project page shown in the exe's Properties
 
 # PyInstaller wipes dist\Skyfold on every build: park the user's data folder (settings) meanwhile.
 $data = "dist\Skyfold\data"
@@ -40,7 +42,7 @@ $env:PATH = ($env:PATH -split ';' | Where-Object {
     -not (Get-ChildItem -LiteralPath $_ -Filter 'icu*.dll' -ErrorAction SilentlyContinue | Select-Object -First 1)
 }) -join ';'
 & $py -m PyInstaller --noconfirm --clean --windowed --onedir --name Skyfold `
-    --icon "$PSScriptRoot\skyfold.ico" --collect-submodules pyicloud --collect-data pyicloud `
+    --icon "$PSScriptRoot\skyfold.ico" --version-file $verFile --collect-submodules pyicloud --collect-data pyicloud `
     --collect-data fido2 --collect-data certifi --collect-data tzdata `
     --exclude-module PIL --exclude-module pytest `
     --distpath "$PSScriptRoot\dist" --workpath (Join-Path $work "build") --specpath $work "$PSScriptRoot\run.py"

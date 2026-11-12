@@ -1275,7 +1275,12 @@ class PendingDialog(_Dialog):
         lst.setMinimumHeight(80)
         for k in range(lst.count()):
             lst.item(k).setToolTip(lst.item(k).text())
-        lay.addWidget(lst, 1)
+        group = QFrame()  # the list sits in a rounded group, like the lists in Settings
+        group.setObjectName("Card")
+        inner = QVBoxLayout(group)
+        inner.setContentsMargins(10, 4, 10, 4)
+        inner.addWidget(lst)
+        lay.addWidget(group, 1)
         row = QHBoxLayout()
         if self._sections == 1:  # one "Decide later" for the whole window, in the first row
             later = QPushButton(t("Decide later"))
