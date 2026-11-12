@@ -326,8 +326,13 @@ class Syncer:
             root.mkdir(parents=True, exist_ok=True)
         marker = root / MARKER
         for old in LEGACY_MARKERS:  # folder set up by an earlier version of the app
-            if not marker.exists() and (root / old).exists():
-                os.replace(root / old, marker)
+            # Only when this database really tracks files here: otherwise a file that merely has
+            # such a name is someone's, and the folder simply gets its own new marker.
+            if has_files and not marker.exists() and (root / old).is_file():
+                try:
+                    os.rename(root / old, marker)
+                except OSError:
+                    pass
         if not marker.exists():
             if has_files:
                 raise SyncError(t(
@@ -754,6 +759,7 @@ class Syncer:
         on every run; the album list itself is re-read when the library changed (at most
         every 30 minutes) or on a full check.
         """
+        self._recover_album_stage()
         links = self.state.album_links()
         if not self.settings.albums_as_folders:
             sources = defaultdict(list)
@@ -867,6 +873,8 @@ class Syncer:
                 import uuid
 
                 staged = p.with_name(f"{TMP_PREFIX}album-{uuid.uuid4().hex}{p.suffix}")
+                stage_key = "albumstage:" + staged.relative_to(self.root).as_posix()
+                self.state.set(stage_key, rel)  # written down first: put back after a crash
                 os.rename(p, staged)
                 ours = False
                 for src in sources:
@@ -876,13 +884,16 @@ class Syncer:
                             break
                     except OSError:
                         pass
+                recorded, found = self.state.get("albumid:" + rel), self._file_id(staged)
                 if ours:
                     staged.unlink()  # just a second name of the photo: nothing is lost
-                elif self._file_id(staged) == self.state.get("albumid:" + rel):
+                elif recorded and found and recorded == found:
                     # the very file Skyfold put here, but its photo is gone: recoverable, as before
                     self._trash(self._put_back(staged, p))
                 else:
                     self._put_back(staged, p)  # can't prove it's ours: it stays, untouched
+                if not os.path.lexists(staged):
+                    self.state.set(stage_key, None)
         except OSError:
             return
         self.state.drop_album_link(rel)
@@ -895,6 +906,18 @@ class Syncer:
         except OSError:
             return None
         return f"{st.st_dev}:{st.st_ino}" if st.st_ino else None
+
+    def _recover_album_stage(self) -> None:
+        """An album entry that was under its private name when Skyfold stopped gets its name back."""
+        for key, rel in self.state.items("albumstage:"):
+            staged = self._abs(key[len("albumstage:"):])
+            try:
+                if staged.is_file() and inside_root(self.root, staged.parent):
+                    self._put_back(staged, self._abs(rel))
+            except OSError:
+                continue
+            if not os.path.lexists(staged):
+                self.state.set(key, None)
 
     def _note_album_file(self, rel: str, p: Path) -> None:
         """Remember which file Skyfold put at an album path: a different file found there later
@@ -926,12 +949,12 @@ class Syncer:
                 d.mkdir()
             except FileExistsError:
                 continue  # someone made it meanwhile: theirs
-            self.state.set("albumdir:" + d.relative_to(self.root).as_posix(), "1")
+            self.state.set("albumdir:" + d.relative_to(self.root).as_posix(), self._file_id(d))
 
     def _prune_empty(self) -> None:
         """Remove empty album folders - only the ones Skyfold made (written down when it made them).
         An empty folder someone created under Albums is theirs and stays."""
-        for key, _v in sorted(self.state.items("albumdir:"), key=lambda kv: len(kv[0]), reverse=True):
+        for key, made in sorted(self.state.items("albumdir:"), key=lambda kv: len(kv[0]), reverse=True):
             p = self._abs(key[len("albumdir:"):])
             try:
                 if not inside_root(self.root, p.parent) or p.is_symlink() or                         (hasattr(os.path, "isjunction") and os.path.isjunction(p)):
@@ -939,6 +962,9 @@ class Syncer:
                     continue
                 if not p.exists():
                     self.state.set(key, None)
+                    continue
+                if self._file_id(p) != made:
+                    self.state.set(key, None)  # another folder has that name now: someone's
                     continue
                 p.rmdir()  # only succeeds when empty
                 self.state.set(key, None)

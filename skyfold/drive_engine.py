@@ -270,12 +270,21 @@ class DriveSyncer:
         except ValueError:
             return None
 
-    def _own(self, p: Path, kind: str) -> None:
+    def _own(self, p: Path, kind: str, value: str = "1") -> None:
         """Write down a private file (a download in progress, a file moved aside) before it exists:
         only files on this list are ever cleaned up, recovered, recycled or renamed."""
         rel = self._rel(p)
         if rel is not None:
-            self.state.set_meta(f"{kind}:{rel}", "1")
+            self.state.set_meta(f"{kind}:{rel}", value)
+
+    @staticmethod
+    def _file_id(p: Path) -> str | None:
+        """Which file this is (not where it is): the same after a rename, different for another file."""
+        try:
+            st = os.stat(p, follow_symlinks=False)
+        except OSError:
+            return None
+        return f"{st.st_dev}:{st.st_ino}" if st.st_ino else None
 
     def _disown(self, p: Path, kind: str) -> None:
         rel = self._rel(p)
@@ -435,7 +444,14 @@ class DriveSyncer:
     def scan_local(self) -> dict[str, Local]:
         out: dict[str, Local] = {}
         self.unreadable = set()
-        owned = set(self.state.meta_items("aside:")) | set(self.state.meta_items("tmp:"))
+        owned: dict[str, str] = {}
+        for kind in ("aside:", "tmp:", "prev:"):
+            for key, val in self.state.meta_items(kind).items():
+                if os.path.lexists(self.root / key[len(kind):]):
+                    owned[key] = val
+                else:
+                    self.state.set_meta(key, None)  # the file is gone: nothing left to finish
+        previous = any(k.startswith("prev:") for k in owned)
         for dirpath, dirs, files in os.walk(self.root, onerror=lambda e: self._unreadable_add(e.filename or "")):
             dirs[:] = [d for d in dirs if not ignored(d)]
             for d in [d for d in dirs if _is_link(Path(dirpath) / d)]:
@@ -450,6 +466,19 @@ class DriveSyncer:
                 if d.startswith("."):
                     hide_like_mac(Path(dirpath) / d)
             for f in files:
+                if previous and f"prev:{self._rel(Path(dirpath) / f)}" in owned:
+                    # A replaced version that was on its way to the Recycle Bin when Skyfold stopped:
+                    # it goes there now. It is never taken for a new file - if it is still that file.
+                    full = Path(dirpath) / f
+                    fid = self._file_id(full)
+                    if fid and fid == owned[f"prev:{self._rel(full)}"]:
+                        try:
+                            self._trash_local(full)
+                            self._disown(full, "prev")
+                        except Exception as exc:  # noqa: BLE001 - tried again next time
+                            log.warning("Drive: couldn't move %s to the Recycle Bin: %s", f, exc)
+                        continue
+                    self._disown(full, "prev")  # another file has that name now: someone's
                 if f.startswith(TMP_PREFIX):
                     # Skyfold's own leftovers (written down when they were made) are finished off here.
                     # A file that only has such a name is someone's: left alone, and not synced.
@@ -1859,20 +1888,25 @@ class DriveSyncer:
         p = PurePosixPath(rel)
         named = self._abs(str(p.with_name(f"{p.stem} ({t('previous version')}){p.suffix}")))
         original = aside
+        fid = self._file_id(aside)
         try:
-            if not named.exists():
+            if fid and not named.exists():
                 self._touch_own(named)
+                self._own(named, "prev", fid)  # written down first: after a crash it is still known as ours
                 os.rename(aside, named)
+                self._disown(original, "aside")
                 aside = named
         except OSError:
-            pass
+            self._disown(named, "prev")
         try:
             self._trash_local(aside)
             self._disown(original, "aside")
+            self._disown(named, "prev")
         except Exception as exc:  # noqa: BLE001 - kept; shown as a conflict copy on the next full sync
             log.warning("Drive: couldn't move the previous version of %s to the Recycle Bin: %s", rel, exc)
             if aside == named:
                 self._release_aside(aside, rel, restore=False)
+                self._disown(named, "prev")  # now an ordinary, visible copy
 
     def _recover_aside(self, p: Path) -> None:
         """Left behind by an interrupted download (crash, power cut): shown again as a conflict copy."""

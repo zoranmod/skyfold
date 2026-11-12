@@ -152,6 +152,11 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - Notes: a Notes.html that looks like Skyfold's index but that this setup never wrote (a copy brought into the folder, a new database) is left exactly as it is; Skyfold says so in the activity list and writes no index until you move it.
   - Album folders: a file found at an album path is removed only when it is the very file Skyfold put there. A picture you saved there instead stays. Empty album folders are removed only when Skyfold made them; your own empty folders under Albums stay. (Album folders made by earlier versions are no longer removed when they end up empty.)
   - The portable-mode write test creates a new file of its own and no longer deletes an existing data\.write-test.
+- Twenty-fourth follow-up review (no release blockers; six smaller findings fixed; tests in tests/test_review26_codex_probes.py and tests/test_review26_fixes.py):
+  - iCloud Drive: a replaced version on its way to the Recycle Bin stays written down under its readable name too ("name (previous version)"), together with which file it is. If Skyfold stops at that moment, the next sync finishes the move instead of uploading it as a new file. Records of private files that no longer exist are dropped.
+  - Album folders: an entry is treated as Skyfold's only when its recorded identity is known and matches; an unknown identity never counts as a match. An entry that was under its private name when Skyfold stopped gets its name back. An album folder is removed only when it is the very folder Skyfold made, not another one created later under that name.
+  - Notes: when the Recycle Bin refuses a previous page or index, the file stays written down and the move is tried again on the next sync.
+  - A marker file from an earlier version of the app (.isync, .galerija-sync) is taken over only when the database really tracks files in that folder; otherwise a file with such a name is left alone.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.
