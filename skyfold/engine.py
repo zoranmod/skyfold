@@ -761,7 +761,7 @@ class Syncer:
                 sources[r.asset_id].append(self._abs(r.rel_path))
             for rel, aid in links.items():
                 self._unlink_album(rel, sources.get(aid, []))
-            self._prune_empty(self.root / ALBUMS_DIR)
+            self._prune_empty()
             return
         rows = {(r.asset_id, r.resource_key): r for r in self.state.files()}
         by_asset: dict[str, list[FileRow]] = defaultdict(list)
@@ -774,7 +774,7 @@ class Syncer:
             for rel, aid in links.items():  # cheap pass: drop links of photos that no longer exist
                 if aid not in by_asset:
                     self._unlink_album(rel, [])
-            self._prune_empty(self.root / ALBUMS_DIR)
+            self._prune_empty()
             return
         self.cb.status(t("Updating album folders…"))
         wanted: dict[str, str] = {}
@@ -796,6 +796,12 @@ class Syncer:
             target = self._abs(rel)
             if rel in links and target.exists():
                 if links[rel] == aid:
+                    if not self.state.get("albumid:" + rel):  # a link made by an earlier version
+                        try:
+                            if os.path.samefile(target, self._abs(source[rel])):
+                                self._note_album_file(rel, target)
+                        except OSError:
+                            pass
                     continue
                 # the name now belongs to another photo (e.g. two IMG_0001 and the album changed)
                 self._unlink_album(rel, [self._abs(r.rel_path) for r in by_asset.get(links[rel], [])])
@@ -807,7 +813,11 @@ class Syncer:
             if not inside_root(self.root, target.parent):
                 log.warning("Album folder %s leads outside the photos folder; skipped", rel)
                 continue
-            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                self._make_album_dir(target.parent)
+            except OSError as exc:
+                log.warning("Album folder %s: %s", rel, exc)
+                continue
             try:
                 if target.exists():
                     if rel not in links:  # not one of our links: someone's own file, leave it alone
@@ -835,14 +845,16 @@ class Syncer:
                     finally:
                         Path(tmp).unlink(missing_ok=True)
                 self.state.add_album_link(rel, aid)
+                self._note_album_file(rel, target)
             except OSError as exc:
                 log.warning("Album link %s: %s", rel, exc)
         self.state.set("albums_refreshed", now_iso())
-        self._prune_empty(self.root / ALBUMS_DIR)
+        self._prune_empty()
 
     def _unlink_album(self, rel: str, sources: list[Path] | tuple = ()) -> None:
-        """Remove an album entry. Only a provable link to the photo itself is removed directly; anything
-        else at that path (e.g. a file someone put there instead) goes to the Recycle Bin."""
+        """Remove an album entry - only when it is provably a second name of the photo itself. Anything
+        else at that path (e.g. a picture someone saved there instead) is theirs: it stays where it is
+        and Skyfold just stops counting it as its link."""
         p = self._abs(rel)
         if not inside_root(self.root, p.parent):
             self.state.drop_album_link(rel)  # leads elsewhere now: forget it, touch nothing there
@@ -866,11 +878,28 @@ class Syncer:
                         pass
                 if ours:
                     staged.unlink()  # just a second name of the photo: nothing is lost
+                elif self._file_id(staged) == self.state.get("albumid:" + rel):
+                    # the very file Skyfold put here, but its photo is gone: recoverable, as before
+                    self._trash(self._put_back(staged, p))
                 else:
-                    self._trash(self._put_back(staged, p))  # can't prove it's ours: recoverable
+                    self._put_back(staged, p)  # can't prove it's ours: it stays, untouched
         except OSError:
             return
         self.state.drop_album_link(rel)
+        self.state.set("albumid:" + rel, None)
+
+    @staticmethod
+    def _file_id(p: Path) -> str | None:
+        try:
+            st = os.stat(p)
+        except OSError:
+            return None
+        return f"{st.st_dev}:{st.st_ino}" if st.st_ino else None
+
+    def _note_album_file(self, rel: str, p: Path) -> None:
+        """Remember which file Skyfold put at an album path: a different file found there later
+        (someone saved their own picture under that name) is never removed."""
+        self.state.set("albumid:" + rel, self._file_id(p))
 
     def _put_back(self, staged: Path, p: Path) -> Path:
         """A file moved to a private name goes back under its own name, or a free one next to it."""
@@ -884,27 +913,37 @@ class Syncer:
                 continue
         return staged
 
-    @staticmethod
-    def _prune_empty(top: Path) -> None:
-        if not top.exists():
-            return
-        def is_link(p: Path) -> bool:
+    def _make_album_dir(self, folder: Path) -> None:
+        """Create an album folder, writing down every level Skyfold itself had to make: only those
+        are ever removed again when they end up empty."""
+        missing = []
+        p = folder
+        while p != self.root and not p.exists():
+            missing.append(p)
+            p = p.parent
+        for d in reversed(missing):
             try:
-                return p.is_symlink() or (hasattr(os.path, "isjunction") and os.path.isjunction(p))
-            except OSError:
-                return True
+                d.mkdir()
+            except FileExistsError:
+                continue  # someone made it meanwhile: theirs
+            self.state.set("albumdir:" + d.relative_to(self.root).as_posix(), "1")
 
-        found = []
-        for dirpath, dirs, _files in os.walk(top):
-            dirs[:] = [d for d in dirs if not is_link(Path(dirpath) / d)]  # someone's link: leave it alone
-            found.append(dirpath)
-        for dirpath in sorted(found, key=len, reverse=True):
-            if is_link(Path(dirpath)):
-                continue
+    def _prune_empty(self) -> None:
+        """Remove empty album folders - only the ones Skyfold made (written down when it made them).
+        An empty folder someone created under Albums is theirs and stays."""
+        for key, _v in sorted(self.state.items("albumdir:"), key=lambda kv: len(kv[0]), reverse=True):
+            p = self._abs(key[len("albumdir:"):])
             try:
-                Path(dirpath).rmdir()  # only succeeds when empty
+                if not inside_root(self.root, p.parent) or p.is_symlink() or                         (hasattr(os.path, "isjunction") and os.path.isjunction(p)):
+                    self.state.set(key, None)  # no longer the folder Skyfold made
+                    continue
+                if not p.exists():
+                    self.state.set(key, None)
+                    continue
+                p.rmdir()  # only succeeds when empty
+                self.state.set(key, None)
             except OSError:
-                pass
+                pass  # still in use: kept, and looked at again next time
 
     def _place(self, a: RemoteAsset, res: RemoteResource, taken: set[str]) -> str | None:
         """Pick a free relative path; adopt an identical untracked file if one is already there.

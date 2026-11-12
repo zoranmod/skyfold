@@ -180,6 +180,8 @@ BS: dict[str, str] = {
     "{name} leads outside the notes folder; left alone": "{name} vodi izvan foldera za bilješke; ostavljeno kako jeste",
     "The Notes folder already has a Notes.html that isn't from Skyfold. Choose an empty folder for Notes in Settings.":
         "Folder za bilješke već ima Notes.html koji nije od Skyfolda. U Postavkama izaberi prazan folder za bilješke.",
+    "Notes.html in the Notes folder wasn't written by this Skyfold; it is left as it is. Move or delete it to get a new index.":
+        "Notes.html u folderu za bilješke nije napisao ovaj Skyfold; ostavljen je kako jeste. Premjesti ga ili obriši da dobiješ novi indeks.",
     "This Drive folder belongs to another Apple ID. Choose a new, empty folder for iCloud Drive in Settings.":
         "Ovaj Drive folder pripada drugom Apple ID-u. U Postavkama izaberi novi, prazan folder za iCloud Drive.",
     "{name} leads outside the Drive folder; left alone": "{name} vodi izvan Drive foldera; ostavljeno kako jeste",

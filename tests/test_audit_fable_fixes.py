@@ -181,6 +181,7 @@ def test_private_files_left_by_a_crash_are_tidied(notes_env):  # noqa: F811
     s.run()
     for p in (root / "Notes/.skyfold-tmp-note-dead.html", root / ".skyfold-index-dead.tmp"):
         p.write_text("<html>raw</html>", encoding="utf-8")
+        s._own(p, "stage")  # written down when Skyfold made it, as before a real crash
         _age(p)
     s.run(full=True)
     assert not [p for p in root.rglob(".skyfold-*") if p.name != ".skyfold-notes" and p.is_file()
@@ -194,6 +195,7 @@ def test_a_moved_aside_index_comes_back_after_a_crash(notes_env):  # noqa: F811
     r.put("n1", "A")
     s.run()
     aside = root / f"{ne.STAGE_PREFIX}index-dead.html"
+    s._own(aside, "index")
     os.rename(root / ne.INDEX, aside)
     _age(aside)
     s._tidy_leftovers()
@@ -500,6 +502,7 @@ def test_a_crash_left_copy_of_the_synced_version_goes_to_the_recycle_bin(env):  
     st = (root / "a.txt").stat()
     aside = root / f"{de.ASIDE_PREFIX}1234abcd-a.txt"
     aside.write_bytes(b"base")
+    s._own(aside, "aside")  # written down before the move, as in a real crash
     os.utime(aside, (st.st_atime, st.st_mtime))
     recycled = []
     s._trash_local = lambda p: (recycled.append(p.name), p.unlink())
@@ -513,6 +516,7 @@ def test_old_unfinished_downloads_are_removed(env):  # noqa: F811
     s.run()
     left = root / f"{de.TMP_PREFIX}abcd1234"
     left.write_bytes(b"half")
+    s._own(left, "tmp")
     _age(left, 2 * 86400)
     s.run()
     assert not left.exists()

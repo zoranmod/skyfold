@@ -75,6 +75,7 @@ def test_a_version_left_aside_by_a_crash_is_shown_again(env):  # noqa: F811
     d.put("a.txt", b"cloud")
     s.run()
     (root / f"{de.ASIDE_PREFIX}123-456-a.txt").write_bytes(b"left by a crash")
+    s._own(root / f"{de.ASIDE_PREFIX}123-456-a.txt", "aside")  # written down before the move
     s.run()
     assert b"left by a crash" in _visible_bytes(root)
 

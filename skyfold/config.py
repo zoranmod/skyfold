@@ -66,9 +66,12 @@ def _data_dir() -> Path:
     here = APP_DIR / "data"
     try:
         here.mkdir(parents=True, exist_ok=True)
-        probe = here / ".write-test"
-        probe.write_text("", encoding="utf-8")
-        probe.unlink()
+        import os
+        import tempfile
+
+        fd, probe = tempfile.mkstemp(prefix=".write-test-", dir=here)  # a new file of its own, never an existing one
+        os.close(fd)
+        os.unlink(probe)
         return here
     except OSError:
         return PRIVATE_DIR / "data"
