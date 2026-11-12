@@ -853,7 +853,8 @@ class NotesSyncer:
             raise
         if aside is not None:
             self._let_go(aside, target, nid, old, modified)
-            self._disown(aside)
+            if not os.path.lexists(aside):  # still there (the Recycle Bin refused it): tried again later
+                self._disown(aside)
         self.state.set(f"page:{nid}", digest)
 
     def _let_go(self, aside: Path, target: Path, nid: str, old: tuple | None, modified=None) -> None:
@@ -990,8 +991,12 @@ class NotesSyncer:
             if recorded and _digest(aside) == recorded:
                 aside.unlink(missing_ok=True)  # exactly what Skyfold wrote
             else:  # edited, or unknown (no fingerprint saved, e.g. after a crash): recoverable
-                self._trash(aside)
-            self._disown(aside)
+                try:
+                    self._trash(aside)
+                except OSError as exc:  # stays written down: tried again next time
+                    log.warning("Notes: couldn't move the previous index to the Recycle Bin: %s", exc)
+            if not os.path.lexists(aside):
+                self._disown(aside)
         self.state.set("index_digest", written)
 
 
