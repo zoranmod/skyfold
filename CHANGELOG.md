@@ -144,6 +144,9 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - Accounts: a Settings window that was open while another Apple ID signed in (or out) is closed, and whatever it still saves is ignored; Settings can never change who is signed in. Whose iCloud Drive folder it is now comes from the session actually in use, so a folder that belongs to another Apple ID is refused ("choose a new, empty folder") instead of its files being uploaded into the wrong account.
   - Log: when iCloud refuses a rename, move or other change, only a code from a fixed list of known codes (CONFLICT, ITEM_NOT_FOUND…) or a number is kept; anything else is written as "other".
   - Notes: the clean-up of leftover pages removes a page only when it is named like a note's page in that folder and is byte for byte a page Skyfold wrote. A copy you made under another name, or one you changed, is yours and stays.
+- Twenty-second follow-up review (tests in tests/test_review24_codex_probes.py and tests/test_review24_fixes.py) - Notes and files Skyfold doesn't track:
+  - A new or renamed note never takes the name of a file that already exists and that Skyfold doesn't track, whatever the file looks like (also a copy of one of its own pages): the note gets the next free name instead.
+  - The clean-up of leftover pages no longer recognises pages by name or content. Skyfold writes down a page (with its fingerprint) only when it meant to remove it after a rename and couldn't; only such a page, still unchanged, is removed later. Copies you make - "Budget (2).html", "Budget - Copy.html" - are never touched.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.
