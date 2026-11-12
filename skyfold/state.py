@@ -79,6 +79,13 @@ class State:
                 (key, value),
             )
 
+    def items(self, prefix: str) -> list[tuple[str, str]]:
+        """(key, value) of every entry whose key starts with prefix and that has a value."""
+        with self._lock:
+            rows = self._db.execute("SELECT key, value FROM meta WHERE substr(key, 1, ?)=? AND value IS NOT NULL",
+                                    (len(prefix), prefix)).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
     # files ----------------------------------------------------------------
     def files(self) -> list[FileRow]:
         with self._lock:

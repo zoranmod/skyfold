@@ -630,27 +630,34 @@ class NotesSyncer:
 
         recycle(p)
 
+    def _own(self, p: Path, kind: str) -> None:
+        """Write down a private file before it is created: only files on this list are ever tidied up."""
+        self.state.set("tmp:" + p.relative_to(self.root).as_posix(), kind)
+
+    def _disown(self, p: Path) -> None:
+        try:
+            self.state.set("tmp:" + p.relative_to(self.root).as_posix(), None)
+        except ValueError:
+            pass
+
     def _tidy_leftovers(self) -> None:
-        """Private files left by a crash: unfinished exports are removed, a moved-aside page goes to the
-        Recycle Bin, and a moved-aside index comes back if Notes.html is missing."""
-        cutoff = time.time() - 3600
-        for dirpath, dirs, files in os.walk(self.root):
-            dirs[:] = [d for d in dirs if d != ASSETS and not _is_link(Path(dirpath) / d)]
-            for f in files:
-                if not (f.startswith(STAGE_PREFIX) or (f.startswith(".skyfold-index-") and f.endswith(".tmp"))):
-                    continue
-                p = Path(dirpath) / f
-                try:
-                    if p.stat().st_mtime > cutoff or not inside_root(self.root, p):
-                        continue  # may belong to a run that is still going
-                    if f.startswith(STAGE_PREFIX + "index-") and not (self.root / INDEX).exists():
+        """Private files a crash left behind - only the ones Skyfold wrote down when it made them:
+        unfinished exports are removed, a moved-aside page goes to the Recycle Bin, and a moved-aside
+        index comes back if Notes.html is missing. A file that merely has such a name is someone's."""
+        for key, kind in self.state.items("tmp:"):
+            p = self.root / key[len("tmp:"):]
+            try:
+                if p.is_file() and not _is_link(p) and inside_root(self.root, p):
+                    if kind == "index" and not (self.root / INDEX).exists():
                         os.rename(p, self.root / INDEX)
-                    elif f.startswith((STAGE_PREFIX + "old-", STAGE_PREFIX + "index-")):
+                    elif kind in ("old", "index"):
                         self._trash(p)
                     else:
                         p.unlink()
-                except OSError as exc:
-                    log.info("Notes: couldn't tidy %s: %s", f, exc)
+            except OSError as exc:
+                log.info("Notes: couldn't tidy %s: %s", p.name, exc)
+                continue  # stays written down: tried again next time
+            self.state.set(key, None)
 
     def run(self, full: bool = False) -> NotesResult:
         self.cancel_flag.clear()
@@ -718,6 +725,7 @@ class NotesSyncer:
                 staged_rel = f"{PurePosixPath(rel).parent.as_posix()}/{STAGE_PREFIX}{uuid.uuid4().hex}.html"
                 try:
                     _CURRENT_NOTE[0] = rel
+                    self._own(self.root / staged_rel, "stage")
                     self.remote.export(n.id, out_dir, PurePosixPath(staged_rel).name, self.root / ASSETS)
                     if _MISSING_ATTACHMENT.search((self.root / staged_rel).read_text(encoding="utf-8",
                                                                                      errors="replace")):
@@ -733,6 +741,7 @@ class NotesSyncer:
                     self._publish_page(self.root / staged_rel, self.root / rel, n.id, old, n.modified)
                 finally:
                     (self.root / staged_rel).unlink(missing_ok=True)
+                    self._disown(self.root / staged_rel)
             except (Cancelled, AuthRequired, RemoteUnavailable):
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -821,9 +830,11 @@ class NotesSyncer:
         aside = None
         if target.exists():
             aside = target.with_name(f"{STAGE_PREFIX}old-{uuid.uuid4().hex}.html")
+            self._own(aside, "old")
             os.rename(target, aside)
             if not _is_our_page(aside):  # someone's own file appeared there: give it back untouched
                 os.rename(aside, target)
+                self._disown(aside)
                 raise SyncError(t("{name} isn't a page Skyfold wrote; the note gets another name next time",
                                   name=target.name))
         try:
@@ -842,6 +853,7 @@ class NotesSyncer:
             raise
         if aside is not None:
             self._let_go(aside, target, nid, old, modified)
+            self._disown(aside)
         self.state.set(f"page:{nid}", digest)
 
     def _let_go(self, aside: Path, target: Path, nid: str, old: tuple | None, modified=None) -> None:
@@ -937,7 +949,17 @@ class NotesSyncer:
                                "folder for Notes in Settings."))
         if target.exists() and not _is_our_index(target):
             raise not_ours
+        if target.exists() and not (self.state.get("index_owned") or self.state.get("index_digest")):
+            # It looks like a Skyfold index, but this setup has no record of writing one here (a copy
+            # brought into the folder, or the database is new). Looking like one isn't owning it.
+            if not getattr(self, "_index_told", False):
+                self._index_told = True
+                self.cb.activity("info", t("Notes.html in the Notes folder wasn't written by this Skyfold; it is left "
+                                           "as it is. Move or delete it to get a new index."))
+            return
+        self.state.set("index_owned", "1")  # written down before the first index is put in place
         fd, tmp = tempfile.mkstemp(prefix=".skyfold-index-", suffix=".tmp", dir=self.root)
+        self._own(Path(tmp), "indextmp")
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(page)
         written = _digest(Path(tmp))  # what Skyfold wrote, known before the file is public
@@ -945,9 +967,11 @@ class NotesSyncer:
         try:
             if target.exists():  # moved aside and checked again: never overwrite what was saved meanwhile
                 aside = target.with_name(f"{STAGE_PREFIX}index-{uuid.uuid4().hex}.html")
+                self._own(aside, "index")
                 os.rename(target, aside)
                 if not _is_our_index(aside):
                     os.rename(aside, target)
+                    self._disown(aside)
                     aside = None
                     raise not_ours
             os.rename(tmp, target)  # refuses if a file was saved there meanwhile
@@ -960,12 +984,14 @@ class NotesSyncer:
             raise
         finally:
             Path(tmp).unlink(missing_ok=True)
+            self._disown(Path(tmp))
         if aside is not None:
             recorded = self.state.get("index_digest")
             if recorded and _digest(aside) == recorded:
                 aside.unlink(missing_ok=True)  # exactly what Skyfold wrote
             else:  # edited, or unknown (no fingerprint saved, e.g. after a crash): recoverable
                 self._trash(aside)
+            self._disown(aside)
         self.state.set("index_digest", written)
 
 

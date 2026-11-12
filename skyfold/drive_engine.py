@@ -141,6 +141,13 @@ class DriveState:
         with self._lock:
             self._db.execute("INSERT OR REPLACE INTO drive_meta VALUES(?,?)", (key, value))
 
+    def meta_items(self, prefix: str) -> dict[str, str]:
+        """key -> value of every meta entry whose key starts with prefix and that has a value."""
+        with self._lock:
+            rows = self._db.execute("SELECT key, value FROM drive_meta WHERE substr(key, 1, ?)=? AND value IS NOT NULL",
+                                    (len(prefix), prefix)).fetchall()
+        return {r[0]: r[1] for r in rows}
+
     def drop_one(self, path: str) -> None:
         """Forget only this row, not what is below it."""
         with self._lock:
@@ -256,6 +263,25 @@ class DriveSyncer:
         if self._stopped():
             raise Cancelled()
 
+    # private files ----------------------------------------------------------------------
+    def _rel(self, p: Path) -> str | None:
+        try:
+            return Path(p).relative_to(self.root).as_posix()
+        except ValueError:
+            return None
+
+    def _own(self, p: Path, kind: str) -> None:
+        """Write down a private file (a download in progress, a file moved aside) before it exists:
+        only files on this list are ever cleaned up, recovered, recycled or renamed."""
+        rel = self._rel(p)
+        if rel is not None:
+            self.state.set_meta(f"{kind}:{rel}", "1")
+
+    def _disown(self, p: Path, kind: str) -> None:
+        rel = self._rel(p)
+        if rel is not None:
+            self.state.set_meta(f"{kind}:{rel}", None)
+
     # content --------------------------------------------------------------------------
     def _cloud_hash(self, r: DriveItem) -> str | None:
         """SHA-256 of what iCloud has for this item now, by downloading it to a private file.
@@ -269,6 +295,7 @@ class DriveSyncer:
             fd, tmp = tempfile.mkstemp(prefix=TMP_PREFIX, dir=self.root)
             os.close(fd)
             tmp_path = Path(tmp)
+            self._own(tmp_path, "tmp")
 
             def on_bytes(k: int) -> None:
                 THROTTLE.take(max(k, 0))
@@ -287,6 +314,7 @@ class DriveSyncer:
         finally:
             if tmp_path is not None:
                 tmp_path.unlink(missing_ok=True)
+                self._disown(tmp_path, "tmp")
         self._hashes[key] = got
         return got
 
@@ -407,6 +435,7 @@ class DriveSyncer:
     def scan_local(self) -> dict[str, Local]:
         out: dict[str, Local] = {}
         self.unreadable = set()
+        owned = set(self.state.meta_items("aside:")) | set(self.state.meta_items("tmp:"))
         for dirpath, dirs, files in os.walk(self.root, onerror=lambda e: self._unreadable_add(e.filename or "")):
             dirs[:] = [d for d in dirs if not ignored(d)]
             for d in [d for d in dirs if _is_link(Path(dirpath) / d)]:
@@ -421,14 +450,21 @@ class DriveSyncer:
                 if d.startswith("."):
                     hide_like_mac(Path(dirpath) / d)
             for f in files:
-                if f.startswith(ASIDE_PREFIX):
-                    self._recover_aside(Path(dirpath) / f)
-                elif f.startswith(TMP_PREFIX):
-                    try:
-                        if time.time() - os.stat(Path(dirpath) / f).st_mtime > 86400:
-                            os.unlink(Path(dirpath) / f)  # an unfinished download from a crash
-                    except OSError:
-                        pass
+                if f.startswith(TMP_PREFIX):
+                    # Skyfold's own leftovers (written down when they were made) are finished off here.
+                    # A file that only has such a name is someone's: left alone, and not synced.
+                    full = Path(dirpath) / f
+                    rel_f = self._rel(full)
+                    if f"aside:{rel_f}" in owned:
+                        self._recover_aside(full)
+                        if not os.path.lexists(full):
+                            self._disown(full, "aside")
+                    elif f"tmp:{rel_f}" in owned:
+                        try:
+                            os.unlink(full)  # an unfinished download from a crash
+                            self._disown(full, "tmp")
+                        except OSError:
+                            pass
                 if ignored(f):
                     continue
                 rel = f"{rel_dir}/{f}" if rel_dir else f
@@ -1665,6 +1701,7 @@ class DriveSyncer:
             fd, tmp = tempfile.mkstemp(prefix=TMP_PREFIX, dir=target.parent)
             os.close(fd)
             tmp_path = Path(tmp)
+            self._own(tmp_path, "tmp")
             try:
                 self.remote.download(item, tmp_path, on_bytes)
                 if item.size >= 0 and tmp_path.stat().st_size != item.size:
@@ -1694,6 +1731,7 @@ class DriveSyncer:
                 aside = None
                 if target.exists() and target.is_file():
                     aside = target.with_name(_aside_name(target))
+                    self._own(aside, "aside")
                     os.rename(target, aside)  # moved, never overwritten (whatever is saved there right now)
                 put = tmp_path.stat()  # the rename keeps size and time
                 try:
@@ -1721,6 +1759,7 @@ class DriveSyncer:
             finally:
                 if tmp_path.exists():
                     tmp_path.unlink(missing_ok=True)
+                self._disown(tmp_path, "tmp")
 
         def fetch_reserved(item: DriveItem) -> tuple[Path, int, float, str, bool]:
             """fetch(), with this file's space set aside first. Each download is checked against the
@@ -1809,6 +1848,7 @@ class DriveSyncer:
                 full = self._abs(dest if dest is not None else self._conflict_name(rel))
                 self._touch_own(full)
                 os.rename(aside, full)  # refuses an existing name
+                self._disown(aside, "aside")
                 return
             except OSError:
                 continue
@@ -1818,6 +1858,7 @@ class DriveSyncer:
         """The version replaced by iCloud's newer one goes to the Recycle Bin, under a readable name."""
         p = PurePosixPath(rel)
         named = self._abs(str(p.with_name(f"{p.stem} ({t('previous version')}){p.suffix}")))
+        original = aside
         try:
             if not named.exists():
                 self._touch_own(named)
@@ -1827,6 +1868,7 @@ class DriveSyncer:
             pass
         try:
             self._trash_local(aside)
+            self._disown(original, "aside")
         except Exception as exc:  # noqa: BLE001 - kept; shown as a conflict copy on the next full sync
             log.warning("Drive: couldn't move the previous version of %s to the Recycle Bin: %s", rel, exc)
             if aside == named:
@@ -1842,9 +1884,7 @@ class DriveSyncer:
         log.info("Drive: recovering %s left by an interrupted download", rel)
         b = self.state.all().get(rel)
         try:
-            st = p.stat()
-            if b is not None and self._abs(rel).exists() and \
-                    (st.st_size, round(st.st_mtime, 2)) == (b.lsize, round(b.lmtime or 0, 2)):
+            if b is not None and self._abs(rel).exists() and self._pc_has_synced_content(b, p):
                 self._recycle_previous(p, rel)  # just the version both sides had: to the Recycle Bin
                 return
         except OSError:
