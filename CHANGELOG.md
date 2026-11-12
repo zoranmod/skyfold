@@ -4,6 +4,9 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Changed
+- New look (redesign branch): flat, calm surfaces in light and dark mode; the tray panel has a quiet brand mark, a grouped service list with icon tiles, a segmented iCloud storage bar with a legend (Photos / Drive / Other; click for details), a one-line activity list, and a footer with one primary button plus icon buttons (Open iCloud.com and Pause moved into the "More" menu; when paused, the primary button is "Resume"). Dialogs use the same tokens. No change to what is synced or deleted.
+
 ## [1.0.6] - 2026-11-10
 
 Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has a regression test that fails on 1.0.5.

@@ -309,5 +309,24 @@ def glyph(name: str, color: str, size: int = 20) -> QIcon:
     elif name == "close":
         p.drawLine(QPointF(s * 0.3, s * 0.3), QPointF(s * 0.7, s * 0.7))
         p.drawLine(QPointF(s * 0.7, s * 0.3), QPointF(s * 0.3, s * 0.7))
+    elif name == "chevron":
+        p.drawPolyline([QPointF(s * 0.4, s * 0.26), QPointF(s * 0.64, s * 0.5), QPointF(s * 0.4, s * 0.74)])
+    elif name == "more":
+        p.setBrush(QColor(color))
+        for x in (0.26, 0.5, 0.74):
+            p.drawEllipse(QPointF(s * x, s * 0.5), s * 0.045, s * 0.045)
+    elif name == "pin":
+        path = QPainterPath(QPointF(s * 0.5, s * 0.88))
+        path.cubicTo(s * 0.22, s * 0.6, s * 0.2, s * 0.44, s * 0.2, s * 0.4)
+        path.arcTo(QRectF(s * 0.2, s * 0.12, s * 0.6, s * 0.6), 180, -180)
+        path.cubicTo(s * 0.8, s * 0.44, s * 0.78, s * 0.6, s * 0.5, s * 0.88)
+        p.drawPath(path)
+        p.drawEllipse(QPointF(s * 0.5, s * 0.41), s * 0.09, s * 0.09)
+    elif name == "sliders":
+        p.drawLine(QPointF(m, s * 0.32), QPointF(s - m, s * 0.32))
+        p.drawLine(QPointF(m, s * 0.68), QPointF(s - m, s * 0.68))
+        p.setBrush(QColor(0, 0, 0, 0))
+        p.drawEllipse(QPointF(s * 0.4, s * 0.32), s * 0.1, s * 0.1)
+        p.drawEllipse(QPointF(s * 0.62, s * 0.68), s * 0.1, s * 0.1)
     p.end()
     return QIcon(pm)

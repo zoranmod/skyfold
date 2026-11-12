@@ -24,7 +24,8 @@ from PySide6.QtWidgets import (
 from ..config import APP_NAME
 from ..i18n import t
 from ..worker import fmt_time
-from .icons import STATE_COLORS, draw_logo, glyph
+from .icons import STATE_COLORS, glyph
+from .theme import state_color
 
 STATE_TITLES = {
     "idle": t("Everything is in sync"),
@@ -182,8 +183,112 @@ class StorageRing(QWidget):
         p.drawText(self.rect(), Qt.AlignCenter, f"{round(self.fraction * 100)}%")
 
 
+class StorageBar(QFrame):
+    """iCloud storage: "88 of 200 GB", one thin bar split into Photos / Drive / Other, and a legend.
+    Click (or Enter) for the details line. The only place in the panel that uses category colours."""
+
+    def __init__(self, palette: dict[str, str]) -> None:
+        super().__init__()
+        self.c = palette
+        self.parts: list[tuple[str, int, str]] = []  # (label, bytes, colour key)
+        self.used = self.total = 0
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(2, 3, 2, 3)
+        lay.setSpacing(6)
+        head = QHBoxLayout()
+        self.title = QLabel(t("iCloud storage"))
+        self.title.setObjectName("Hint")
+        self.amount = QLabel("")
+        self.amount.setObjectName("Hint")
+        head.addWidget(self.title)
+        head.addStretch(1)
+        head.addWidget(self.amount)
+        lay.addLayout(head)
+        self.bar = QWidget()
+        self.bar.setFixedHeight(6)
+        self.bar.paintEvent = self._paint_bar  # type: ignore[method-assign]
+        lay.addWidget(self.bar)
+        self.legend = QLabel("")
+        self.legend.setObjectName("Legend")
+        self.legend.setTextFormat(Qt.RichText)
+        lay.addWidget(self.legend)
+        self.details = QLabel("")
+        self.details.setObjectName("Legend")
+        self.details.setWordWrap(True)
+        lay.addWidget(self.details)
+        self.details.hide()
+
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
+        self._render()
+
+    def set(self, used: int, total: int, parts: list) -> None:
+        """parts: (label, bytes, key) as iCloud reports them; grouped here into Photos / Drive / Other."""
+        self.used, self.total = used, total
+        photos = sum(p[1] for p in parts if len(p) > 2 and str(p[2]).lower() == "photos")
+        drive = sum(p[1] for p in parts if len(p) > 2 and str(p[2]).lower() == "docs")
+        other = max(0, used - photos - drive)
+        self.parts = [(t("Photos"), photos, "c_photos"), (t("Drive"), drive, "c_drive"), (t("Other"), other, "c_other")]
+        self._render()
+
+    def _render(self) -> None:
+        def size(n: int) -> str:  # "88 GB", not "88.0 GB"
+            return fmt_bytes(n, 1000).replace(",0 ", " ").replace(".0 ", " ")
+
+        self.amount.setText(t("{used} of {total}", used=size(self.used), total=size(self.total)))
+        self.legend.setText("&nbsp;&nbsp;&nbsp;&nbsp;".join(
+            f'<span style="color:{self.c[key]}">&#9679;</span>&nbsp;{label}&nbsp;<b>{size(n)}</b>'
+            for label, n, key in self.parts if n))
+        pct = round(100 * self.used / self.total) if self.total else 0
+        self.details.setText(t("{pct}% used · {free} available", pct=pct, free=size(max(0, self.total - self.used))))
+        text = t("iCloud storage") + ": " + self.amount.text() + ". " + ", ".join(
+            f"{label} {size(n)}" for label, n, _ in self.parts if n)
+        self.setAccessibleName(text)
+        self.setToolTip(self.details.text())
+        self.bar.update()
+
+    def _paint_bar(self, _e) -> None:
+        p = QPainter(self.bar)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.bar.width(), self.bar.height()
+        from PySide6.QtGui import QPainterPath
+
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(0, 0, w, h), h / 2, h / 2)
+        p.setClipPath(clip)
+        p.fillRect(QRectF(0, 0, w, h), QColor(self.c["track"]))
+        x = 0.0
+        for _label, n, key in self.parts:
+            if not n or not self.total:
+                continue
+            seg = max(2.0, w * n / self.total)
+            p.fillRect(QRectF(x, 0, seg - 1, h), QColor(self.c[key]))  # 1 px gap in the surface colour
+            x += seg
+        p.end()
+
+    def _toggle(self) -> None:
+        self.details.setVisible(not self.details.isVisible())
+        top = self.window()
+        if hasattr(top, "_size_list"):
+            QTimer.singleShot(0, top._size_list)
+
+    def mouseReleaseEvent(self, e) -> None:  # noqa: N802
+        if e.button() == Qt.LeftButton:
+            self._toggle()
+        super().mouseReleaseEvent(e)
+
+    def keyPressEvent(self, e) -> None:  # noqa: N802
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self._toggle()
+            return
+        super().keyPressEvent(e)
+
+
 class ServiceRow(QFrame):
-    """One service in the services card: glyph, name, one-line status, coloured dot."""
+    """One service in the services group: icon tile, name, one line of detail, a chevron. A coloured
+    dot appears only when the service needs attention."""
 
     clicked = Signal()
 
@@ -193,38 +298,47 @@ class ServiceRow(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)  # Tab reaches it; Enter or Space opens it, like a button
         self.glyph_name = glyph_name
+        self.setMinimumHeight(52)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 6, 10, 6)
-        lay.setSpacing(10)
+        lay.setContentsMargins(11, 8, 9, 8)
+        lay.setSpacing(11)
         self.icon = QLabel()
-        self.icon.setFixedSize(20, 20)
+        self.icon.setObjectName("SvcTile")
+        self.icon.setFixedSize(26, 26)
+        self.icon.setAlignment(Qt.AlignCenter)
         col = QVBoxLayout()
-        col.setSpacing(0)
+        col.setSpacing(2)
         self.name = QLabel(name)
-        self.name.setStyleSheet("font-weight: 600;")
+        self.name.setObjectName("RowTitle")
         self.detail = QLabel("")
         self.detail.setObjectName("Muted")
         self.detail.setWordWrap(True)
         col.addWidget(self.name)
         col.addWidget(self.detail)
         self.dot = QLabel()
-        self.dot.setFixedSize(10, 10)
+        self.dot.setFixedSize(8, 8)
+        self.chevron = QLabel()
+        self.chevron.setFixedSize(14, 14)
         lay.addWidget(self.icon, 0, Qt.AlignVCenter)
         lay.addLayout(col, 1)
         lay.addWidget(self.dot, 0, Qt.AlignVCenter)
+        lay.addWidget(self.chevron, 0, Qt.AlignVCenter)
         self.apply_palette(palette)
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette
-        self.icon.setPixmap(glyph(self.glyph_name, palette["accent_fg"], 20).pixmap(QSize(20, 20)))
+        self.icon.setPixmap(glyph(self.glyph_name, palette["muted"], 16).pixmap(QSize(16, 16)))
+        self.chevron.setPixmap(glyph("chevron", palette["muted"], 14).pixmap(QSize(14, 14)))
 
-    def set(self, detail: str, state: str | None) -> None:
+    def set(self, detail: str, state: str | None, checked: str = "") -> None:
+        """detail: the one quiet line; checked: when it was last checked (tooltip and screen readers)."""
         self.detail.setText(break_at_dots(detail))
-        self.setAccessibleName(f"{self.name.text()}: {detail}")
-        if state is None:
+        self.setToolTip(checked)
+        self.setAccessibleName(f"{self.name.text()}: {detail}" + (f", {checked}" if checked else ""))
+        if state in (None, "idle", "syncing"):  # nothing to flag: the row stays quiet
             self.dot.setStyleSheet("background: transparent;")
         else:
-            self.dot.setStyleSheet(f"background: {STATE_COLORS.get(state, '#22c55e')}; border-radius: 5px;")
+            self.dot.setStyleSheet(f"background: {state_color(self.c, state)}; border-radius: 4px;")
 
     def mousePressEvent(self, e) -> None:  # noqa: N802
         self.clicked.emit()
@@ -274,40 +388,31 @@ class ActivityRow(QFrame):
             self.setCursor(Qt.PointingHandCursor)
             self.setToolTip(target or t("Click for details"))
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(4, 8, 4, 8)
-        lay.setSpacing(12)
+        lay.setContentsMargins(2, 5, 2, 5)
+        lay.setSpacing(9)
         self.tile = QFrame()
         self.tile.setObjectName("FileTile")
-        self.tile.setFixedSize(36, 36)
+        self.tile.setFixedSize(16, 16)
         tl = QVBoxLayout(self.tile)
         tl.setContentsMargins(0, 0, 0, 0)
         self.icon = QLabel()
         self.icon.setAlignment(Qt.AlignCenter)
         tl.addWidget(self.icon)
-        col = QVBoxLayout()
-        col.setSpacing(1)
         self.title_text, self.detail_text = split_activity(text, kind)
-        self.text = QLabel()  # the file name (or the whole message when it isn't about one file)
-        self.text.setObjectName("RowTitle")
+        self.text = QLabel()  # the file name (or the message), on one line; the rest is in the tooltip
+        self.text.setObjectName("ActTitle")
         self.text.setMinimumWidth(0)
         self.text.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.text.setWordWrap(not self.detail_text)
-        from PySide6.QtGui import QFontMetrics
-
-        self.detail = QLabel()
+        self.detail = QLabel()  # (kept for the tooltip and the accessible name; not shown as a line)
         self.detail.setObjectName("Muted")
-        self.detail.setText(QFontMetrics(self.detail.font()).elidedText(self.detail_text, Qt.ElideMiddle, 290))
-        self.detail.setToolTip(self.detail_text)
-        self.detail.setMinimumWidth(0)
-        self.detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.detail.setText(self.detail_text)
+        self.detail.hide()
         self.when = QLabel(fmt_time(ts))
         self.when.setObjectName("Hint")
-        col.addWidget(self.text)
-        col.addWidget(self.detail)
-        col.addWidget(self.when)
-        lay.addWidget(self.tile, 0, Qt.AlignTop)
-        lay.addLayout(col, 1)
-        self.detail.setVisible(bool(self.detail_text))  # only now: it has a parent (never a window of its own)
+        lay.addWidget(self.tile, 0, Qt.AlignVCenter)
+        lay.addWidget(self.text, 1)
+        lay.addWidget(self.when, 0, Qt.AlignVCenter)
+        self.detail.setParent(self)
         if target or kind == "error":
             self.setFocusPolicy(Qt.StrongFocus)  # Tab reaches it; Enter or Space opens it
         self._set_title()
@@ -318,19 +423,20 @@ class ActivityRow(QFrame):
         from PySide6.QtGui import QFontMetrics
 
         title = self.title_text + (f"  (×{self.count})" if self.count > 1 else "")
-        if self.detail_text:  # one line: a file name, shortened in the middle like Explorer does
-            self.text.ensurePolished()
-            self.text.setText(QFontMetrics(self.text.font()).elidedText(title, Qt.ElideMiddle, 270))
-            self.text.setToolTip(title)
-        else:
-            self.text.setText(short_text(title, 110))
+        self.text.ensurePolished()
+        self.text.setText(QFontMetrics(self.text.font()).elidedText(title.replace(chr(10), " "), Qt.ElideMiddle, 236))
+        tip = [title] + ([self.detail_text] if self.detail_text else []) + ([self.target] if self.target else [])
+        if self.kind == "error" and not self.target:
+            tip.append(t("Click for details"))
+        self.setToolTip(chr(10).join(tip))
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         if self.kind == "error":
             name, color = "error", palette["err_text"]
         else:
-            name, color = file_glyph(self.title_text if self.detail_text else "", self.kind), palette["accent_fg"]
-        self.icon.setPixmap(glyph(name, color, 20).pixmap(QSize(20, 20)))
+            name = ACTIVITY_GLYPH.get(self.kind) or file_glyph(self.title_text if self.detail_text else "", self.kind)
+            color = palette["accent_fg"] if self.kind in ("download", "upload") else palette["muted"]
+        self.icon.setPixmap(glyph(name, color, 14).pixmap(QSize(14, 14)))
 
     def refresh(self) -> None:
         self.when.setText(fmt_time(self.ts))
@@ -356,7 +462,6 @@ class ActivityRow(QFrame):
         self.ts = ts
         self.target = target or self.target
         self._set_title()
-        self.setToolTip(self.target or (t("Click for details") if self.kind == "error" else ""))
         self.refresh()
 
     def mouseReleaseEvent(self, e) -> None:  # noqa: N802 - Qt naming
@@ -396,7 +501,7 @@ class Flyout(QWidget):
     serviceClicked = Signal(str)  # "photos" | "drive" | "notes"
     quitApp = Signal()
 
-    WIDTH = 400
+    WIDTH = 376
 
     def __init__(self, palette: dict[str, str]) -> None:
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -426,18 +531,16 @@ class Flyout(QWidget):
         outer.addWidget(self._scroll, 1)
         root = QVBoxLayout(body)
         root.setContentsMargins(16, 16, 16, 8)
-        root.setSpacing(10)
+        root.setSpacing(11)
 
         # header
         head = QHBoxLayout()
-        logo = QLabel()
-        pm = QPixmap(56, 56)
-        pm.fill(Qt.transparent)
-        pp = QPainter(pm)
-        draw_logo(pp, 56)
-        pp.end()
-        pm.setDevicePixelRatio(2)
-        logo.setPixmap(pm)
+        logo = QLabel()  # a quiet brand mark: the cloud in the accent colour on its soft tint
+        logo.setObjectName("Brand")
+        logo.setFixedSize(34, 34)
+        logo.setAlignment(Qt.AlignCenter)
+        logo.setPixmap(glyph("cloud", palette["accent_fg"], 20).pixmap(QSize(20, 20)))
+        self._brand = logo
         titles = QVBoxLayout()
         titles.setSpacing(0)
         app_title = QLabel(APP_NAME)
@@ -449,7 +552,7 @@ class Flyout(QWidget):
         status = QHBoxLayout()
         status.setSpacing(5)
         self.status_icon = QLabel()
-        self.status_icon.setFixedSize(14, 14)
+        self.status_icon.setFixedSize(13, 13)
         self.status_line = QLabel("")
         self.status_line.setObjectName("StatusLine")
         status.addWidget(self.status_icon, 0, Qt.AlignVCenter)
@@ -467,7 +570,7 @@ class Flyout(QWidget):
         self.storage_ring = StorageRing(palette)
         self.storage_ring.hide()
         head.addWidget(logo)
-        head.addSpacing(4)
+        head.addSpacing(6)
         head.addLayout(titles, 1)
         self.dot.hide()  # the status line under the title says it now (kept for its state logic)
         head.addWidget(self.storage_ring, 0, Qt.AlignVCenter)
@@ -519,10 +622,10 @@ class Flyout(QWidget):
         services.setObjectName("Card")
         self.services_card = services
         sl = QVBoxLayout(services)
-        sl.setContentsMargins(4, 4, 4, 4)
+        sl.setContentsMargins(0, 0, 0, 0)
         sl.setSpacing(0)
         self.row_photos = ServiceRow("photo", t("Photos"), palette)
-        self.row_drive = ServiceRow("cloud", t("iCloud Drive"), palette)
+        self.row_drive = ServiceRow("folder", t("iCloud Drive"), palette)
         self.row_photos.clicked.connect(lambda: self.serviceClicked.emit("photos"))
         self.row_drive.clicked.connect(lambda: self.serviceClicked.emit("drive"))
         self.row_notes = ServiceRow("note", t("Notes"), palette)
@@ -533,13 +636,20 @@ class Flyout(QWidget):
             if i:
                 sep = QFrame()
                 sep.setObjectName("Sep")
-                sl.addWidget(sep)
+                inset = QHBoxLayout()  # the line starts after the icon tile, like a grouped list
+                inset.setContentsMargins(48, 0, 11, 0)
+                inset.addWidget(sep)
+                sl.addLayout(inset)
             sl.addWidget(row)
         root.addWidget(services)
 
+        self.storage_bar = StorageBar(palette)
+        self.storage_bar.hide()
+        root.addWidget(self.storage_bar)
+
         # activity
         sec = QHBoxLayout()
-        lbl = QLabel(t("RECENT ACTIVITY"))
+        lbl = QLabel(t("Recent activity"))
         lbl.setObjectName("Section")
         self.last_sync = QLabel("")
         self.last_sync.setObjectName("Hint")
@@ -550,9 +660,8 @@ class Flyout(QWidget):
         self.clear_btn.clicked.connect(self._clear_activity)
         self.clear_btn.hide()
         sec.addWidget(lbl)
-        sec.addSpacing(6)
-        sec.addWidget(self.clear_btn)
         sec.addStretch(1)
+        sec.addWidget(self.clear_btn)
         self.last_sync.hide()  # each service row now shows its own "checked …" time
         root.addLayout(sec)
         self.list = QScrollArea()
@@ -574,43 +683,60 @@ class Flyout(QWidget):
         root.addWidget(self.empty)
         self.list.hide()
 
-        # bottom bar: icon + label buttons, like the OneDrive panel
+        # footer: one primary button, then icon-only buttons (each with a tooltip and an accessible name)
         bar = QFrame()
         bar.setObjectName("BottomBar")
         bl = QHBoxLayout(bar)
-        bl.setContentsMargins(8, 6, 8, 8)
-        bl.setSpacing(2)
+        bl.setContentsMargins(13, 10, 13, 11)
+        bl.setSpacing(6)
 
-        def bar_button(text: str, slot) -> QToolButton:
+        def bar_button(text: str, slot, tip: str = "") -> QToolButton:
             b = QToolButton()
             b.setObjectName("Bar")
-            b.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-            b.setIconSize(QSize(20, 20))
+            b.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            b.setIconSize(QSize(18, 18))
             b.setText(text)
+            b.setToolTip(tip or text)
+            b.setAccessibleName(tip or text)
             b.setCursor(Qt.PointingHandCursor)
-            b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             b.clicked.connect(slot)
             bl.addWidget(b)
             return b
 
-        self.sync_btn = bar_button(t("Sync"), self._on_sync_clicked)
-        self.sync_btn.setToolTip(t("Sync now"))
+        self.sync_btn = bar_button(t("Sync now"), self._on_sync_clicked)
         self.sync_btn.setProperty("primary", True)
+        self.sync_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.sync_btn.setIconSize(QSize(16, 16))
+        self.sync_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.open_btn = bar_button(t("Open folder"), self._open_folder_menu)
+        self.folder_btn = bar_button(t("Find My"), self.findMy, t("Find My devices…"))  # (name kept: other code refers to it)
+        self.more_btn = bar_button(t("More"), self._more_menu)
+        # Kept as objects (other code and the tests use them); their actions live in the "More" menu now.
         self.web_btn = bar_button(t("iCloud.com"), lambda: _open_url("https://www.icloud.com"))
-        self.folder_btn = bar_button(t("Find My"), self.findMy)  # (name kept: other code refers to it)
-        self.folder_btn.setToolTip(t("Find My devices…"))
-        self.folder_btn.setAccessibleName(t("Find My devices…"))
         self.pause_btn = bar_button(t("Pause"), self.togglePause)
+        self.web_btn.hide()
+        self.pause_btn.hide()
         self._bottom = bar
         outer.addWidget(bar)
         self._bar_icons()
         self.set_paused(False)
 
+    def _more_menu(self) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.addAction(glyph("globe", self.c["muted"]), t("Open iCloud.com"), self.web_btn.click)
+        pause = menu.addAction(glyph("play" if self.paused else "pause", self.c["muted"]),
+                               t("Resume syncing") if self.paused else t("Pause all syncing"), self.togglePause.emit)
+        pause.setEnabled(self.state not in ("auth", "setup"))
+        menu.exec(self.more_btn.mapToGlobal(self.more_btn.rect().topRight())
+                  - QPoint(menu.sizeHint().width(), menu.sizeHint().height() + 4))
+
     def _bar_icons(self) -> None:
-        self.open_btn.setIcon(glyph("folder", self.c["text"]))
-        self.web_btn.setIcon(glyph("globe", self.c["text"]))
-        self.folder_btn.setIcon(glyph("device", self.c["text"]))
+        self.open_btn.setIcon(glyph("folder", self.c["muted"]))
+        self.web_btn.setIcon(glyph("globe", self.c["muted"]))
+        self.folder_btn.setIcon(glyph("pin", self.c["muted"]))
+        self.more_btn.setIcon(glyph("more", self.c["muted"]))
 
     def _open_folder_menu(self) -> None:
         """One folder per synced service: open it straight away, or choose when there are several."""
@@ -634,8 +760,10 @@ class Flyout(QWidget):
         """Called when Windows switches light/dark: re-tint the hand-drawn icons."""
         self.c = palette
         self.gear.setIcon(glyph("gear", palette["muted"]))
+        self._brand.setPixmap(glyph("cloud", palette["accent_fg"], 20).pixmap(QSize(20, 20)))
         self.storage_ring.c = palette
         self.storage_ring.update()
+        self.storage_bar.apply_palette(palette)
         self._bar_icons()
         self.set_paused(self.paused)
         self.set_state(self.state, self.status_text.text())
@@ -668,7 +796,7 @@ class Flyout(QWidget):
 
     def set_paused(self, paused: bool) -> None:
         self.paused = paused
-        self.pause_btn.setIcon(glyph("play" if paused else "pause", self.c["text"]))
+        self.pause_btn.setIcon(glyph("play" if paused else "pause", self.c["muted"]))
         self.pause_btn.setText(t("Resume") if paused else t("Pause"))
         self.pause_btn.setToolTip(t("Resume syncing") if paused else t("Pause syncing"))
         self.pause_btn.setAccessibleName(self.pause_btn.toolTip())
@@ -694,11 +822,13 @@ class Flyout(QWidget):
         if state == "auth":
             self.auth_banner.text.setText(t("Signing in to iCloud is required to sync."))
         name, label = {"syncing": ("close", t("Stop")), "setup": ("folder", t("Set up")),
-                       "auth": ("cloud", t("Sign in"))}.get(
-            state, ("sync", t("Sync")))
+                       "auth": ("cloud", t("Sign in")), "paused": ("play", t("Resume"))}.get(
+            state, ("sync", t("Sync now")))
         self.sync_btn.setText(label)
-        self.sync_btn.setIcon(glyph(name, self.c["accent_fg"] if state != "paused" else self.c["disabled"]))
-        self.sync_btn.setEnabled(state != "paused")  # one way to continue: Resume
+        self.sync_btn.setToolTip(t("Resume syncing") if state == "paused" else label)
+        self.sync_btn.setAccessibleName(self.sync_btn.toolTip())
+        self.sync_btn.setIcon(glyph(name, self.c["accent_fg"]))
+        self.sync_btn.setEnabled(True)  # paused: this button is the way to continue
         self._status_line()
         self._size_list()
 
@@ -709,9 +839,10 @@ class Flyout(QWidget):
             title = t("Waiting for your OK")
         icon = {"idle": "check", "syncing": "sync", "paused": "pause", "error": "error", "auth": "error",
                 "offline": "cloud", "setup": "folder", "attention": "error"}.get(state, "check")
-        color = STATE_COLORS.get(state, "#16a34a")
-        self.status_icon.setPixmap(glyph(icon, color, 14).pixmap(QSize(14, 14)))
+        color = state_color(self.c, state)
+        self.status_icon.setPixmap(glyph(icon, color, 13).pixmap(QSize(13, 13)))
         self.status_line.setText(title)
+        self.status_line.setStyleSheet(f"color: {color};")
 
     def set_progress(self, done: int, total: int, text: str) -> None:
         if self.state != "syncing" or total <= 0:
@@ -741,9 +872,10 @@ class Flyout(QWidget):
             lines += [f"{p[0]}: {fmt_bytes(p[1], 1000)}" for p in st.get("parts", [])]
             self.storage_ring.setToolTip("\n".join(lines).strip())
             self.storage_ring.setAccessibleName(t("iCloud storage") + f" {round(100 * used / total)}%")
-            self.storage_ring.show()
+            self.storage_bar.set(used, total, list(st.get("parts", [])))
+            self.storage_bar.show()
         else:
-            self.storage_ring.hide()
+            self.storage_bar.hide()
         self._last_sync_ts = stats.get("last_sync")
         self.refresh_times()
 
@@ -756,29 +888,36 @@ class Flyout(QWidget):
         detail = t("{photos} photos · {videos} videos · {size}", photos=n(s.get("photos", 0)),
                    videos=n(s.get("videos", 0)), size=fmt_bytes(s.get("bytes", 0)))
         when = s.get("last_sync")
-        detail += " · " + (t("checked {when}", when=fmt_time(when)) if when else t("first sync in progress"))
+
+        def checked(ts) -> str:
+            return t("checked {when}", when=fmt_time(ts)) if ts else ""
+
+        if not when:
+            detail += " · " + t("first sync in progress")
         waiting = {"auth": t("Waiting for sign-in"), "setup": t("Not set up yet")}.get(self.state)
         if waiting and not when:
             detail = waiting
-        self.row_photos.set(detail, "idle" if self.state == "idle" else self.state)
+        self.row_photos.set(detail, "idle" if self.state == "idle" else self.state, checked(when))
         self.folder_btn.setEnabled(self.state not in ("auth", "setup"))
         self.pause_btn.setEnabled(self.state not in ("auth", "setup"))
         if s.get("drive_enabled"):
             when = s.get("drive_last_sync")
             detail = t("{files} files · {size}", files=n(s.get("drive_files", 0)), size=fmt_bytes(s.get("drive_bytes", 0)))
-            detail += " · " + (t("checked {when}", when=fmt_time(when)) if when else t("first sync in progress"))
+            if not when:
+                detail += " · " + t("first sync in progress")
             if waiting and not when:
                 detail = waiting
-            self.row_drive.set(detail, "idle" if self.state == "idle" else self.state)
+            self.row_drive.set(detail, "idle" if self.state == "idle" else self.state, checked(when))
         else:
             self.row_drive.set(t("Off · click to turn on"), None)
         if s.get("notes_enabled"):
             when = s.get("notes_last_sync")
             detail = t("{n} notes", n=n(s.get("notes_count", 0)))
-            detail += " · " + (t("checked {when}", when=fmt_time(when)) if when else t("first read pending"))
+            if not when:
+                detail += " · " + t("first read pending")
             if waiting and not when:
                 detail = waiting
-            self.row_notes.set(detail, "idle" if self.state == "idle" else self.state)
+            self.row_notes.set(detail, "idle" if self.state == "idle" else self.state, checked(when))
         else:
             self.row_notes.set(t("Off · click to turn on"), None)
 
@@ -817,7 +956,7 @@ class Flyout(QWidget):
         self._size_list()
 
     MAX_ROWS_VISIBLE = 6
-    MIN_LIST_HEIGHT = 300  # the panel keeps a calm, steady height instead of jumping with each entry
+    MIN_LIST_HEIGHT = 104  # the panel keeps a calm, steady height instead of jumping with each entry
 
     def _activity_rows(self) -> list["ActivityRow"]:
         return [self._rows.itemAt(i).widget() for i in range(self._rows.count() - 1)]
@@ -911,16 +1050,13 @@ class Flyout(QWidget):
         return self._screen().availableGeometry().height() - 24
 
     def _fit_width(self) -> None:
-        """At most 400 px, never wider than the screen (e.g. a small display at 225 %)."""
+        """At most 376 px, never wider than the screen (e.g. a small display at 225 %)."""
         w = max(200, min(Flyout.WIDTH, self._screen().availableGeometry().width() - 24))
         if w != self.WIDTH or self.width() != w:
             self.WIDTH = w
             self.setFixedWidth(w)
-            style = Qt.ToolButtonTextUnderIcon if w >= 390 else Qt.ToolButtonIconOnly
-            for b in (self.sync_btn, self.open_btn, self.web_btn, self.folder_btn, self.pause_btn):
-                b.setToolButtonStyle(style)
-                if not b.toolTip():
-                    b.setToolTip(b.text())
+            # a very narrow screen: the primary button keeps its icon only (its tooltip says the rest)
+            self.sync_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon if w >= 300 else Qt.ToolButtonIconOnly)
 
     def _needed_height(self) -> int:
         lay = self._body.layout()
