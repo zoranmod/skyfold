@@ -493,7 +493,7 @@ class SettingsDialog(_Dialog):
         self.c = palette
         self.reset_state = False
         self.reset_drive = False
-        self.resize(*_fit_screen(760, 600))
+        self.resize(*_fit_screen(680, 540))
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -505,10 +505,10 @@ class SettingsDialog(_Dialog):
         nav_pane = QWidget()
         nav_pane.setObjectName("NavPane")
         nav_pane.setAttribute(Qt.WA_StyledBackground, True)
-        nav_pane.setFixedWidth(190)
+        nav_pane.setFixedWidth(168)
         nl = QVBoxLayout(nav_pane)
-        nl.setContentsMargins(12, 20, 12, 12)
-        nl.setSpacing(12)
+        nl.setContentsMargins(9, 16, 9, 12)
+        nl.setSpacing(10)
         title = _label(t("Settings"), "Title")
         title.setContentsMargins(8, 0, 0, 0)
         nl.addWidget(title)
@@ -555,7 +555,7 @@ class SettingsDialog(_Dialog):
         body = QWidget()
         body.setObjectName("Root")
         lay = QVBoxLayout(body)
-        lay.setContentsMargins(24, 20, 24, 16)
+        lay.setContentsMargins(22, 18, 22, 16)
         lay.setSpacing(8)
         scroll.setWidget(body)
         self.stack.addWidget(scroll)
@@ -567,7 +567,7 @@ class SettingsDialog(_Dialog):
         card = QFrame()
         card.setObjectName("Card")
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(8)
         parent.addWidget(card)
         return lay
@@ -577,7 +577,7 @@ class SettingsDialog(_Dialog):
         row = QHBoxLayout()
         row.setSpacing(12)
         row.addWidget(QLabel(text), 1, Qt.AlignVCenter)
-        w.setFixedWidth(250)
+        w.setFixedWidth(220)
         row.addWidget(w, 0, Qt.AlignVCenter)
         return row
 
@@ -634,6 +634,16 @@ class SettingsDialog(_Dialog):
         out.clicked.connect(self._sign_out)
         row.addWidget(out, 0, Qt.AlignVCenter)
         acc.addLayout(row)
+        if self.storage.get("total"):  # the same storage bar as in the panel
+            from .flyout import StorageBar
+
+            sep = QFrame()
+            sep.setObjectName("Sep")
+            acc.addWidget(sep)
+            bar = StorageBar(self.c)
+            bar.set(self.storage.get("used", 0), self.storage["total"], list(self.storage.get("parts", [])))
+            bar.details.show()
+            acc.addWidget(bar)
 
         sync = self._card(lay, t("SYNC"))
         self.poll = Combo()

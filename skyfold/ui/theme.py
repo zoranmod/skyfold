@@ -134,7 +134,9 @@ QTreeView::indicator:indeterminate {{ background: {c['accent']}; border-color: {
 * {{ font-family: "Segoe UI Variable Text","Segoe UI Variable","Segoe UI",sans-serif; font-size: 9.75pt; color: {c['text']}; }}
 QWidget#Root, QDialog {{ background: {c['bg']}; }}
 QWidget#Footer {{ background: {c['group']}; border-top: 1px solid {c['border']}; }}
-QWidget#NavPane {{ background: {c['surface']}; border-right: 1px solid {c['border']}; }}
+QWidget#NavPane {{ background: {c['group']}; border-right: 1px solid {c['border']}; }}
+QDialog QFrame#Card {{ border: 1px solid {c['border']}; border-radius: 10px; }}
+QDialog QLabel#Section {{ font-size: 7.5pt; letter-spacing: 1.2px; }}
 QFrame#Card, QFrame#Tile {{ background: {c['group']}; border: none; border-radius: 11px; }}
 QFrame#Row {{ background: transparent; border: none; border-radius: 9px; }}
 QFrame#Row:hover {{ background: {c['tile']}; }}
@@ -232,8 +234,9 @@ QProgressBar {{ background: {c['track']}; border: none; border-radius: 2px; min-
 QProgressBar::chunk {{ background: {c['accent']}; border-radius: 2px; }}
 QListWidget {{ background: transparent; border: none; outline: none; }}
 QListWidget::item {{ padding: 6px 4px; border-bottom: 1px solid {c['border']}; }}
-QListWidget#Nav::item {{ border: none; border-radius: 6px; padding: 8px 10px; margin: 1px 0; }}
-QListWidget#Nav::item:hover {{ background: {c['hover']}; }}
+QListWidget#Nav {{ font-size: 9pt; }}
+QListWidget#Nav::item {{ border: none; border-radius: 7px; padding: 8px 9px; margin: 1px 0; color: {c['muted']}; }}
+QListWidget#Nav::item:hover {{ background: {c['tile']}; }}
 QListWidget#Nav::item:selected {{ background: {c['accent_soft']}; color: {c['accent_fg']}; }}
 QScrollArea {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
