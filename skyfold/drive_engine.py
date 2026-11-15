@@ -667,7 +667,8 @@ class DriveSyncer:
         self._check_root(bool(base))
 
         pending = self.state.get_meta(PENDING_MOVE)
-        scope = self._scope_folders(changed) if changed and not pending else None
+        scope = self._scope_folders(changed) if changed and not pending and not self._under_local_shell(changed) \
+            else None  # (inside a folder kept only on this PC: iCloud has nothing to anchor a quick read)
         if scope is None:
             self.cb.status(t("Reading iCloud Drive…"))
             remote = self.remote.walk(lambda n: self.cb.status(t("Reading iCloud Drive… {n}", n=n)),
@@ -1103,33 +1104,51 @@ class DriveSyncer:
             if edited:
                 log.info("Drive: %s was deleted in iCloud but has changes on this PC; keeping them", p)
                 self.cb.activity("info", t("Deleted in iCloud, but changed on this PC: kept {name}", name=p))
-                if f"shell:pc:{p}" in shells:
-                    self.state.set_meta(f"shell:pc:{p}", None)
+                for key in [k for k in shells if k.lower() == f"shell:pc:{p}".lower()]:
+                    self.state.set_meta(key, None)
             else:
                 # Only items Skyfold never syncs (desktop.ini, an Office lock file, a .tmp draft) keep
-                # the folder here: it stays on this PC, and it isn't created in iCloud again for them.
-                log.info("Drive: %s was deleted in iCloud; kept on this PC only for items that aren't synced", p)
-                self.cb.activity("info", t("Deleted in iCloud; {name} stays on this PC only for files that "
-                                           "aren't synced (it isn't created in iCloud again)", name=p))
+                # the folder: it stays on this PC, and it isn't created in iCloud again for them.
+                if f"shell:pc:{p}" not in shells:
+                    log.info("Drive: %s was deleted in iCloud; kept on this PC only for items that aren't synced", p)
+                    self.cb.activity("info", t("Deleted in iCloud; {name} stays on this PC only for files that "
+                                               "aren't synced (it isn't created in iCloud again)", name=p))
                 self.state.set_meta(f"shell:pc:{p}", json.dumps(sorted(shell)))
+                if clean:
+                    # Synced files are still in it: they go first (maybe after your confirmation). Every
+                    # record stays until they are really gone, so the next pass decides the same again,
+                    # never "new on this PC".
+                    out.extend(clean)
+                    continue
             for q in [q for q in list(base) if q == p or q.startswith(p + "/")]:
-                if base[q].is_dir:
-                    self.state.drop(q)  # recreated in iCloud on the next pass (edited), or left here (shell)
+                if base[q].is_dir:  # only the folder's own row: files waiting for deletion keep theirs
+                    self.state.drop_one(q)  # recreated in iCloud on the next pass (edited), or left here (shell)
             out.extend(clean)
         return out
 
     def _shell_held(self, path: str, side: str, items: dict, known: dict[str, Base]) -> bool:
         """A folder deleted on one side and kept on the other only for items that are never synced:
         it isn't created again where it was deleted. Something synced added inside it reopens it."""
-        for key, val in self.state.meta_items(f"shell:{side}:").items():
+        low_path = path.lower()  # (a kept folder on this PC is matched the way Windows matches names;
+        for key, val in self.state.meta_items(f"shell:{side}:").items():  # iCloud's side is matched exactly)
             top = key[len(f"shell:{side}:"):]
-            if path != top and not path.startswith(top + "/"):
+            if side == "pc":
+                if low_path != top.lower() and not low_path.startswith(top.lower() + "/"):
+                    continue
+            elif path != top and not path.startswith(top + "/"):
                 continue
             try:
                 kept = set(json.loads(val or "[]"))
             except (ValueError, TypeError):
                 kept = set()
-            added = [q for q in items if q.startswith(top + "/") and q not in kept and q not in known]
+            if side == "pc":
+                low_known = self._lower_known(known)
+                kept = {k.lower() for k in kept}
+                prefix = top.lower() + "/"
+                added = [q for q in items if q.lower().startswith(prefix) and q.lower() not in kept
+                         and q.lower() not in low_known]
+            else:
+                added = [q for q in items if q.startswith(top + "/") and q not in kept and q not in known]
             if added:
                 log.info("Drive: %s has new content (%s); synced again", top, added[0])
                 self.state.set_meta(key, None)
@@ -1137,17 +1156,46 @@ class DriveSyncer:
             return True
         return False
 
+    def _lower_known(self, known: dict[str, Base]) -> set[str]:
+        cached = getattr(self, "_known_low", None)
+        if cached is None or cached[0] is not known:
+            cached = (known, {k.lower() for k in known})
+            self._known_low = cached
+        return cached[1]
+
     def _settle_shells(self, remote: dict[str, DriveItem], local: dict[str, "Local"], partial: set[str]) -> None:
         """A kept folder that is back on the side it was deleted from, or gone where it was kept:
-        nothing left to hold (full passes only)."""
-        for key in self.state.meta_items("shell:"):
+        nothing left to hold (full passes only). Subfolders gone where it was kept are struck from its
+        list (one made again later under that name is new). Outside the chosen folders nothing is
+        decided: not listed there is not gone."""
+        local_low = {p.lower() for p in local}
+        remote_low = {p.lower() for p in remote}
+        for key, val in self.state.meta_items("shell:").items():
             side, top = key[len("shell:"):].split(":", 1)
+            if self.folders is not None and not in_scope(top, True, self.folders):
+                continue
             if side == "pc":
-                done = top in remote or (top not in local and known_missing(self._abs(top)))
+                done = top.lower() in remote_low or (top.lower() not in local_low and known_missing(self._abs(top)))
+                here = local_low
             else:
-                done = top in local or (not partial and top not in remote)
+                if partial:
+                    continue  # iCloud's answer was incomplete: nothing decided about kept folders
+                done = top.lower() in local_low or top not in remote
+                here = {p.lower() for p in remote}
             if done:
                 self.state.set_meta(key, None)
+                continue
+            try:
+                kept = json.loads(val or "[]")
+            except (ValueError, TypeError):
+                kept = []
+            still = [k for k in kept if k.lower() in here]
+            if still != kept:
+                self.state.set_meta(key, json.dumps(still))
+
+    def _under_local_shell(self, paths: set[str]) -> bool:
+        tops = [k[len("shell:pc:"):].lower() for k in self.state.meta_items("shell:pc:")]
+        return any(p.lower() == t or p.lower().startswith(t + "/") for p in paths for t in tops)
 
     def _keep_unsynced_remote(self, to_cloud: list[str], remote: dict[str, DriveItem],
                               base: dict[str, Base]) -> list[str]:
@@ -1182,6 +1230,7 @@ class DriveSyncer:
             if not changed and not unsynced:  # (never-synced items, a .tmp draft, … keep the folder)
                 out.append(p)
                 continue
+            unchanged = [q for q in inside if q not in changed]
             if changed:
                 log.info("Drive: %s was deleted on this PC but has changes in iCloud; keeping them", p)
                 self.cb.activity("info", t("Deleted on this PC, but changed in iCloud: kept {name}", name=p))
@@ -1189,14 +1238,22 @@ class DriveSyncer:
                     self.state.set_meta(f"shell:cloud:{p}", None)
             else:
                 # Only items Skyfold never syncs keep the folder in iCloud: it isn't made on this PC again.
-                log.info("Drive: %s was deleted on this PC; kept in iCloud only for items that aren't synced", p)
-                self.cb.activity("info", t("Deleted on this PC; {name} stays in iCloud only for files that "
-                                           "aren't synced (it isn't created on this PC again)", name=p))
+                if f"shell:cloud:{p}" not in shells:
+                    log.info("Drive: %s was deleted on this PC; kept in iCloud only for items that aren't synced", p)
+                    self.cb.activity("info", t("Deleted on this PC; {name} stays in iCloud only for files that "
+                                               "aren't synced (it isn't created on this PC again)", name=p))
                 self.state.set_meta(f"shell:cloud:{p}",
                                     json.dumps(sorted(q for q in all_below if remote[q].is_dir)))
+                if unchanged:
+                    # Synced files are still in it: they go first (maybe after your confirmation). Every
+                    # record stays until they are really gone, so the next pass decides the same again,
+                    # never "new in iCloud".
+                    out.extend(unchanged)
+                    continue
             for q in [q for q in list(base) if q == p or q.startswith(p + "/")]:
-                self.state.drop(q)  # comes back down on the next pass
-            out.extend(q for q in inside if q not in changed)
+                if q not in unchanged:  # (an unchanged file keeps its record until it is really deleted)
+                    self.state.drop_one(q)  # comes back down on the next pass
+            out.extend(unchanged)
         return out
 
     def state_set_last_sync(self) -> None:

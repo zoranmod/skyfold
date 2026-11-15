@@ -213,7 +213,7 @@ def test_drawing_preview_is_swapped_for_full_bitmap(tmp_path):
         QImage(sizes[url], sizes[url], QImage.Format.Format_RGB32).save(str(target), "PNG")
         return str(target)
 
-    assert ne.upgrade_sketches(page, {"D1": "big", "D2": "small"}, download, made=made, assets_dir=assets) == 1
+    assert ne.upgrade_sketches(page, {"D1": "big", "D2": "small"}, download, made=made, dirs={assets}) == 1
     html = page.read_text(encoding="utf-8")
     assert 'src="_assets/n1/asset-big.png"' in html and not (assets / "prev1").exists()
     assert 'src="_assets\\n1\\prev2"' in html and not (assets / "asset-small").exists()  # smaller: keep preview

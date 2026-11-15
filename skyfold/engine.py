@@ -400,6 +400,7 @@ class Syncer:
         # Only files that are really missing count; one that can't be looked at now decides nothing.
         missing = [r for r in rows if known_missing(self._abs(r.rel_path))]
         if not missing:
+            self._told_unsure = None  # nothing held: a later hold is told again
             return [], 0
 
         # The user may have moved files around inside the folder: follow them by name + size.

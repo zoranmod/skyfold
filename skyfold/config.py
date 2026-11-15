@@ -218,10 +218,15 @@ def _copy_database(src_dir: Path) -> None:
         if time.monotonic() > deadline:
             raise TimeoutError("the earlier database is kept busy by another program")
 
+    shm = src_dir / (DATABASE + "-shm")
+    had_shm = not _missing(shm)
     fd, tmp = tempfile.mkstemp(prefix=DATABASE + ".", suffix=".new", dir=PRIVATE_DIR)
     os.close(fd)
     try:
-        with closing(sqlite3.connect(src_dir / DATABASE, timeout=5)) as old, closing(sqlite3.connect(tmp)) as new:
+        # Opened read-only: its journal is read (and applied to the copy), but neither the database
+        # nor its journal is checkpointed, changed or removed.
+        uri = (src_dir / DATABASE).resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=5)) as old, closing(sqlite3.connect(tmp)) as new:
             old.backup(new, progress=progress)  # the database as it is with its journal applied
         place_new(tmp, PRIVATE_DIR / DATABASE)
     finally:
@@ -229,6 +234,11 @@ def _copy_database(src_dir: Path) -> None:
             os.unlink(tmp)
         except FileNotFoundError:
             pass
+        if not had_shm:  # the read made a shared-memory index the earlier copy didn't have
+            try:
+                os.unlink(shm)
+            except OSError:
+                pass  # (in use by another program, or already gone: left as it is)
 
 
 def _set_aside_orphan_journal() -> None:
@@ -238,14 +248,21 @@ def _set_aside_orphan_journal() -> None:
 
     if not _missing(PRIVATE_DIR / DATABASE):
         return
+    tag = uuid.uuid4().hex[:8]  # the same for both: they stay recognisable as one pair
     for name in (DATABASE + "-wal", DATABASE + "-shm"):
         p = PRIVATE_DIR / name
         if _missing(p):
             continue
+        aside = PRIVATE_DIR / f"{name}.orphan-{tag}"
         try:
-            os.rename(p, PRIVATE_DIR / f"{name}.orphan-{uuid.uuid4().hex[:8]}")  # a new name: refuses to replace
+            os.rename(p, aside)  # a new name: refuses to replace
             logging.getLogger("skyfold").warning("A database journal without its database was set aside: %s", name)
         except OSError as exc:
+            try:  # can't be renamed now: at least its bytes are kept before a new database is made
+                _copy_new(p, aside)
+                logging.getLogger("skyfold").warning("A database journal without its database was copied aside: %s", name)
+            except OSError:
+                pass
             MIGRATION_PROBLEMS.append(f"{p}: {exc}")
 
 
@@ -260,9 +277,13 @@ def _move_private(src_dir: Path) -> None:
             _move_dir_new(src, PRIVATE_DIR / "session")
         except OSError as exc:  # left where it is: tried again next start
             log.info("Couldn't move the session: %s", exc)
-    if (src_dir / DATABASE).is_file() and _missing(PRIVATE_DIR / DATABASE):
-        _set_aside_orphan_journal()
-    if (src_dir / DATABASE).is_file() and all(_missing(PRIVATE_DIR / n) for n in DATABASE_FILES):
+    try:
+        has_db = (src_dir / DATABASE).is_file()
+    except OSError as exc:  # can't be looked at: not taken over, and the user is told
+        log.warning("Couldn't look at the database in %s: %s", src_dir, exc)
+        MIGRATION_PROBLEMS.append(f"{src_dir / DATABASE}: {exc}")
+        has_db = False
+    if has_db and all(_missing(PRIVATE_DIR / n) for n in DATABASE_FILES):
         try:
             _copy_database(src_dir)
         except Exception as exc:  # noqa: BLE001 - left where it is, unchanged; the user is told
@@ -281,6 +302,9 @@ def migrate_private_files() -> None:
     """
     local = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
     MIGRATION_PROBLEMS.clear()
+    # Before anything can open (and so create) the database: a journal left here without it is set
+    # aside, whether or not there is an earlier database to take over.
+    _set_aside_orphan_journal()
     if _missing(PRIVATE_DIR / DATABASE):
         _move_private(local / "iSync")
     _move_private(DATA_DIR)

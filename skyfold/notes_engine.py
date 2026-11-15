@@ -19,6 +19,7 @@ import re
 import sqlite3
 import threading
 import uuid
+from collections.abc import MutableMapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -115,34 +116,41 @@ class ICloudNotes:
             from pyicloud.services.notes.rendering.options import ExportConfig
 
             record = self.svc._lookup_note_record(note_id)
-            exporter = NoteExporter(self.svc._raw, config=ExportConfig(assets_dir=str(assets_dir), full_page=True))
+            raw = self.svc._raw
+            made: set[tuple[int, int]] = set()  # the files this export downloaded, by file identity
+            dirs: set[Path] = set()  # and the folders it downloaded them into (the note's own)
+
+            class Recording:
+                """This export's own view of the client: downloads are written down; the shared
+                client itself is never changed (other callers and exports don't pass through here)."""
+
+                def __getattr__(self, name):
+                    return getattr(raw, name)
+
+                def download_asset_to(self, url, directory):
+                    path = raw.download_asset_to(url, directory)
+                    ident = _file_identity(Path(path))
+                    if ident:
+                        made.add(ident)
+                        try:
+                            dirs.add(Path(directory).resolve())
+                        except OSError:
+                            pass
+                    return path
+
+            exporter = NoteExporter(Recording(), config=ExportConfig(assets_dir=str(assets_dir), full_page=True))
             _SKETCH_FALLBACKS.clear()
             _SKETCH_INFO.clear()
             if not filename.startswith(STAGE_PREFIX):
                 _CURRENT_NOTE[0] = str(out_dir.name + "/" + filename)
-            raw = self.svc._raw
-            real_download = raw.download_asset_to
-            made: set[tuple[int, int]] = set()  # the files this export downloaded, by file identity
-
-            def recording(url, directory, _real=real_download):
-                path = _real(url, directory)
-                ident = _file_identity(Path(path))
-                if ident:
-                    made.add(ident)
-                return path
-
-            raw.download_asset_to = recording
-            try:
-                if not exporter.export(record, output_dir=str(out_dir), filename=filename):
-                    raise SyncError(t("Note has no content"))
-            finally:
-                raw.download_asset_to = real_download
+            if not exporter.export(record, output_dir=str(out_dir), filename=filename):
+                raise SyncError(t("Note has no content"))
             if _SKETCH_FALLBACKS:
                 page = out_dir / (filename if filename.lower().endswith(".html") else filename + ".html")
                 if page.exists():
                     fallbacks = dict(_SKETCH_FALLBACKS)
-                    upgrade_sketches(page, fallbacks, lambda url, folder: real_download(url, str(folder)),
-                                     made=made, assets_dir=assets_dir)
+                    upgrade_sketches(page, fallbacks, lambda url, folder: raw.download_asset_to(url, str(folder)),
+                                     made=made, dirs=dirs)
         self._call(run)
 
 
@@ -223,8 +231,36 @@ _SKETCH_FIELDS = ("FallbackImage", "FallbackPDF", "PreviewImages", "PreviewAppea
 
 # Pen drawings (com.apple.paper): attachment id -> download URL of the full "fallback" bitmap.
 # Filled while a note is read; used right after its export (see ICloudNotes.export).
-_SKETCH_FALLBACKS: dict[str, str] = {}
-_SKETCH_INFO: dict[str, str] = {}
+class _PerThread(MutableMapping):
+    """A dict of its own for each thread: what one export collects is never seen by another."""
+
+    def __init__(self) -> None:
+        self._local = threading.local()
+
+    def _d(self) -> dict:
+        d = getattr(self._local, "d", None)
+        if d is None:
+            d = self._local.d = {}
+        return d
+
+    def __getitem__(self, k):
+        return self._d()[k]
+
+    def __setitem__(self, k, v):
+        self._d()[k] = v
+
+    def __delitem__(self, k):
+        del self._d()[k]
+
+    def __iter__(self):
+        return iter(list(self._d()))
+
+    def __len__(self):
+        return len(self._d())
+
+
+_SKETCH_FALLBACKS: MutableMapping = _PerThread()
+_SKETCH_INFO: MutableMapping = _PerThread()
 _CURRENT_NOTE = [""]  # file name of the note being exported (for the log)
 
 
@@ -453,12 +489,12 @@ def _file_identity(p: Path) -> tuple[int, int] | None:
 
 
 def upgrade_sketches(page: Path, fallbacks: dict[str, str], download, made: set | None = None,
-                     assets_dir: Path | None = None) -> int:
+                     dirs: set | None = None) -> int:
     """Swap each pen drawing's small preview for its full-size bitmap, when that one is bigger and a
     browser can show it. download(url, folder) saves the file and returns its path. Returns the
     number of drawings upgraded; on any problem the preview simply stays. The replaced preview is
-    removed only when this very export downloaded it (its file identity is in `made`) directly into
-    `assets_dir`; any other file stays."""
+    removed only when this very export downloaded it (its file identity is in `made`) into one of
+    the folders it downloaded into (`dirs`: the note's own attachment folder); any other file stays."""
     import urllib.parse
 
     from PySide6.QtGui import QImageReader
@@ -504,7 +540,7 @@ def upgrade_sketches(page: Path, fallbacks: dict[str, str], download, made: set 
             return tag
         count += 1
         try:
-            ours = bool(made) and assets_dir is not None and current.parent == Path(assets_dir).resolve() \
+            ours = bool(made) and bool(dirs) and current.parent in {Path(d).resolve() for d in dirs} \
                 and _file_identity(current) in made
         except OSError:
             ours = False

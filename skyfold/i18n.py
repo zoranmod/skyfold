@@ -190,10 +190,10 @@ BS: dict[str, str] = {
     "out of the photos folder.":
         "Fotografije: {n} fajlova koji nedostaju zadržano je dok se {folder} ne može pročitati. Popravi prava pristupa "
         "ili premjesti taj folder iz foldera s fotografijama.",
-    "The sync database of the earlier installation couldn't be taken over, so Skyfold starts with a "
-    "new one. The earlier file is kept unchanged:\n{details}":
-        "Baza sinhronizacije ranije instalacije nije mogla biti preuzeta, pa Skyfold počinje s novom. "
-        "Raniji fajl je zadržan nepromijenjen:\n{details}",
+    "The sync database of the earlier installation couldn't be taken over. The earlier file is kept "
+    "unchanged:\n{details}\n\nStart with a new database? (No: Skyfold closes now and tries again at the next start.)":
+        "Baza sinhronizacije ranije instalacije nije mogla biti preuzeta. Raniji fajl je zadržan nepromijenjen:"
+        "\n{details}\n\nPočeti s novom bazom? (Ne: Skyfold se sad zatvara i pokušava ponovo pri sljedećem pokretanju.)",
     "Photos: {n} missing files are kept for now, part of the photos folder couldn't be read":
         "Fotografije: {n} fajlova koji nedostaju zasad se ne diraju, dio foldera s fotografijama se ne može pročitati",
     "This Drive folder belongs to another Apple ID. Choose a new, empty folder for iCloud Drive in Settings.":

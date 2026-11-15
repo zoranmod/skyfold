@@ -164,7 +164,7 @@ def test_sketch_cleanup_does_not_delete_file_that_predates_export(notes_env):
     assert image.save(str(other), "PNG")
     assert born < export_started
     changed = ne.upgrade_sketches(page, {"D1": "synthetic"}, download, made={ne._file_identity(other)},
-                                  assets_dir=assets)
+                                  dirs={assets})
     assert changed == 1
     assert preview.exists() and preview.read_bytes() == data
 

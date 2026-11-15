@@ -160,7 +160,7 @@ def test_a_preview_this_export_downloaded_is_replaced(notes_env):
     _, _, root, _ = notes_env
     assets, preview, page, download = _sketch_page(root)
     assert ne.upgrade_sketches(page, {"D1": "u"}, download, made={ne._file_identity(preview)},
-                               assets_dir=assets) == 1
+                               dirs={assets}) == 1
     assert not preview.exists()
 
 
@@ -168,7 +168,7 @@ def test_a_downloaded_preview_outside_the_assets_folder_stays(notes_env):
     _, _, root, _ = notes_env
     assets, preview, page, download = _sketch_page(root)
     assert ne.upgrade_sketches(page, {"D1": "u"}, download, made={ne._file_identity(preview)},
-                               assets_dir=assets / "other") == 1
+                               dirs={assets / "other"}) == 1
     assert preview.exists()
 
 
@@ -184,8 +184,8 @@ def test_export_records_only_its_own_downloads(notes_env, monkeypatch):
 
     raw = Raw()
 
-    def fake_upgrade(page, fallbacks, download, made=None, assets_dir=None):
-        seen["made"], seen["assets"] = set(made), assets_dir
+    def fake_upgrade(page, fallbacks, download, made=None, dirs=None):
+        seen["made"], seen["assets"] = set(made), set(dirs)
         return 0
 
     _, _, root, _ = notes_env
@@ -194,11 +194,11 @@ def test_export_records_only_its_own_downloads(notes_env, monkeypatch):
     before.write_bytes(b"older")
 
     class Exporter:
-        def __init__(self, *_a, **_k):
-            pass
+        def __init__(self, client, **_k):
+            self.client = client  # (review 31: downloads go through the client the export is given)
 
         def export(self, record, output_dir, filename):
-            raw.download_asset_to("one", str(root))
+            self.client.download_asset_to("one", str(root))
             (Path(output_dir) / (filename + ".html")).write_text("<p>", encoding="utf-8")
             ne._SKETCH_FALLBACKS["D1"] = "u"
             return True
@@ -211,9 +211,9 @@ def test_export_records_only_its_own_downloads(notes_env, monkeypatch):
     notes._svc = type("Svc", (), {"_raw": raw, "_lookup_note_record": lambda self, _id: object()})()
     monkeypatch.setattr(ne, "_prefer_sharpest_previews", lambda: None)
     notes.export("n1", root, "page", root)
-    assert seen["made"] == {ne._file_identity(root / "asset-one")} and seen["assets"] == root
+    assert seen["made"] == {ne._file_identity(root / "asset-one")} and seen["assets"] == {root.resolve()}
     assert ne._file_identity(before) not in seen["made"]
-    assert "download_asset_to" not in vars(raw) or vars(raw)["download_asset_to"].__name__ != "recording"
+    assert "download_asset_to" not in vars(raw)  # the shared client is never changed
 
 
 # B30-6 -----------------------------------------------------------------------------------------

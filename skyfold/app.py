@@ -669,6 +669,15 @@ def main() -> int:
         QMessageBox.critical(None, APP_NAME, t("The system tray is not available."))
         return 1
 
+    if _config.MIGRATION_PROBLEMS:  # before anything opens a new database: the user decides
+        answer = ask(None, APP_NAME, t(
+            "The sync database of the earlier installation couldn't be taken over. The earlier file is kept "
+            "unchanged:\n{details}\n\nStart with a new database? (No: Skyfold closes now and tries again "
+            "at the next start.)", details="\n".join(_config.MIGRATION_PROBLEMS)))
+        if answer != QMessageBox.Yes:
+            log.info("Start cancelled: the earlier database is tried again next time")
+            return 0
+
     ctl = Controller(app)
     ctl.server = server
 
@@ -686,8 +695,4 @@ def main() -> int:
 
     server.newConnection.connect(on_conn)
     ctl.start(show="--tray" not in sys.argv)
-    if _config.MIGRATION_PROBLEMS:  # the earlier database stays where it is, unchanged; the user decides
-        QTimer.singleShot(800, lambda: warn(None, APP_NAME, t(
-            "The sync database of the earlier installation couldn't be taken over, so Skyfold starts with a "
-            "new one. The earlier file is kept unchanged:\n{details}", details="\n".join(_config.MIGRATION_PROBLEMS))))
     return app.exec()
