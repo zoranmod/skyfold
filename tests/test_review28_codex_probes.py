@@ -183,13 +183,26 @@ def test_fixed_quick_scan_holds_record_for_unlisted_path(drive_env, tmp_path, mo
     s, cloud, root, _, previous = interrupted_previous(drive_env, tmp_path)
     cloud.put(previous.name, b"UNRELATED CLOUD FILE")
     actual = os.scandir
+    class Filtered:  # (a scandir result as os.walk uses it: iterable and a context manager)
+        def __init__(self, path):
+            with actual(path) as entries:
+                self.items = [e for e in entries if e.name != previous.name]
+
+        def __iter__(self):
+            return iter(self.items)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
     def filtered(path):
-        with actual(path) as entries:
-            return iter(e for e in entries if e.name != previous.name)
+        return Filtered(path)
     with monkeypatch.context() as m:
         m.setattr(os, "scandir", lambda p: filtered(p) if Path(p) == root else actual(p))
         res = s.run(changed={"a.txt"})
-    assert not res.full and res.conflicts == 0
+    assert res.conflicts == 0  # (review 35: a full read, since something looks deleted)
     assert previous.read_bytes() == b"OLD"  # held: nothing downloaded onto it
     assert not list(root.glob("a (previous version) (PC conflict*"))
     assert s.state.get_meta("prev:" + previous.name)

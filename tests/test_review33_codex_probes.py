@@ -284,7 +284,7 @@ def test_same_pass_approval_still_works(drive_env, side, quick):
     expected = (paths, []) if side == "cloud" else ([], paths)
     assert asked == [expected]
     assert set(cloud.trashed if side == "cloud" else local_trash) == set(paths)
-    assert result.full is not quick
+    assert result.full  # (review 35: a quick pass hands deletions over to a full read)
 
 
 @pytest.mark.parametrize("change", ["grow", "shrink"])

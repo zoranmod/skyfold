@@ -211,6 +211,9 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - An empty folder counts toward the limit as one item, next to the files of the others (it used to be left out when files were deleted with it).
   - Photos: an OK for "delete in iCloud" never deletes on this PC.
   - iCloud Drive: a folder made where a synced file was is never deleted with an approved folder.
+- Thirty-third follow-up review (tests in tests/test_review35_codex_probes.py and tests/test_review35_fixes.py):
+  - iCloud Drive: deletions are only ever decided by a full read. A quick check (after a change on this PC) that finds something deleted hands over to a full read, so the limit for asking you always counts every deletion, in all folders.
+  - iCloud Drive: files you were asked about one by one, later seen as their folder (once the last never-synced file in it is gone), are asked about again as that folder, never deleted unanswered.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

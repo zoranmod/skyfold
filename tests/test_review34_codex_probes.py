@@ -219,7 +219,7 @@ def test_untagged_unchanged_cloud_items_can_be_approved(drive_env, same_pass):
     assert not cloud.items and cloud.trashed == ["Trip"]
 
 
-def test_characterize_quick_listing_replaces_the_displayed_batch(drive_env, qt_application):
+def test_fixed_quick_listing_keeps_the_displayed_batch(drive_env, qt_application):
     s, cloud, root, _ = drive_env
     paths = ["Alpha/a.txt", "Beta/b.txt"]
     seed(s, cloud, paths)
@@ -231,17 +231,14 @@ def test_characterize_quick_listing_replaces_the_displayed_batch(drive_env, qt_a
     dialog = open_dialog()
     change = "Alpha/new independent edit.txt"
     write(root, change, b"new independent document")
-    assert scan(changed={change}).pending_to_cloud == [paths[0]]
-    assert controller._pending.to_cloud == [paths[0]]
-    assert paths[1] in s._asked_cloud and not cloud.trashed
+    # (review 35) the quick pass hands the deletions to a full read: the question stays the whole batch
+    assert set(scan(changed={change}).pending_to_cloud) == set(paths)
+    assert set(controller._pending.to_cloud) == set(paths) and not cloud.trashed
     click(dialog, "Delete in iCloud too")
-    assert not cloud.trashed
-    assert set(scan().pending_to_cloud) == set(paths)
-    click(open_dialog(), "Delete in iCloud too")
     assert set(cloud.trashed) == set(paths)
 
 
-def test_characterize_quick_pass_carries_older_answer_to_a_replacement(drive_env):
+def test_fixed_quick_pass_never_carries_an_older_answer_to_a_replacement(drive_env):
     s, cloud, root, _ = drive_env
     paths = ["Alpha/a.txt", "Alpha/b.txt"]
     seed(s, cloud, paths)
@@ -255,7 +252,7 @@ def test_characterize_quick_pass_carries_older_answer_to_a_replacement(drive_env
     assert cloud._item(paths[0]).docwsid != old_id
     cloud.trashed.clear()
     result = s.run(changed={paths[0]})
-    assert not result.full and set(cloud.trashed) == set(paths)
+    assert result.full and paths[0] not in cloud.trashed and paths[0] in cloud.items  # asked again
 
 
 @pytest.mark.parametrize("side", ["cloud", "pc"])

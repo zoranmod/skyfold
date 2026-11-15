@@ -303,7 +303,8 @@ def test_quick_sync_after_pc_changes_reads_only_those_folders(env):
     (root / "Docs/b.txt").unlink()
     write(root, "Docs/a.txt", b"edited a", age=30)
     r = s.run(changed={"Docs/new.txt", "Docs/b.txt", "Docs/a.txt"})
-    assert d.full_walks == 1 and d.quick_walks == 1 and not r.full
+    # (review 35) a deletion is only decided by a full read: the quick pass hands over to one
+    assert d.full_walks == 2 and r.full
     assert d.items["Docs/new.txt"]["data"] == b"new" and "Docs/b.txt" not in d.items
     assert d.items["Docs/a.txt"]["data"] == b"edited a"
     assert "Other/c.txt" in d.items and (root / "Other/c.txt").exists()  # untouched folder stays as is

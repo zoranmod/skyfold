@@ -910,10 +910,11 @@ class DriveSyncer:
 
         if scope is None and not partial:
             self._scrub(remote, local, base, uploads)
-        if scope is not None and any(base.get(p) is not None and base[p].is_dir for p in to_cloud + to_pc):
-            # A folder went away on one side. A quick pass doesn't see what is inside it (or where it
-            # went, if it was renamed): only a full read can decide safely.
-            log.info("Drive: a folder was removed or renamed; doing a full read instead of a quick one")
+        if scope is not None and (to_cloud or to_pc):
+            # Something went away on one side. A quick pass sees only a few folders: how many deletions
+            # there are in all (the limit for asking you), what is inside a folder, or where it went if
+            # it was renamed is only known from a full read. Deletions are only ever decided there.
+            log.info("Drive: something was removed or renamed; doing a full read instead of a quick one")
             return self.run(_prev=prev_before)
         self._partial = partial
         # A rename or move looks like "one deleted + one new": do it as a rename instead.
@@ -1902,6 +1903,11 @@ class DriveSyncer:
                 q = q.rsplit("/", 1)[0]
 
         keys = {p: asked_as(p) for p in paths}
+        # A folder whose files were asked about one by one is part of that question too (they are now
+        # listed as the folder): asked again as it is now, never deleted unanswered.
+        regrouped = [p for p in paths if keys[p] is None and any(q.startswith(p + "/") for q in asked)]
+        if regrouped:
+            return True
         if not over and not any(keys.values()):
             return False
         for p in paths:
