@@ -547,8 +547,15 @@ class Controller(QObject):
     def open_pending(self) -> None:
         if not self._pending:
             return
-        dlg = PendingDialog(self._pending, self.c)
-        dlg.decided.connect(lambda d, ids: self.req.resolvePending.emit(d, ids))
+        shown = self._pending
+        dlg = PendingDialog(shown, self.c)
+
+        def decided(d: str, ids: list) -> None:
+            # which part of the question shown was answered: an answer only counts for that side
+            side = "to_pc" if set(ids) <= set(shown.to_pc) and ids else "to_cloud"
+            self.req.resolvePending.emit(f"{d}:{side}", ids)
+
+        dlg.decided.connect(decided)
         self._show_dialog("pending", dlg)
 
     def quit(self) -> None:

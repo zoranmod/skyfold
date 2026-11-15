@@ -217,9 +217,12 @@ class DriveSyncer:
         self._late: tuple[dict, dict, DriveResult] | None = None
         self.mac_packages: set[str] = set()  # left in iCloud: Macs show these folders as one file
         self.approved: set[str] = set()
-        # what the last question showed, per side: an approval only counts for that side
-        self._asked_cloud: set[str] = set()
+        # What the last question showed, per side (iCloud: with which items and versions they were).
+        # An approval only counts for that side and those very items; a deletion once asked about is
+        # never done unanswered, also when a later pass sees fewer items than the limit.
+        self._asked_cloud: dict[str, dict | None] = {}
         self._asked_pc: set[str] = set()
+        self._approved_side: dict[str, str] = {}  # path -> "cloud"/"pc", when the answer said which
         self.own_paths: dict[str, float] = {}
         self.cache: dict[str, DriveItem] = {}  # iCloud tree as of the last read
         self.account = ""  # short fingerprint of the Apple ID this folder belongs to (set by the worker)
@@ -957,11 +960,18 @@ class DriveSyncer:
         to_pc = self._keep_unsynced_local(to_pc, base)
         to_cloud = self._keep_unsynced_remote(to_cloud, remote, base)
         self._deletions(to_cloud, to_pc, remote, base, res)
-        if scope is None:  # approvals only count for deletions still waiting, on the side they were asked for
-            self.approved = {p for p in self.approved if (p in res.pending_to_cloud and p in self._asked_cloud)
+        known_now = self.state.all() if res.pending_to_cloud else {}
+        shapes = {p: self._cloud_shape(p, remote, known_now) for p in res.pending_to_cloud}
+        if scope is None:  # approvals only count for deletions still waiting, on the side and items asked about
+            self.approved = {p for p in self.approved
+                             if (p in res.pending_to_cloud and p in self._asked_cloud
+                                 and shapes[p] is not None and self._asked_cloud[p] == shapes[p])
                              or (p in res.pending_to_pc and p in self._asked_pc)}
-        if scope is None or res.pending_to_cloud or res.pending_to_pc:
-            self._asked_cloud, self._asked_pc = set(res.pending_to_cloud), set(res.pending_to_pc)
+            self._approved_side = {p: v for p, v in self._approved_side.items() if p in self.approved}
+            self._asked_cloud, self._asked_pc = shapes, set(res.pending_to_pc)
+        elif res.pending_to_cloud or res.pending_to_pc:  # a quick pass sees only part: it adds, never forgets
+            self._asked_cloud.update(shapes)
+            self._asked_pc |= set(res.pending_to_pc)
         if res.pending_to_cloud or res.pending_to_pc:
             self._late = (remote, base, res)
             if self.on_pending:
@@ -1063,8 +1073,13 @@ class DriveSyncer:
         known_low = {k.lower(): v for k, v in known.items()}  # (Windows matches names in any letter case)
         shells = self.state.meta_items("shell:") if to_pc else {}
 
-        def record(rel: str) -> Base | None:
-            return base.get(rel) or known.get(rel) or known_low.get(rel.lower())
+        def record(rel: str, is_dir: bool = True) -> Base | None:
+            b = base.get(rel) or known.get(rel)
+            if b is None:
+                b = known_low.get(rel.lower())  # (folders spelled differently are the same folders;
+                if b is not None and not is_dir and b.path.rsplit("/", 1)[-1] != rel.rsplit("/", 1)[-1]:
+                    return None  # a file whose own name differs in letter case is not proven the same)
+            return b
 
         for p in to_pc:
             b = base.get(p)
@@ -1093,7 +1108,7 @@ class DriveSyncer:
                     if _ignored_path(rel):
                         dirty = True  # never synced (a .tmp draft, …): it and its folder stay
                         continue
-                    fb = record(rel)
+                    fb = record(rel, is_dir=False)
                     try:
                         st = os.stat(Path(dirpath) / f)
                         same = fb is not None and (st.st_size, round(st.st_mtime, 2)) == \
@@ -1171,8 +1186,7 @@ class DriveSyncer:
             return True
         return False
 
-    @staticmethod
-    def _local_as_synced(local: dict[str, "Local"], base: dict[str, Base],
+    def _local_as_synced(self, local: dict[str, "Local"], base: dict[str, Base],
                          remote: dict[str, DriveItem]) -> dict[str, "Local"]:
         """Windows sees TRIP and Trip as one name. A PC path spelled only differently from a synced
         item that iCloud no longer has is that item (its records, and a deletion that may be waiting
@@ -1187,7 +1201,13 @@ class DriveSyncer:
         for p, lo in local.items():
             q = by_low.get(p.lower())
             if q is not None and q != p and p not in base and p not in remote and q not in local:
-                out[q] = lo
+                if lo.is_dir or q.rsplit("/", 1)[-1] == p.rsplit("/", 1)[-1]:
+                    out[q] = lo  # only its folders are spelled differently: the same item
+                else:
+                    # the file's own name differs in letter case: maybe a new file. Neither is
+                    # uploaded nor deleted while it can't be told (left alone until it changes).
+                    self.unreadable |= {p, q}
+                    out[p] = lo
             else:
                 out[p] = lo
         return out
@@ -1357,7 +1377,7 @@ class DriveSyncer:
                     continue
                 if any(n.startswith(m + "/") for m in new if m != n):
                     continue
-                if not self._same_content_moved(base, g, n):
+                if not self._same_content_moved(base, g, n, remote):
                     continue  # look-alike, or not provably the same files: synced as add + delete
                 moved = self._remote_move(remote, g, n, res)
                 if moved == "partial":  # finished next pass; nothing else under these two now
@@ -1445,17 +1465,29 @@ class DriveSyncer:
                 to_pc.remove(g)
                 downloads[:] = [d for d in downloads if d.path != n]
 
-    def _same_content_moved(self, base: dict[str, Base], old: str, new: str) -> bool:
+    def _same_content_moved(self, base: dict[str, Base], old: str, new: str,
+                            remote: dict[str, DriveItem] | None = None) -> bool:
         """Is what is now at `new` on this PC provably what was synced at `old`? Every file's content
         must match its stored fingerprint; a missing fingerprint or an unreadable file proves nothing."""
         b = base.get(old)
         if b is None:
             return False
+        if remote is not None and b.is_dir:
+            # iCloud's folder must hold exactly what was synced (same items, same versions): anything
+            # added or changed there since never travels with a move it was not part of
+            below = {q for q in remote if q.startswith(old + "/")}
+            if below != {q for q in base if q.startswith(old + "/")}:
+                return False
+            for q in below:
+                r, bq = remote[q], base[q]
+                if r.is_dir != bq.is_dir or (not r.is_dir and (not r.etag or r.etag != bq.etag)):
+                    return False
         pairs = [(old, new)] if not b.is_dir else \
             [(p, new + p[len(old):]) for p, q in base.items() if p.startswith(old + "/") and not q.is_dir]
         if not pairs:
             return False
         for p, q in pairs:
+            self._check_cancel()  # (a large folder takes a while to read)
             fp = base[p].hash
             if not fp:
                 return False
@@ -1628,6 +1660,15 @@ class DriveSyncer:
                     with self.state.transaction():
                         self._journal_put(ident, None)
                     continue
+                if fid and now_new is not None and now_new != fid and now_old != fid:
+                    # Another file (by its id) is at the new name: an editor's save over the renamed file,
+                    # or an unrelated one. Either way it is never taken for the synced version: the
+                    # database follows iCloud's item, and the PC file there is then compared as new
+                    # (identical: kept as it is; different: both kept, nothing replaced in iCloud).
+                    log.info("Drive: an interrupted rename on this PC found another file at %s; both kept", new)
+                    self._move_rows(old, new, None, ident, None)
+                    self.state.drop_one(new)
+                    continue
                 # Otherwise the rename happened. The database follows iCloud's item to the new name
                 # and the usual rules take it from there: deleted there since -> a deletion on this PC
                 # (to iCloud, with the usual approval); saved over since (an editor's save gives a new
@@ -1796,6 +1837,60 @@ class DriveSyncer:
                     etag = b.etag  # compared next pass: unchanged content is recognised, changes come down
                 self.state.put(Base(q, False, etag, b.size, b.lmtime, b.lsize, False, b.hash))
 
+    def approve(self, paths: list[str], side: str | None = None) -> list[str]:
+        """The user's OK for these paths, given for one side ("cloud": delete in iCloud, "pc": on this PC)
+        of the question that was shown. Paths not in that question (an older or newer one) don't count."""
+        asked = self._asked_cloud if side == "cloud" else self._asked_pc if side == "pc" else \
+            set(self._asked_cloud) | self._asked_pc
+        ok = [p for p in paths if p in asked]
+        self.approved.update(ok)
+        if side:
+            self._approved_side.update({p: side for p in ok})
+        return ok
+
+    def _cloud_shape(self, p: str, d: dict[str, DriveItem], known: dict[str, Base],
+                     verify: bool = False) -> dict | None:
+        """Which items (and versions) are at p and below in iCloud: what a deletion there would remove.
+        None when that can't be told for some item (no identity; no version tag and the content can't
+        be shown to be what was synced). verify: untagged files are downloaded and compared."""
+        item = d.get(p)
+        if item is None:
+            return {p: ("absent",)}
+        keys = [p] + ([q for q in d if q.startswith(p + "/")] if item.is_dir else [])
+        out: dict[str, tuple] = {}
+        for q in keys:
+            r = d[q]
+            ident = r.docwsid or r.drivewsid
+            if not ident:
+                return None
+            if r.is_dir:
+                out[q] = ("dir", ident)
+            elif r.etag:
+                out[q] = ("file", ident, r.etag)
+            else:
+                b = known.get(q)
+                if b is None or not b.hash or (verify and self._cloud_hash(r) != b.hash):
+                    return None
+                out[q] = ("file", ident, "content", b.hash)
+        return out
+
+    def _needs_answer(self, paths: list[str], side: str, over: bool, remote: dict[str, DriveItem],
+                      known: dict[str, Base]) -> bool:
+        """Must these deletions wait for the user? Yes when there are more than the limit, or when any
+        of them was asked about before (also if fewer are left now), until that very question - same
+        side, same items in iCloud - was answered with OK."""
+        asked = self._asked_cloud if side == "cloud" else self._asked_pc
+        if not over and not any(p in asked for p in paths):
+            return False
+        for p in paths:
+            if p not in self.approved or p not in asked or self._approved_side.get(p, side) != side:
+                return True
+            if side == "cloud":
+                then = self._asked_cloud[p]
+                if then is None or self._cloud_shape(p, remote, known, verify=True) != then:
+                    return True  # another item (or version) is there now than the one you OK'd
+        return False
+
     def apply_approved_deletions(self) -> None:
         """The user OK'd the waiting deletions while this pass is still busy: carry them out now."""
         late = self._late
@@ -1922,8 +2017,7 @@ class DriveSyncer:
             if not self.delete_pc_to_cloud:
                 for p in to_cloud:  # keep in iCloud: download it again
                     self.state.drop(p)
-            elif count(to_cloud, base) > threshold and not (set(to_cloud) <= self.approved
-                                                            and set(to_cloud) <= self._asked_cloud):
+            elif self._needs_answer(to_cloud, "cloud", count(to_cloud, base) > threshold, remote, everything):
                 res.pending_to_cloud = to_cloud
             else:
                 for p in to_cloud:
@@ -1954,8 +2048,7 @@ class DriveSyncer:
             if not self.delete_cloud_to_pc:
                 for p in to_pc:  # keep on PC: it will be uploaded again
                     self.state.drop(p)
-            elif count(to_pc, base) > threshold and not (set(to_pc) <= self.approved
-                                                         and set(to_pc) <= self._asked_pc):
+            elif self._needs_answer(to_pc, "pc", count(to_pc, base) > threshold, remote, everything):
                 res.pending_to_pc = to_pc
             else:
                 queue = list(to_pc)
@@ -2002,7 +2095,12 @@ class DriveSyncer:
                     self.state.drop(p)
                     res.deleted_local += 1
                     self.cb.activity("trash", t("Drive: deleted on this PC (Recycle Bin): {name}", name=p))
-        self.approved -= set(to_cloud) | set(to_pc)
+        if to_cloud or to_pc:  # an OK is used up by what was done; one left alone (couldn't be read) keeps it
+            rows = self.state.all()
+            done = {p for p in [*to_cloud, *to_pc] if p not in rows}
+            self.approved -= done
+            for p in done:
+                self._approved_side.pop(p, None)
 
     def _downloads(self, items: list[DriveItem], base: dict[str, Base], res: DriveResult) -> None:
         items = [i for i in items if i.path not in self.mac_packages]

@@ -232,8 +232,10 @@ def test_pc_folder_rename_with_new_icloud_file(env25):
     d.put("F/new.txt", b"new from phone")
     for _ in range(4):
         s.run()
-    assert not (root / "F").exists() and "F" not in d.items, (sorted(d.items), trashed)
-    assert (root / "G/new.txt").read_bytes() == b"new from phone"
+    # (review 33) iCloud's folder holds more than was synced: the PC rename isn't carried over (it would
+    # take the new file along unasked). G goes up as a new folder; F comes back with the new file.
+    assert (root / "F/new.txt").read_bytes() == b"new from phone" and d.items["F/new.txt"]["data"] == b"new from phone"
+    assert all(d.items[f"G/f{i}.txt"]["data"] == f"c{i}".encode() for i in range(3)), (sorted(d.items), trashed)
 
 
 # 14. Folder deleted in iCloud while the PC added a new (unsynced) file inside it

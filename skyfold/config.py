@@ -232,9 +232,16 @@ def _copy_database(src_dir: Path) -> None:
                 if not _missing(src):
                     shutil.copyfile(src, snap / (DATABASE + suffix))
 
-        if _missing(src_dir / (DATABASE + "-wal")) and _missing(src_dir / (DATABASE + "-journal")):
-            # A rollback-journal database: a read lock keeps any writer from changing it during the copy
-            # (opened read-only, it creates no file). A program holding it longer: not taken over now.
+        with open(src_dir / DATABASE, "rb") as fh:
+            header = fh.read(100)
+        wal_mode = len(header) > 19 and header[18] == 2  # (the file format says WAL or rollback journal)
+        has = {s: not _missing(src_dir / (DATABASE + s)) for s in ("-wal", "-shm", "-journal")}
+        # A read lock keeps any writer from changing what is copied: in rollback mode it blocks writing;
+        # in WAL mode it holds the WAL in place (a checkpoint can't move past it). Opened read-only and
+        # only when every file it needs is already there, so it creates nothing next to the original.
+        # Without such files no program has the database open: a plain copy is consistent.
+        locked = not has["-journal"] and ((wal_mode and has["-wal"] and has["-shm"]) or not wal_mode)
+        if locked:
             uri = (src_dir / DATABASE).resolve().as_uri() + "?mode=ro"
             with closing(sqlite3.connect(uri, uri=True, timeout=max(0.1, min(5.0, BACKUP_SECONDS)),
                                          isolation_level=None)) as lock:
@@ -259,14 +266,24 @@ def _copy_database(src_dir: Path) -> None:
 
 
 def _set_aside_orphan_journal() -> None:
-    """A journal (-wal/-shm) here without its database belongs to no database any more (left by a
-    crash): it is renamed, never applied to a database made or taken over later, and never deleted."""
+    """A journal (-wal/-shm, or a rollback -journal) here without its database belongs to no database
+    any more (left by a crash): it is renamed, never applied to a database made or taken over later,
+    and never deleted. When the database itself can't be looked at while a journal is there, nothing
+    is decided: Skyfold doesn't start (opening the database could overwrite the journal)."""
     import uuid
 
-    if not _missing(PRIVATE_DIR / DATABASE):
+    names = (DATABASE + "-wal", DATABASE + "-shm", DATABASE + "-journal")
+    try:
+        os.lstat(PRIVATE_DIR / DATABASE)
+        return  # the database is there: its journal belongs to it
+    except (FileNotFoundError, NotADirectoryError):
+        pass
+    except OSError as exc:
+        if any(not _missing(PRIVATE_DIR / n) for n in names):
+            JOURNAL_PROBLEMS.append(f"{PRIVATE_DIR / DATABASE}: {exc}")
         return
-    tag = uuid.uuid4().hex[:8]  # the same for both: they stay recognisable as one pair
-    for name in (DATABASE + "-wal", DATABASE + "-shm"):
+    tag = uuid.uuid4().hex[:8]  # the same for all: they stay recognisable as one set
+    for name in names:
         p = PRIVATE_DIR / name
         if _missing(p):
             continue

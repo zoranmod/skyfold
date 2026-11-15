@@ -832,8 +832,10 @@ class SyncWorker(QObject):
 
     @Slot(str, list)
     def resolve_pending(self, decision: str, ids: list) -> None:
+        # "approve:to_pc" / "reject:to_cloud": the side of the question the answer was given in
+        decision, _, side = decision.partition(":")
         p = self._pending
-        if p is not None and set(ids) <= set(p.to_cloud) | set(p.to_pc) and self.syncer:
+        if p is not None and set(ids) <= set(p.to_cloud) | set(p.to_pc) and self.syncer                 and (side not in ("to_pc", "to_cloud") or set(ids) <= set(getattr(p, side))):
             if decision == "approve":
                 self.syncer.approve(ids)
             else:
@@ -848,8 +850,18 @@ class SyncWorker(QObject):
             return
         d = self._drive_pending
         if d is not None and self.drive and self.drive_state:
+            to_pc, to_cloud = set(getattr(d, "to_pc", ())), set(getattr(d, "to_cloud", ()))
+            if not side:  # (said without a side: the side of the current question that holds them all)
+                in_pc, in_cloud = set(ids) <= to_pc, set(ids) <= to_cloud
+                side = "to_pc" if in_pc and not in_cloud else "to_cloud" if in_cloud and not in_pc else ""
+            if decision == "approve" and (side not in ("to_pc", "to_cloud")
+                                          or not set(ids) <= (to_pc if side == "to_pc" else to_cloud)):
+                # an answer to a question that isn't the current one (it changed meanwhile): not used
+                log.info("Drive: an answer to an earlier question was ignored; asked again")
+                self.pendingChanged.emit(self._pending or self._drive_pending)
+                return
             if decision == "approve":
-                self.drive.approved.update(ids)
+                self.drive.approve(ids, "pc" if side == "to_pc" else "cloud")
             else:
                 # Forget the base entries: the surviving copy is then copied back to the other side.
                 self.drive.discard_pending(ids)

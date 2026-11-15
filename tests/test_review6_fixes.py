@@ -66,8 +66,10 @@ def test_icloud_edit_inside_a_folder_renamed_on_the_pc_comes_down(env):  # noqa:
     (root / "Project").rename(root / "Renamed")
     s.run()
     s.run()
-    assert d.items["Renamed/a.txt"]["data"] == b"edit"
-    assert (root / "Renamed/a.txt").read_bytes() == b"edit"
+    # (review 33) iCloud's copy changed since the sync: the PC rename isn't carried over. Both versions
+    # stay: the edit under the old name (back on this PC), the PC folder under its new name.
+    assert d.items["Project/a.txt"]["data"] == b"edit" and (root / "Project/a.txt").read_bytes() == b"edit"
+    assert d.items["Renamed/a.txt"]["data"] == b"base" and (root / "Renamed/a.txt").read_bytes() == b"base"
 
 
 def test_refusing_another_folder_keeps_what_the_database_knows(env, tmp_path):  # noqa: F811
