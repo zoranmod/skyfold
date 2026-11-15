@@ -410,6 +410,7 @@ class Syncer:
         tracked = {r.rel_path.lower() for r in rows}
         album_entries = {rel.lower() for rel in self.state.album_links()}  # same name and size as the originals
         index: dict[tuple[str, int], list[str]] = defaultdict(list)  # every look-alike, not just one
+        by_size: dict[int, list[str]] = defaultdict(list)  # untracked files by size: renamed photos
         unsure = []  # a folder that couldn't be read: any missing photo may have moved there
         unsure_names: set[str] = set()  # files that couldn't be looked at: a photo of that name may be one
 
@@ -423,9 +424,12 @@ class Syncer:
                 if rel.lower() in tracked or rel.lower() in album_entries:
                     continue
                 try:
-                    index[(fn.lower(), full.stat().st_size)].append(rel)
+                    size = full.stat().st_size
                 except OSError:
                     unsure_names.add(fn.lower())
+                    continue
+                index[(fn.lower(), size)].append(rel)
+                by_size[size].append(rel)  # (a photo renamed in Explorer keeps its size, not its name)
         if unsure or unsure_names:
             log.info("Photos: %d folders and %d files couldn't be read; missing photos that may be there "
                      "are looked at again next time", len(unsure), len(unsure_names))
@@ -440,11 +444,36 @@ class Syncer:
         # A file with the same name and size elsewhere in the folder may be this photo, moved - or
         # someone's own file. Only the content tells: iCloud's copy is downloaded and compared.
         maybe: dict[tuple[str, str], list[str]] = {}
+        by_content: dict[tuple[str, str], str] = {}  # renamed (and maybe moved): proven by its content
+        taken: set[str] = set()
         for r in missing:
             key = (PurePosixPath(r.rel_path).name.lower(), r.size or -1)
             if index.get(key):
                 maybe[(r.asset_id, r.resource_key)] = index[key]  # shared: each file is claimed once
-        confirmed, unknown = self._confirm_moves(maybe) if maybe else ({}, set())
+                continue
+            others = by_size.get(r.size) if r.size else None
+            if not others:
+                continue
+            if r.hash:  # the fingerprint of what was downloaded: compared here, nothing downloaded
+                for rel in others:
+                    if rel in taken:
+                        continue
+                    try:
+                        same = _file_hash(self._abs(rel)) == r.hash
+                    except OSError:
+                        same = False
+                    if same:
+                        by_content[(r.asset_id, r.resource_key)] = rel
+                        taken.add(rel)
+                        break
+            else:  # (from before 1.0.6) iCloud's copy is downloaded and compared, as for look-alikes
+                maybe[(r.asset_id, r.resource_key)] = others
+        for where in by_content:  # a file proven to be one photo is never another one's look-alike
+            for files in maybe.values():
+                for rel in [x for x in files if x in taken]:
+                    files.remove(rel)
+        confirmed, unknown = self._confirm_moves({k: v for k, v in maybe.items() if v}) if maybe else ({}, set())
+        confirmed.update(by_content)
         # Photos sharing the same look-alikes are decided together: while one of them couldn't be
         # compared, none of the others may claim a file (it might be the unknown one's) or count as deleted.
         shared = {id(maybe[w]) for w in unknown}
