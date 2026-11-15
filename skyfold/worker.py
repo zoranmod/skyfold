@@ -710,7 +710,7 @@ class SyncWorker(QObject):
         except Exception as exc:  # noqa: BLE001
             self._emit_stats()
             return self._handle(exc, problems, t("Photos"))
-        if res.pending != self._pending:
+        if res.pending != self._pending or getattr(res.pending, "gen", None) != getattr(self._pending, "gen", None):
             self._pending = res.pending
             if res.pending:
                 res.pending.service = "photos"
@@ -806,6 +806,7 @@ class SyncWorker(QObject):
         if to_cloud or to_pc:
             pend = Pending(to_cloud=list(to_cloud), to_pc=list(to_pc), names={p: p for p in [*to_cloud, *to_pc]})
             pend.service = "drive"
+            pend.gen = getattr(self.drive, "question_gen", 0)  # which question this is (answers name it)
             if self.drive_state is not None:  # a folder counts with all the files inside it
                 rows = self.drive_state.all()
 
@@ -820,10 +821,13 @@ class SyncWorker(QObject):
                                 return False
                             p = p.rsplit("/", 1)[0]
 
-                    return sum(1 for p, b in rows.items() if not b.is_dir and under(p)) or len(tops)
+                    # every file inside, and each item with no file at all (an empty folder) as one
+                    files = {p for p, b in rows.items() if not b.is_dir and under(p)}
+                    return len(files) + sum(1 for q in top if not any(f == q or f.startswith(q + "/")
+                                                                       for f in files))
 
                 pend.files_to_pc, pend.files_to_cloud = files(pend.to_pc), files(pend.to_cloud)
-        if pend != self._drive_pending:
+        if pend != self._drive_pending or getattr(pend, "gen", None) != getattr(self._drive_pending, "gen", None):
             self._drive_pending = pend
             if pend:
                 n = len(pend.to_cloud) + len(pend.to_pc)
@@ -832,12 +836,28 @@ class SyncWorker(QObject):
 
     @Slot(str, list)
     def resolve_pending(self, decision: str, ids: list) -> None:
-        # "approve:to_pc" / "reject:to_cloud": the side of the question the answer was given in
-        decision, _, side = decision.partition(":")
+        # "approve:to_pc:7" = the answer, the side of the question it was given in, and which question
+        # (its version). An answer to a question that changed since it was shown is never used.
+        decision, _, rest = decision.partition(":")
+        side, _, gen = rest.partition(":")
+
+        def current(q) -> bool:
+            if gen and str(getattr(q, "gen", "")) != gen:
+                return False
+            return not side or set(ids) <= set(getattr(q, side, ()))
+
         p = self._pending
-        if p is not None and set(ids) <= set(p.to_cloud) | set(p.to_pc) and self.syncer                 and (side not in ("to_pc", "to_cloud") or set(ids) <= set(getattr(p, side))):
+        if p is not None and set(ids) <= set(p.to_cloud) | set(p.to_pc) and self.syncer:
+            if not current(p):
+                log.info("Photos: an answer to an earlier question was ignored; asked again")
+                self.pendingChanged.emit(self._pending or self._drive_pending)
+                return
             if decision == "approve":
-                self.syncer.approve(ids)
+                photo_side = {"to_pc": "pc", "to_cloud": "cloud"}.get(side)
+                if photo_side is None:  # (said without a side: the side that holds them all)
+                    photo_side = "pc" if set(ids) <= set(p.to_pc) and not set(ids) <= set(p.to_cloud) else \
+                        "cloud" if set(ids) <= set(p.to_cloud) and not set(ids) <= set(p.to_pc) else None
+                self.syncer.approve(ids, photo_side)
             else:
                 if set(ids) & set(p.to_cloud):
                     self.syncer.reject_to_cloud([i for i in ids if i in p.to_cloud])
@@ -854,14 +874,16 @@ class SyncWorker(QObject):
             if not side:  # (said without a side: the side of the current question that holds them all)
                 in_pc, in_cloud = set(ids) <= to_pc, set(ids) <= to_cloud
                 side = "to_pc" if in_pc and not in_cloud else "to_cloud" if in_cloud and not in_pc else ""
-            if decision == "approve" and (side not in ("to_pc", "to_cloud")
-                                          or not set(ids) <= (to_pc if side == "to_pc" else to_cloud)):
+            stale = bool(gen) and str(getattr(d, "gen", "")) != gen
+            if stale or (decision == "approve" and (side not in ("to_pc", "to_cloud")
+                                                    or not set(ids) <= (to_pc if side == "to_pc" else to_cloud))):
                 # an answer to a question that isn't the current one (it changed meanwhile): not used
                 log.info("Drive: an answer to an earlier question was ignored; asked again")
                 self.pendingChanged.emit(self._pending or self._drive_pending)
                 return
             if decision == "approve":
-                self.drive.approve(ids, "pc" if side == "to_pc" else "cloud")
+                self.drive.approve(ids, "pc" if side == "to_pc" else "cloud",
+                                   int(gen) if gen.isdigit() else None)
             else:
                 # Forget the base entries: the surviving copy is then copied back to the other side.
                 self.drive.discard_pending(ids)

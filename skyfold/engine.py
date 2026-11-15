@@ -331,7 +331,10 @@ class Syncer:
         self.cb = cb or Callbacks()
         self.cancel_flag = threading.Event()  # this pass (cleared when the next one starts)
         self.closing = threading.Event()  # the app is quitting: never cleared
-        self.approved: set[str] = set()  # pending deletions the user confirmed
+        self.approved: set[str] = set()  # pending deletions the user confirmed (an answer without a side)
+        self.approved_side: dict[str, set[str]] = {"cloud": set(), "pc": set()}  # confirmed for that side
+        self.held_side: dict[str, set[str]] = {"cloud": set(), "pc": set()}  # asked about, per side
+        self.question_gen = 0  # goes up whenever the question changes: an answer names the one it saw
         self.held: set[str] = set()  # deletions currently waiting for the user's decision
         # Paths the engine itself touched recently, so the folder watcher can ignore them.
         self.own_paths: dict[str, float] = {}
@@ -621,7 +624,7 @@ class Syncer:
                         continue
                     self._forget_local_only(a, rows_by_asset[a])
                     self.cb.activity("local", t("Deleted on this PC only: {name}", name=remote_assets[a].filename))
-            elif len(to_cloud) > threshold and not set(to_cloud) <= self.approved:
+            elif self._needs_answer(to_cloud, "cloud", len(to_cloud) > threshold):
                 pending.to_cloud = to_cloud
             else:
                 for i, a in enumerate(to_cloud, 1):
@@ -661,7 +664,7 @@ class Syncer:
                 for a in to_pc:
                     self.state.remove_asset(a)
                     self.cb.activity("local", t("Deleted in iCloud, kept on this PC: {name}", name=rows_by_asset[a][0].rel_path))
-            elif len(to_pc) > threshold and not set(to_pc) <= self.approved:
+            elif self._needs_answer(to_pc, "pc", len(to_pc) > threshold):
                 pending.to_pc = to_pc
             else:
                 for i, a in enumerate(to_pc, 1):
@@ -696,8 +699,19 @@ class Syncer:
                 pending.names[a] = rows_by_asset[a][0].rel_path
             result.pending = pending
         held = set(pending.to_cloud) | set(pending.to_pc)
-        self.approved &= held  # approvals are single-use
+        new_side = {"cloud": set(pending.to_cloud), "pc": set(pending.to_pc)}
+        if not full:  # a quick look sees only part: what was asked stays asked
+            new_side = {k: v | self.held_side[k] for k, v in new_side.items()}
+            held |= self.held
+        else:
+            self.approved &= held  # approvals are single-use
+            self.approved_side = {k: v & new_side[k] for k, v in self.approved_side.items()}
+        if new_side != self.held_side:
+            self.question_gen += 1  # another question: answers to the earlier one don't count
+        self.held_side = new_side
         self.held = held
+        if pending:
+            pending.gen = self.question_gen
 
         # 3) new in iCloud ---------------------------------------------------
         excluded = self.state.excluded()
@@ -1114,8 +1128,20 @@ class Syncer:
         self.state.exclude(asset_id, "deleted on PC")
 
     # decisions on held deletions -------------------------------------------
-    def approve(self, ids: list[str]) -> None:
-        self.approved.update(ids)
+    def approve(self, ids: list[str], side: str | None = None) -> None:
+        """The user's OK; with a side ("cloud"/"pc") it only counts for deletions on that side."""
+        if side in self.approved_side:
+            self.approved_side[side].update(ids)
+        else:
+            self.approved.update(ids)
+
+    def _needs_answer(self, ids: list[str], side: str, over: bool) -> bool:
+        """Must these deletions wait for the user? When there are more than the limit, or when any of
+        them was asked about before (also if fewer are left now), until they were OK'd for that side."""
+        if not over and not any(a in self.held_side[side] for a in ids):
+            return False
+        ok = self.approved | self.approved_side[side]
+        return not set(ids) <= ok
 
     def reject_to_cloud(self, ids: list[str]) -> None:
         """User wants files deleted on the PC back: forget them so they download again."""

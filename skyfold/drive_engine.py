@@ -223,6 +223,7 @@ class DriveSyncer:
         self._asked_cloud: dict[str, dict | None] = {}
         self._asked_pc: set[str] = set()
         self._approved_side: dict[str, str] = {}  # path -> "cloud"/"pc", when the answer said which
+        self.question_gen = 0  # goes up whenever the question changes: an answer names the one it saw
         self.own_paths: dict[str, float] = {}
         self.cache: dict[str, DriveItem] = {}  # iCloud tree as of the last read
         self.account = ""  # short fingerprint of the Apple ID this folder belongs to (set by the worker)
@@ -968,10 +969,14 @@ class DriveSyncer:
                                  and shapes[p] is not None and self._asked_cloud[p] == shapes[p])
                              or (p in res.pending_to_pc and p in self._asked_pc)}
             self._approved_side = {p: v for p, v in self._approved_side.items() if p in self.approved}
-            self._asked_cloud, self._asked_pc = shapes, set(res.pending_to_pc)
+            new_cloud, new_pc = shapes, set(res.pending_to_pc)
         elif res.pending_to_cloud or res.pending_to_pc:  # a quick pass sees only part: it adds, never forgets
-            self._asked_cloud.update(shapes)
-            self._asked_pc |= set(res.pending_to_pc)
+            new_cloud, new_pc = {**self._asked_cloud, **shapes}, self._asked_pc | set(res.pending_to_pc)
+        else:
+            new_cloud, new_pc = self._asked_cloud, self._asked_pc
+        if new_cloud != self._asked_cloud or new_pc != self._asked_pc:
+            self.question_gen += 1  # another question: answers to the earlier one don't count
+            self._asked_cloud, self._asked_pc = new_cloud, new_pc
         if res.pending_to_cloud or res.pending_to_pc:
             self._late = (remote, base, res)
             if self.on_pending:
@@ -1101,7 +1106,8 @@ class DriveSyncer:
                         _dirs.remove(d)
                     else:
                         shell.append(f"{rel_dir}/{d}")
-                        if record(f"{rel_dir}/{d}") is None:
+                        was = record(f"{rel_dir}/{d}")
+                        if was is None or not was.is_dir:  # (a folder where a file was synced is new too)
                             dirty = edited = True  # a folder made on this PC since: never deleted with it
                 for f in files:
                     rel = f"{rel_dir}/{f}"
@@ -1837,9 +1843,12 @@ class DriveSyncer:
                     etag = b.etag  # compared next pass: unchanged content is recognised, changes come down
                 self.state.put(Base(q, False, etag, b.size, b.lmtime, b.lsize, False, b.hash))
 
-    def approve(self, paths: list[str], side: str | None = None) -> list[str]:
+    def approve(self, paths: list[str], side: str | None = None, gen: int | None = None) -> list[str]:
         """The user's OK for these paths, given for one side ("cloud": delete in iCloud, "pc": on this PC)
-        of the question that was shown. Paths not in that question (an older or newer one) don't count."""
+        of the question that was shown (gen: its version). Paths not in that question, or an answer to
+        an older version of it, don't count."""
+        if gen is not None and gen != self.question_gen:
+            return []
         asked = self._asked_cloud if side == "cloud" else self._asked_pc if side == "pc" else \
             set(self._asked_cloud) | self._asked_pc
         ok = [p for p in paths if p in asked]
@@ -1880,13 +1889,31 @@ class DriveSyncer:
         of them was asked about before (also if fewer are left now), until that very question - same
         side, same items in iCloud - was answered with OK."""
         asked = self._asked_cloud if side == "cloud" else self._asked_pc
-        if not over and not any(p in asked for p in paths):
+
+        def asked_as(p: str) -> str | None:
+            """The path itself, or the folder above it, as the question had it (a folder asked about
+            covers what is inside, also when a later pass lists its files one by one)."""
+            q = p
+            while True:
+                if q in asked:
+                    return q
+                if "/" not in q:
+                    return None
+                q = q.rsplit("/", 1)[0]
+
+        keys = {p: asked_as(p) for p in paths}
+        if not over and not any(keys.values()):
             return False
         for p in paths:
-            if p not in self.approved or p not in asked or self._approved_side.get(p, side) != side:
+            k = keys[p]
+            if k is None or k not in self.approved or self._approved_side.get(k, side) != side:
                 return True
             if side == "cloud":
-                then = self._asked_cloud[p]
+                then = self._asked_cloud[k]
+                if then is None:
+                    return True
+                if k != p:
+                    then = {q: v for q, v in then.items() if q == p or q.startswith(p + "/")} or None
                 if then is None or self._cloud_shape(p, remote, known, verify=True) != then:
                     return True  # another item (or version) is there now than the one you OK'd
         return False
@@ -2007,9 +2034,10 @@ class DriveSyncer:
 
         def count(paths: list[str], _tree: dict) -> int:
             tops = set(paths)
-            n = sum(1 for p, b in everything.items() if not b.is_dir and under_any(p, tops)) or len(paths)
-            files = sum(1 for b in everything.values() if not b.is_dir)
-            if n >= 5 and n > files // 2:
+            files = {p for p, b in everything.items() if not b.is_dir and under_any(p, tops)}
+            n = len(files) + sum(1 for t in tops if not any(under_any(f, {t}) for f in files))
+            total = sum(1 for b in everything.values() if not b.is_dir)
+            if n >= 5 and n > total // 2:
                 return threshold + 1  # more than half of everything: always ask
             return n
 
