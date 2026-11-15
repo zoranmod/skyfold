@@ -184,6 +184,13 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - iCloud Drive: a replaced version on its way to the Recycle Bin stays known when its folder is renamed or moved to follow iCloud, and whatever the letter case of its name. Files and paths that can't be looked at during approved deletions, moves and interrupted downloads are left as they are and decided later, never forgotten or shown as conflict copies.
   - Find My: devices loaded with Refresh after switching between light and dark use the new colours.
   - Sync markers: a folder or link at the marker's name stops the sync; the old marker names are only looked at when the current marker is missing.
+- Twenty-eighth follow-up review (tests in tests/test_review30_codex_probes.py and tests/test_review30_fixes.py):
+  - iCloud Drive: a folder deleted on one side that stays on the other only for items Skyfold never syncs (desktop.ini, an Office lock file, a .tmp draft, also an empty ignored folder) is no longer created again where it was deleted. A synced file added inside it later brings it back as usual; the activity list says why it stays.
+  - The sync database of an earlier installation is copied and the earlier file is left exactly as it is (another program may still have written to it). A journal left here without its database is set aside under a new name. If the database can't be taken over (unreadable, kept busy for more than 30 seconds), Skyfold says so at start and keeps the earlier file.
+  - Notes: a drawing's small preview is removed only when this very export downloaded it into the attachments folder (by file identity), never because of its creation time. The first Notes.html is claimed only when exactly its bytes are found there, also after a crash.
+  - iCloud Drive: a file that can't be read in a folder deleted in iCloud is decided later, not uploaded again; a failed folder move restores the exact records that were there before; content of an item without a version tag is fetched once per listing within a pass.
+  - Photos: a folder that can't be read is named in the activity list once (not on every pass), with what to do about it.
+  - Sign-in: a sign-out mark that can't be looked at counts as there.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

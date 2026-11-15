@@ -18,7 +18,6 @@ import tempfile
 import re
 import sqlite3
 import threading
-import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -121,15 +120,29 @@ class ICloudNotes:
             _SKETCH_INFO.clear()
             if not filename.startswith(STAGE_PREFIX):
                 _CURRENT_NOTE[0] = str(out_dir.name + "/" + filename)
-            started = time.time()
-            if not exporter.export(record, output_dir=str(out_dir), filename=filename):
-                raise SyncError(t("Note has no content"))
+            raw = self.svc._raw
+            real_download = raw.download_asset_to
+            made: set[tuple[int, int]] = set()  # the files this export downloaded, by file identity
+
+            def recording(url, directory, _real=real_download):
+                path = _real(url, directory)
+                ident = _file_identity(Path(path))
+                if ident:
+                    made.add(ident)
+                return path
+
+            raw.download_asset_to = recording
+            try:
+                if not exporter.export(record, output_dir=str(out_dir), filename=filename):
+                    raise SyncError(t("Note has no content"))
+            finally:
+                raw.download_asset_to = real_download
             if _SKETCH_FALLBACKS:
                 page = out_dir / (filename if filename.lower().endswith(".html") else filename + ".html")
                 if page.exists():
                     fallbacks = dict(_SKETCH_FALLBACKS)
-                    upgrade_sketches(page, fallbacks, lambda url, folder: self.svc._raw.download_asset_to(url, str(folder)),
-                                     made_since=started)
+                    upgrade_sketches(page, fallbacks, lambda url, folder: real_download(url, str(folder)),
+                                     made=made, assets_dir=assets_dir)
         self._call(run)
 
 
@@ -430,23 +443,22 @@ def _on_white(img):
 IMG_TAG = re.compile(r'<img\b[^>]*?\ssrc="([^"]+)"[^>]*>', re.IGNORECASE)
 
 
-def _made_since(p: Path, since: float | None) -> bool:
-    """Was this file created at or after `since` (by the export that just ran)? Unknown: no."""
-    if since is None:
-        return False
+def _file_identity(p: Path) -> tuple[int, int] | None:
+    """(volume, file id) of an ordinary file; None when unknown (no id, not a file, can't be read)."""
     try:
         st = os.lstat(p)
     except OSError:
-        return False
-    born = getattr(st, "st_birthtime", None) or st.st_ctime  # Windows: when the file was created
-    return stat.S_ISREG(st.st_mode) and born >= since - 2
+        return None
+    return (st.st_dev, st.st_ino) if stat.S_ISREG(st.st_mode) and st.st_ino else None
 
 
-def upgrade_sketches(page: Path, fallbacks: dict[str, str], download, made_since: float | None = None) -> int:
+def upgrade_sketches(page: Path, fallbacks: dict[str, str], download, made: set | None = None,
+                     assets_dir: Path | None = None) -> int:
     """Swap each pen drawing's small preview for its full-size bitmap, when that one is bigger and a
     browser can show it. download(url, folder) saves the file and returns its path. Returns the
     number of drawings upgraded; on any problem the preview simply stays. The replaced preview is
-    removed only when this export made it (created since made_since); any other file stays."""
+    removed only when this very export downloaded it (its file identity is in `made`) directly into
+    `assets_dir`; any other file stays."""
     import urllib.parse
 
     from PySide6.QtGui import QImageReader
@@ -491,7 +503,12 @@ def upgrade_sketches(page: Path, fallbacks: dict[str, str], download, made_since
                 new.unlink(missing_ok=True)
             return tag
         count += 1
-        if _made_since(current, made_since):  # written by this export, for this page only
+        try:
+            ours = bool(made) and assets_dir is not None and current.parent == Path(assets_dir).resolve() \
+                and _file_identity(current) in made
+        except OSError:
+            ours = False
+        if ours:  # downloaded by this export, for this page: no other page or file uses it
             try:
                 current.unlink()
             except OSError:
@@ -1006,6 +1023,17 @@ class NotesSyncer:
         present = not known_missing(target)  # one that can't be looked at counts as there
         if present and not _is_our_index(target):
             raise not_ours
+        claim = self.state.get("index_owned") or ""
+        if claim.startswith("pending:"):  # the first index was being put in place when Skyfold stopped
+            try:
+                landed = present and _digest(target) == claim[len("pending:"):]
+            except OSError:
+                return  # can't be read now: decided next time
+            if landed:  # exactly what Skyfold wrote: it is ours
+                self.state.set("index_digest", claim[len("pending:"):])
+                self.state.set("index_owned", "1")
+            else:
+                self.state.set("index_owned", None)  # it never got there: no claim on that name
         was_owned = bool(self.state.get("index_owned") or self.state.get("index_digest"))
         if present and not was_owned:
             # It looks like a Skyfold index, but this setup has no record of writing one here (a copy
@@ -1015,12 +1043,13 @@ class NotesSyncer:
                 self.cb.activity("info", t("Notes.html in the Notes folder wasn't written by this Skyfold; it is left "
                                            "as it is. Move or delete it to get a new index."))
             return
-        self.state.set("index_owned", "1")  # written down before the first index is put in place
         fd, tmp = tempfile.mkstemp(prefix=".skyfold-index-", suffix=".tmp", dir=self.root)
         self._own(Path(tmp), "indextmp")
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(page)
         written = _digest(Path(tmp))  # what Skyfold wrote, known before the file is public
+        if not was_owned:  # the first one: claimed only if exactly these bytes are found there later
+            self.state.set("index_owned", f"pending:{written}")
         aside = None
         try:
             if target.exists():  # moved aside and checked again: never overwrite what was saved meanwhile
@@ -1057,6 +1086,7 @@ class NotesSyncer:
             if known_missing(aside):
                 self._disown(aside)
         self.state.set("index_digest", written)
+        self.state.set("index_owned", "1")
 
 
 INDEX_MARK = '<meta name="generator" content="Skyfold notes index">'

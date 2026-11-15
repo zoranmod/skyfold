@@ -166,6 +166,7 @@ class DriveState:
         with self.transaction():
             self._db.execute("DELETE FROM drive_files")
             self._db.execute("DELETE FROM drive_meta WHERE key=?", (PENDING_MOVE,))
+            self._db.execute("DELETE FROM drive_meta WHERE substr(key, 1, 6)='shell:'")  # kept folders of the other one
 
     @contextmanager
     def transaction(self):
@@ -295,9 +296,11 @@ class DriveSyncer:
     def _cloud_hash(self, r: DriveItem) -> str | None:
         """SHA-256 of what iCloud has for this item now, by downloading it to a private file.
         None: couldn't be checked (then nothing is assumed about it)."""
-        key = (r.docwsid or r.path, r.etag)
-        if key in self._hashes:
-            return self._hashes[key]
+        # Tagged: that version. Untagged: only this very listing of it, within this pass (a later look,
+        # or the next pass, may see other content).
+        key = (r.docwsid or r.path, r.etag) if r.etag else ("listing", id(r))
+        if key in self._hashes and (r.etag or self._hashes[key][0] is r):
+            return self._hashes[key] if r.etag else self._hashes[key][1]
         tmp_path = None
         try:
             self._check_cancel()
@@ -324,8 +327,7 @@ class DriveSyncer:
             if tmp_path is not None:
                 tmp_path.unlink(missing_ok=True)
                 self._disown(tmp_path, "tmp")
-        if r.etag:  # without a version tag the next look may see other content: never reused
-            self._hashes[key] = got
+        self._hashes[key] = got if r.etag else (r, got)  # (the item is kept: its id isn't reused meanwhile)
         return got
 
     def _pc_has_synced_content(self, b: Base | None, p: Path, strict: bool = False) -> bool:
@@ -745,6 +747,9 @@ class DriveSyncer:
                     return True
             return "" in partial
 
+        if scope is None:
+            self._settle_shells(remote, local, partial)
+
         paths = sorted(set(remote) | set(local) | set(base))
         paths = [p for p in paths if p]  # never the root itself
         if self.unreadable:  # couldn't be read on this PC (access denied, disk hiccup): leave alone
@@ -788,6 +793,8 @@ class DriveSyncer:
                 elif r and not lo:
                     if b:
                         to_cloud.append(path)  # folder deleted on PC
+                    elif self._shell_held(path, "cloud", remote, everything_known):
+                        pass  # deleted on this PC; left in iCloud only for items that are never synced
                     else:
                         mkdir_local.append(r)
                 elif lo and not r:
@@ -798,6 +805,8 @@ class DriveSyncer:
                             to_pc.append(path)  # (files never sent up stay, and the folder is made again)
                     elif b and b.etag is not None:
                         to_pc.append(path)  # folder deleted in iCloud
+                    elif not b and self._shell_held(path, "pc", local, everything_known):
+                        pass  # deleted in iCloud; kept on this PC only for items that are never synced
                     elif not b:
                         mkdir_remote.append(path)
                     elif scope is None:  # made by us, not listed by this full read: one more full read decides
@@ -854,6 +863,14 @@ class DriveSyncer:
             elif lo and not r and b and listed_partly(path):
                 pass  # iCloud's answer for its folder was incomplete: never read that as "deleted"
             elif lo and not r:
+                pc_same = None  # PC content against the synced fingerprint (None: not looked at)
+                if b and not b.pending and b.etag is not None and b.hash and \
+                        (lo.size, round(lo.mtime, 2)) == (b.lsize, round(b.lmtime or 0, 2)):
+                    try:
+                        pc_same = self._pc_has_synced_content(b, self._abs(path), strict=True)
+                    except OSError as exc:  # can't be read now: nothing decided, looked at next time
+                        log.info("Drive: %s couldn't be read now: %s", path, brief(exc))
+                        continue
                 if b and b.pending:
                     if settled:
                         uploads.append(path)  # replacement upload that didn't finish: retry
@@ -861,7 +878,7 @@ class DriveSyncer:
                     self.state.drop(path)  # deleted in iCloud, but edited on this PC since: keep the edit
                     if settled:
                         uploads.append(path)
-                elif b and b.etag is not None and b.hash and not self._pc_has_synced_content(b, self._abs(path)):
+                elif b and b.etag is not None and pc_same is False:
                     self.state.drop(path)  # deleted in iCloud, but changed here keeping size and time: keep it
                     uploads.append(path)
                 elif b and b.etag is not None:
@@ -1034,18 +1051,27 @@ class DriveSyncer:
         (and go up again); only what is unchanged since the last sync goes to the Recycle Bin."""
         out: list[str] = []
         known = self.state.all() if to_pc else {}  # a quick pass holds only a slice in `base`
+        shells = self.state.meta_items("shell:") if to_pc else {}
         for p in to_pc:
             b = base.get(p)
             if b is None or not b.is_dir:
                 out.append(p)
                 continue
             dirty, clean = False, []
+            edited = False  # dirty because of synced content changed or added here (not only never-synced items)
+            drops: list[str] = []
+            shell: list[str] = []  # the synced folders below, as they are now
             unreadable: list[str] = []
             for dirpath, _dirs, files in os.walk(self._abs(p), onerror=lambda e: unreadable.append(str(e))):
-                for d in _dirs:
+                rel_dir = Path(dirpath).relative_to(self.root).as_posix()
+                for d in list(_dirs):
                     if _is_link(Path(dirpath) / d):
                         unreadable.append(f"link: {Path(dirpath) / d}")
-                rel_dir = Path(dirpath).relative_to(self.root).as_posix()
+                    elif _ignored_path(f"{rel_dir}/{d}"):
+                        dirty = True  # a folder that is never synced (even empty): it and its parents stay
+                        _dirs.remove(d)
+                    else:
+                        shell.append(f"{rel_dir}/{d}")
                 for f in files:
                     rel = f"{rel_dir}/{f}"
                     if _ignored_path(rel):
@@ -1061,24 +1087,67 @@ class DriveSyncer:
                         unreadable.append(str(exc))
                         continue
                     if not same:
-                        dirty = True
+                        dirty = edited = True
                         if fb is not None:
-                            self.state.drop(rel)
+                            drops.append(rel)
                     else:
                         clean.append(rel)
             if unreadable:
                 log.warning("Drive: %s couldn't be read completely; not deleted (%s)", p, unreadable[:2])
-                continue  # can't check what's inside: decide another time
+                continue  # can't check what's inside: decide another time (nothing forgotten)
             if not dirty:
                 out.append(p)
                 continue
-            log.info("Drive: %s was deleted in iCloud but has changes on this PC; keeping them", p)
-            self.cb.activity("info", t("Deleted in iCloud, but changed on this PC: kept {name}", name=p))
+            for rel in drops:
+                self.state.drop(rel)  # edited here: goes up again as a new file
+            if edited:
+                log.info("Drive: %s was deleted in iCloud but has changes on this PC; keeping them", p)
+                self.cb.activity("info", t("Deleted in iCloud, but changed on this PC: kept {name}", name=p))
+                if f"shell:pc:{p}" in shells:
+                    self.state.set_meta(f"shell:pc:{p}", None)
+            else:
+                # Only items Skyfold never syncs (desktop.ini, an Office lock file, a .tmp draft) keep
+                # the folder here: it stays on this PC, and it isn't created in iCloud again for them.
+                log.info("Drive: %s was deleted in iCloud; kept on this PC only for items that aren't synced", p)
+                self.cb.activity("info", t("Deleted in iCloud; {name} stays on this PC only for files that "
+                                           "aren't synced (it isn't created in iCloud again)", name=p))
+                self.state.set_meta(f"shell:pc:{p}", json.dumps(sorted(shell)))
             for q in [q for q in list(base) if q == p or q.startswith(p + "/")]:
                 if base[q].is_dir:
-                    self.state.drop(q)  # recreated in iCloud on the next pass
+                    self.state.drop(q)  # recreated in iCloud on the next pass (edited), or left here (shell)
             out.extend(clean)
         return out
+
+    def _shell_held(self, path: str, side: str, items: dict, known: dict[str, Base]) -> bool:
+        """A folder deleted on one side and kept on the other only for items that are never synced:
+        it isn't created again where it was deleted. Something synced added inside it reopens it."""
+        for key, val in self.state.meta_items(f"shell:{side}:").items():
+            top = key[len(f"shell:{side}:"):]
+            if path != top and not path.startswith(top + "/"):
+                continue
+            try:
+                kept = set(json.loads(val or "[]"))
+            except (ValueError, TypeError):
+                kept = set()
+            added = [q for q in items if q.startswith(top + "/") and q not in kept and q not in known]
+            if added:
+                log.info("Drive: %s has new content (%s); synced again", top, added[0])
+                self.state.set_meta(key, None)
+                return False
+            return True
+        return False
+
+    def _settle_shells(self, remote: dict[str, DriveItem], local: dict[str, "Local"], partial: set[str]) -> None:
+        """A kept folder that is back on the side it was deleted from, or gone where it was kept:
+        nothing left to hold (full passes only)."""
+        for key in self.state.meta_items("shell:"):
+            side, top = key[len("shell:"):].split(":", 1)
+            if side == "pc":
+                done = top in remote or (top not in local and known_missing(self._abs(top)))
+            else:
+                done = top in local or (not partial and top not in remote)
+            if done:
+                self.state.set_meta(key, None)
 
     def _keep_unsynced_remote(self, to_cloud: list[str], remote: dict[str, DriveItem],
                               base: dict[str, Base]) -> list[str]:
@@ -1088,6 +1157,7 @@ class DriveSyncer:
 
         out: list[str] = []
         known = self.state.all() if to_cloud else {}
+        shells = self.state.meta_items("shell:") if to_cloud else {}
         ordered = sorted(remote)
 
         def below(p: str) -> list[str]:
@@ -1112,8 +1182,18 @@ class DriveSyncer:
             if not changed and not unsynced:  # (never-synced items, a .tmp draft, … keep the folder)
                 out.append(p)
                 continue
-            log.info("Drive: %s was deleted on this PC but has changes in iCloud; keeping them", p)
-            self.cb.activity("info", t("Deleted on this PC, but changed in iCloud: kept {name}", name=p))
+            if changed:
+                log.info("Drive: %s was deleted on this PC but has changes in iCloud; keeping them", p)
+                self.cb.activity("info", t("Deleted on this PC, but changed in iCloud: kept {name}", name=p))
+                if f"shell:cloud:{p}" in shells:
+                    self.state.set_meta(f"shell:cloud:{p}", None)
+            else:
+                # Only items Skyfold never syncs keep the folder in iCloud: it isn't made on this PC again.
+                log.info("Drive: %s was deleted on this PC; kept in iCloud only for items that aren't synced", p)
+                self.cb.activity("info", t("Deleted on this PC; {name} stays in iCloud only for files that "
+                                           "aren't synced (it isn't created on this PC again)", name=p))
+                self.state.set_meta(f"shell:cloud:{p}",
+                                    json.dumps(sorted(q for q in all_below if remote[q].is_dir)))
             for q in [q for q in list(base) if q == p or q.startswith(p + "/")]:
                 self.state.drop(q)  # comes back down on the next pass
             out.extend(q for q in inside if q not in changed)
@@ -1537,18 +1617,22 @@ class DriveSyncer:
             self._touch_own(src)
             self._touch_own(dst)
             carried = self._records_below(old)
-            for key, val in carried.items():  # written down at the new place too before the move:
-                kind, rel = key.split(":", 1)   # whichever name the file has after a crash, it is known
-                self.state.set_meta(f"{kind}:{new}{rel[len(old):]}", val)
+            moved_keys = {key: f"{key.split(':', 1)[0]}:{new}{key.split(':', 1)[1][len(old):]}" for key in carried}
+            before = {nk: self.state.get_meta(nk) for nk in moved_keys.values()}  # what was there: put back on failure
+            with self.state.transaction():
+                for key, nk in moved_keys.items():  # written down at the new place too before the move:
+                    self.state.set_meta(nk, carried[key])  # whichever name the file has after a crash, it is known
             try:
                 os.rename(src, dst)  # refuses an existing name (os.replace would overwrite a file saved just now)
             except BaseException:
-                for key in carried:
-                    kind, rel = key.split(":", 1)
-                    self.state.set_meta(f"{kind}:{new}{rel[len(old):]}", None)
+                with self.state.transaction():
+                    for nk, val in before.items():
+                        self.state.set_meta(nk, val)
                 raise
-            for key in carried:
-                self.state.set_meta(key, None)
+            with self.state.transaction():
+                for key, nk in moved_keys.items():
+                    if key != nk:  # (a letter-case-only move: the same record)
+                        self.state.set_meta(key, None)
         except FileExistsError:
             log.info("Rename on this PC skipped (%s -> %s): the new name was taken meanwhile", old, new)
             return False
@@ -2023,7 +2107,7 @@ class DriveSyncer:
         try:
             self._trash_local(aside)
             self._disown(original, "aside")
-            if promoted:
+            if promoted and aside == named:  # (after an unclear rename the next full scan decides)
                 self._disown(named, "prev")
         except Exception as exc:  # noqa: BLE001 - kept; shown as a conflict copy on the next full sync
             log.warning("Drive: couldn't move the previous version of %s to the Recycle Bin: %s", rel, exc)

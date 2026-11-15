@@ -186,6 +186,14 @@ BS: dict[str, str] = {
         "Oznaka sinhronizacije u {path} se ne može provjeriti: {error}. Sinhronizacija je zaustavljena da se ništa ne promijeni greškom; pokušava se ponovo sljedeći put.",
     "it appeared while it was being checked": "pojavila se dok se provjeravala",
     "it isn't an ordinary file": "nije običan fajl",
+    "Photos: {n} missing files are kept until {folder} can be read. Fix its access rights, or move that folder "
+    "out of the photos folder.":
+        "Fotografije: {n} fajlova koji nedostaju zadržano je dok se {folder} ne može pročitati. Popravi prava pristupa "
+        "ili premjesti taj folder iz foldera s fotografijama.",
+    "The sync database of the earlier installation couldn't be taken over, so Skyfold starts with a "
+    "new one. The earlier file is kept unchanged:\n{details}":
+        "Baza sinhronizacije ranije instalacije nije mogla biti preuzeta, pa Skyfold počinje s novom. "
+        "Raniji fajl je zadržan nepromijenjen:\n{details}",
     "Photos: {n} missing files are kept for now, part of the photos folder couldn't be read":
         "Fotografije: {n} fajlova koji nedostaju zasad se ne diraju, dio foldera s fotografijama se ne može pročitati",
     "This Drive folder belongs to another Apple ID. Choose a new, empty folder for iCloud Drive in Settings.":
@@ -219,6 +227,10 @@ BS: dict[str, str] = {
         "Folder {name} nedostaje na ovom PC-u, preuzima se ponovo (u iCloudu se ne briše).",
     "Couldn't create folder ({name}): {error}": "Folder se ne može napraviti ({name}): {error}",
     "Deleted in iCloud, but changed on this PC: kept {name}": "Obrisano u iCloudu, ali izmijenjeno na ovom PC-u: zadržano {name}",
+    "Deleted in iCloud; {name} stays on this PC only for files that aren't synced (it isn't created in iCloud again)":
+        "Obrisano u iCloudu; {name} ostaje na ovom PC-u samo zbog fajlova koji se ne sinhronizuju (ne pravi se ponovo u iCloudu)",
+    "Deleted on this PC; {name} stays in iCloud only for files that aren't synced (it isn't created on this PC again)":
+        "Obrisano na ovom PC-u; {name} ostaje u iCloudu samo zbog fajlova koji se ne sinhronizuju (ne pravi se ponovo na ovom PC-u)",
     "Drive: can't read {name} on this PC right now; it is left alone and checked again next time":
         "Drive: {name} se trenutno ne može pročitati na ovom PC-u; ostavljeno je kako jeste i provjerava se ponovo sljedeći put",
     "Deleted on this PC, but changed in iCloud: kept {name}": "Obrisano na ovom PC-u, ali izmijenjeno u iCloudu: zadržano {name}",

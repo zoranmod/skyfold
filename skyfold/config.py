@@ -198,30 +198,55 @@ def _move_dir_new(src: Path, dst: Path) -> None:
     shutil.rmtree(src)
 
 
-def _move_database(src_dir: Path) -> None:
+MIGRATION_PROBLEMS: list[str] = []  # shown to the user once the app has started
+BACKUP_SECONDS = 30.0  # an earlier database kept busy by another program longer than this: not taken over
+
+
+def _copy_database(src_dir: Path) -> None:
     """Take over a database together with its journal, as one consistent snapshot. Only when this PC
-    has no database at all (none of its files): a journal is never put next to another database."""
+    has no database at all (none of its files): a journal is never put next to another database.
+    The earlier copy is left exactly as it is: nothing proves no other program wrote to it after the
+    snapshot, so it is never deleted."""
     import sqlite3
     import tempfile
+    import time
     from contextlib import closing
+
+    deadline = time.monotonic() + BACKUP_SECONDS
+
+    def progress(_status: int, _remaining: int, _total: int) -> None:
+        if time.monotonic() > deadline:
+            raise TimeoutError("the earlier database is kept busy by another program")
 
     fd, tmp = tempfile.mkstemp(prefix=DATABASE + ".", suffix=".new", dir=PRIVATE_DIR)
     os.close(fd)
     try:
-        with closing(sqlite3.connect(src_dir / DATABASE)) as old, closing(sqlite3.connect(tmp)) as new:
-            old.backup(new)  # the database as it is with its journal applied
-        if not place_new(tmp, PRIVATE_DIR / DATABASE):
-            return
+        with closing(sqlite3.connect(src_dir / DATABASE, timeout=5)) as old, closing(sqlite3.connect(tmp)) as new:
+            old.backup(new, progress=progress)  # the database as it is with its journal applied
+        place_new(tmp, PRIVATE_DIR / DATABASE)
     finally:
         try:
             os.unlink(tmp)
         except FileNotFoundError:
             pass
-    for name in (DATABASE + "-wal", DATABASE + "-shm", DATABASE):  # taken over: the old copy goes
+
+
+def _set_aside_orphan_journal() -> None:
+    """A journal (-wal/-shm) here without its database belongs to no database any more (left by a
+    crash): it is renamed, never applied to a database made or taken over later, and never deleted."""
+    import uuid
+
+    if not _missing(PRIVATE_DIR / DATABASE):
+        return
+    for name in (DATABASE + "-wal", DATABASE + "-shm"):
+        p = PRIVATE_DIR / name
+        if _missing(p):
+            continue
         try:
-            os.unlink(src_dir / name)
-        except FileNotFoundError:
-            pass
+            os.rename(p, PRIVATE_DIR / f"{name}.orphan-{uuid.uuid4().hex[:8]}")  # a new name: refuses to replace
+            logging.getLogger("skyfold").warning("A database journal without its database was set aside: %s", name)
+        except OSError as exc:
+            MIGRATION_PROBLEMS.append(f"{p}: {exc}")
 
 
 def _move_private(src_dir: Path) -> None:
@@ -235,11 +260,14 @@ def _move_private(src_dir: Path) -> None:
             _move_dir_new(src, PRIVATE_DIR / "session")
         except OSError as exc:  # left where it is: tried again next start
             log.info("Couldn't move the session: %s", exc)
+    if (src_dir / DATABASE).is_file() and _missing(PRIVATE_DIR / DATABASE):
+        _set_aside_orphan_journal()
     if (src_dir / DATABASE).is_file() and all(_missing(PRIVATE_DIR / n) for n in DATABASE_FILES):
         try:
-            _move_database(src_dir)
-        except Exception as exc:  # noqa: BLE001 - left where it is: tried again next start
-            log.info("Couldn't move the database: %s", exc)
+            _copy_database(src_dir)
+        except Exception as exc:  # noqa: BLE001 - left where it is, unchanged; the user is told
+            log.warning("Couldn't take over the database from %s: %s", src_dir, exc)
+            MIGRATION_PROBLEMS.append(f"{src_dir / DATABASE}: {exc}")
     # If both exist, the local copy wins and the other one is simply left alone: never
     # delete a session or database automatically.
 
@@ -252,6 +280,7 @@ def migrate_private_files() -> None:
       so the user doesn't have to sign in or download everything again.
     """
     local = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+    MIGRATION_PROBLEMS.clear()
     if _missing(PRIVATE_DIR / DATABASE):
         _move_private(local / "iSync")
     _move_private(DATA_DIR)

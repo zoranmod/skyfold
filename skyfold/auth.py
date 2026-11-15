@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .config import PRIVATE_DIR, SESSION_DIR
@@ -156,12 +158,22 @@ class LoginStep:
     notice: str = ""
 
 
+def _known_missing(p: Path) -> bool:
+    try:
+        os.lstat(p)
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError:
+        return False
+    return False
+
+
 def restore(apple_id: str) -> Any | None:
     """Reuse the saved session. Returns None when the user has to sign in again."""
     from pyicloud import PyiCloudService
 
-    if not apple_id or not SESSION_DIR.exists() or SIGNED_OUT.exists():
-        return None
+    if not apple_id or not SESSION_DIR.exists() or not _known_missing(SIGNED_OUT):
+        return None  # (a sign-out mark that can't be looked at counts as there: never restored past it)
     from pyicloud.exceptions import PyiCloudConnectionException
     from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout
 

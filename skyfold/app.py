@@ -661,6 +661,10 @@ def main() -> int:
     if listen_error:
         log.warning("Single-instance server: %s", listen_error)
     log.info("Starting %s %s (%s)", APP_NAME, VERSION, "packaged" if getattr(sys, "frozen", False) else "from source")
+    from . import config as _config
+
+    for problem in _config.MIGRATION_PROBLEMS:
+        log.warning("Earlier sync database not taken over: %s", problem)
     if not QSystemTrayIcon.isSystemTrayAvailable():
         QMessageBox.critical(None, APP_NAME, t("The system tray is not available."))
         return 1
@@ -682,4 +686,8 @@ def main() -> int:
 
     server.newConnection.connect(on_conn)
     ctl.start(show="--tray" not in sys.argv)
+    if _config.MIGRATION_PROBLEMS:  # the earlier database stays where it is, unchanged; the user decides
+        QTimer.singleShot(800, lambda: warn(None, APP_NAME, t(
+            "The sync database of the earlier installation couldn't be taken over, so Skyfold starts with a "
+            "new one. The earlier file is kept unchanged:\n{details}", details="\n".join(_config.MIGRATION_PROBLEMS))))
     return app.exec()

@@ -40,7 +40,7 @@ def test_database_is_taken_over_with_its_journal_as_one_snapshot(tmp_path, monke
     config.migrate_private_files()
     with closing(sqlite3.connect(private / "state.sqlite3")) as conn:
         assert conn.execute("SELECT v FROM t").fetchone() == ("in the journal",)
-    assert not any((portable / n).exists() for n in config.DATABASE_FILES)
+    assert (portable / "state.sqlite3").exists()  # (review 30: the earlier copy is kept as it is)
     assert not (private / "state.sqlite3-wal").exists()
 
 
@@ -52,8 +52,13 @@ def test_a_journal_left_on_this_pc_keeps_the_old_database_out(tmp_path, monkeypa
         conn.commit()
     (private / "state.sqlite3-wal").write_bytes(b"orphan journal")
     config.migrate_private_files()
-    assert not (private / "state.sqlite3").exists() and (portable / "state.sqlite3").exists()
-    assert (private / "state.sqlite3-wal").read_bytes() == b"orphan journal"
+    assert (portable / "state.sqlite3").exists()
+    # (review 30) the orphan journal is set aside under a new name, never applied, never deleted
+    assert not (private / "state.sqlite3-wal").exists()
+    aside = [p for p in private.iterdir() if p.name.startswith("state.sqlite3-wal.orphan-")]
+    assert len(aside) == 1 and aside[0].read_bytes() == b"orphan journal"
+    with closing(sqlite3.connect(private / "state.sqlite3")) as conn:
+        assert conn.execute("SELECT name FROM sqlite_master WHERE name='t'").fetchone() == ("t",)
 
 
 def test_a_database_that_cannot_be_read_stays_where_it_is(tmp_path, monkeypatch):
@@ -92,11 +97,13 @@ def test_content_of_an_untagged_item_is_never_reused(drive_env):
     real = s.remote.download
     s.remote.download = lambda item, dest, on_bytes: (calls.append(item.etag), real(r, dest, on_bytes))
     untagged = DriveItem(r.path, r.drivewsid, r.docwsid, r.zone, None, False, r.size, r.mtime)
+    again = DriveItem(r.path, r.drivewsid, r.docwsid, r.zone, None, False, r.size, r.mtime)
     s._cloud_hash(untagged)
-    s._cloud_hash(untagged)
+    s._cloud_hash(untagged)  # (review 30) the very same listing, within one pass: looked at once
+    s._cloud_hash(again)  # another look at it: fetched again
     s._cloud_hash(r)
     s._cloud_hash(r)
-    assert calls == [None, None, r.etag]  # looked at again each time; a tagged version only once
+    assert calls == [None, None, r.etag]  # a tagged version only once
 
 
 # A29-2 -----------------------------------------------------------------------------------------

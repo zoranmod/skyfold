@@ -467,9 +467,19 @@ class Syncer:
                 deleted_assets.append(r.asset_id)
             else:
                 lone_videos.append(r)
-        if held:
-            self.cb.activity("info", t("Photos: {n} missing files are kept for now, part of the photos folder "
-                                       "couldn't be read", n=held))
+        told = (held, tuple(sorted(str(getattr(e, "filename", "") or "") for e in unsure)), tuple(sorted(unsure_names)))
+        if held and told != getattr(self, "_told_unsure", None):  # once, not on every pass
+            self._told_unsure = told
+            where = next((str(e.filename) for e in unsure if getattr(e, "filename", None)), None)
+            if where:
+                self.cb.activity("info", t("Photos: {n} missing files are kept until {folder} can be read. Fix its "
+                                           "access rights, or move that folder out of the photos folder.",
+                                           n=held, folder=where), where)
+            else:
+                self.cb.activity("info", t("Photos: {n} missing files are kept for now, part of the photos folder "
+                                           "couldn't be read", n=held))
+        elif not held:
+            self._told_unsure = None
         for r in untracked:
             self.state.remove_asset(r.asset_id)
             self.state.exclude(r.asset_id, "deleted on PC")
