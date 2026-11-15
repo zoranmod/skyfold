@@ -264,7 +264,9 @@ def test_fixed_local_shell_quick_change_gets_a_full_pass(drive_env):
     s, cloud, root = local_shell(drive_env)
     p = "Trip/Sub/new.txt"
     write(root, p, b"NEW")
+    before = cloud.full_walks
     s.run(changed={p})
+    assert cloud.full_walks == before + 1  # (review 32: the quick pass really became a full one)
     s.run(changed={p})  # (the folders first, then the file: as for any new folder tree)
     assert cloud.items[p]["data"] == b"NEW"
 

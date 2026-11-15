@@ -669,6 +669,13 @@ def main() -> int:
         QMessageBox.critical(None, APP_NAME, t("The system tray is not available."))
         return 1
 
+    if _config.JOURNAL_PROBLEMS:  # opening the database now would overwrite a journal: never
+        log.warning("Not started: a database journal couldn't be kept safe: %s", _config.JOURNAL_PROBLEMS)
+        warn(None, APP_NAME, t(
+            "Skyfold found a database journal without its database and couldn't keep a copy of it:\n{details}"
+            "\n\nSkyfold doesn't start, so it isn't overwritten. Restart Windows and try again, or move "
+            "that file somewhere else yourself.", details="\n".join(_config.JOURNAL_PROBLEMS)))
+        return 0
     if _config.MIGRATION_PROBLEMS:  # before anything opens a new database: the user decides
         answer = ask(None, APP_NAME, t(
             "The sync database of the earlier installation couldn't be taken over. The earlier file is kept "

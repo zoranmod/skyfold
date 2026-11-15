@@ -199,6 +199,7 @@ def _move_dir_new(src: Path, dst: Path) -> None:
 
 
 MIGRATION_PROBLEMS: list[str] = []  # shown to the user once the app has started
+JOURNAL_PROBLEMS: list[str] = []  # a journal that couldn't be kept safe: nothing may open the database
 BACKUP_SECONDS = 30.0  # an earlier database kept busy by another program longer than this: not taken over
 
 
@@ -218,15 +219,35 @@ def _copy_database(src_dir: Path) -> None:
         if time.monotonic() > deadline:
             raise TimeoutError("the earlier database is kept busy by another program")
 
-    shm = src_dir / (DATABASE + "-shm")
-    had_shm = not _missing(shm)
+    # The earlier files are only ever read: copied as they are into a private folder, and the copy is
+    # opened there (SQLite applies its journal - a WAL, or a crashed writer's rollback journal - to
+    # the copy, never to the original). Nothing is created, changed or removed next to the original.
+    snap = Path(tempfile.mkdtemp(prefix=DATABASE + ".", suffix=".snap", dir=PRIVATE_DIR))
     fd, tmp = tempfile.mkstemp(prefix=DATABASE + ".", suffix=".new", dir=PRIVATE_DIR)
     os.close(fd)
     try:
-        # Opened read-only: its journal is read (and applied to the copy), but neither the database
-        # nor its journal is checkpointed, changed or removed.
-        uri = (src_dir / DATABASE).resolve().as_uri() + "?mode=ro"
-        with closing(sqlite3.connect(uri, uri=True, timeout=5)) as old, closing(sqlite3.connect(tmp)) as new:
+        def copy_files() -> None:
+            for suffix in ("", "-wal", "-journal"):  # (a -shm is only an index: rebuilt from the WAL)
+                src = src_dir / (DATABASE + suffix)
+                if not _missing(src):
+                    shutil.copyfile(src, snap / (DATABASE + suffix))
+
+        if _missing(src_dir / (DATABASE + "-wal")) and _missing(src_dir / (DATABASE + "-journal")):
+            # A rollback-journal database: a read lock keeps any writer from changing it during the copy
+            # (opened read-only, it creates no file). A program holding it longer: not taken over now.
+            uri = (src_dir / DATABASE).resolve().as_uri() + "?mode=ro"
+            with closing(sqlite3.connect(uri, uri=True, timeout=max(0.1, min(5.0, BACKUP_SECONDS)),
+                                         isolation_level=None)) as lock:
+                lock.execute("BEGIN")
+                lock.execute("SELECT count(*) FROM sqlite_master").fetchone()
+                copy_files()
+                lock.execute("COMMIT")
+        else:
+            copy_files()  # (a WAL is checked by its own checksums; the copy is checked below)
+        with closing(sqlite3.connect(snap / DATABASE, timeout=5)) as old, closing(sqlite3.connect(tmp)) as new:
+            check = old.execute("PRAGMA quick_check").fetchone()
+            if check != ("ok",):
+                raise sqlite3.DatabaseError(f"the copy isn't consistent ({check[0] if check else '?'})")
             old.backup(new, progress=progress)  # the database as it is with its journal applied
         place_new(tmp, PRIVATE_DIR / DATABASE)
     finally:
@@ -234,11 +255,7 @@ def _copy_database(src_dir: Path) -> None:
             os.unlink(tmp)
         except FileNotFoundError:
             pass
-        if not had_shm:  # the read made a shared-memory index the earlier copy didn't have
-            try:
-                os.unlink(shm)
-            except OSError:
-                pass  # (in use by another program, or already gone: left as it is)
+        shutil.rmtree(snap, ignore_errors=True)  # only the private copy
 
 
 def _set_aside_orphan_journal() -> None:
@@ -259,11 +276,12 @@ def _set_aside_orphan_journal() -> None:
             logging.getLogger("skyfold").warning("A database journal without its database was set aside: %s", name)
         except OSError as exc:
             try:  # can't be renamed now: at least its bytes are kept before a new database is made
-                _copy_new(p, aside)
+                if not _copy_new(p, aside):
+                    raise FileExistsError(aside)
                 logging.getLogger("skyfold").warning("A database journal without its database was copied aside: %s", name)
             except OSError:
-                pass
-            MIGRATION_PROBLEMS.append(f"{p}: {exc}")
+                # Neither: opening the database would overwrite it. Skyfold doesn't start (see app.main).
+                JOURNAL_PROBLEMS.append(f"{p}: {exc}")
 
 
 def _move_private(src_dir: Path) -> None:
@@ -277,9 +295,13 @@ def _move_private(src_dir: Path) -> None:
             _move_dir_new(src, PRIVATE_DIR / "session")
         except OSError as exc:  # left where it is: tried again next start
             log.info("Couldn't move the session: %s", exc)
+    import stat as _stat
+
     try:
-        has_db = (src_dir / DATABASE).is_file()
-    except OSError as exc:  # can't be looked at: not taken over, and the user is told
+        has_db = _stat.S_ISREG(os.stat(src_dir / DATABASE).st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        has_db = False
+    except OSError as exc:  # can't be looked at (any reason): not taken over, and the user is told
         log.warning("Couldn't look at the database in %s: %s", src_dir, exc)
         MIGRATION_PROBLEMS.append(f"{src_dir / DATABASE}: {exc}")
         has_db = False
@@ -302,6 +324,7 @@ def migrate_private_files() -> None:
     """
     local = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
     MIGRATION_PROBLEMS.clear()
+    JOURNAL_PROBLEMS.clear()
     # Before anything can open (and so create) the database: a journal left here without it is set
     # aside, whether or not there is an earlier database to take over.
     _set_aside_orphan_journal()

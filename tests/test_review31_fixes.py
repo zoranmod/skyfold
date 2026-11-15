@@ -85,7 +85,7 @@ def test_an_orphan_journal_that_cant_be_renamed_is_copied_and_reported(tmp_path,
     monkeypatch.setattr(config.os, "rename", refuse)
     config.migrate_private_files()
     assert [p.read_bytes() for p in private.glob("state.sqlite3-wal.orphan-*")] == [b"WAL"]
-    assert config.MIGRATION_PROBLEMS
+    assert not config.JOURNAL_PROBLEMS  # (review 32: its bytes are safe in the copy, so the start goes on)
 
 
 def test_a_journal_next_to_its_database_is_left_alone(tmp_path, monkeypatch):

@@ -186,6 +186,12 @@ BS: dict[str, str] = {
         "Oznaka sinhronizacije u {path} se ne može provjeriti: {error}. Sinhronizacija je zaustavljena da se ništa ne promijeni greškom; pokušava se ponovo sljedeći put.",
     "it appeared while it was being checked": "pojavila se dok se provjeravala",
     "it isn't an ordinary file": "nije običan fajl",
+    "Skyfold found a database journal without its database and couldn't keep a copy of it:\n{details}"
+    "\n\nSkyfold doesn't start, so it isn't overwritten. Restart Windows and try again, or move "
+    "that file somewhere else yourself.":
+        "Skyfold je našao dnevnik baze bez same baze i nije mogao sačuvati njegovu kopiju:\n{details}"
+        "\n\nSkyfold se ne pokreće, da se taj fajl ne bi prepisao. Ponovo pokreni Windows i pokušaj opet, "
+        "ili sam premjesti taj fajl negdje drugo.",
     "Photos: {n} missing files are kept until {folder} can be read. Fix its access rights, or move that folder "
     "out of the photos folder.":
         "Fotografije: {n} fajlova koji nedostaju zadržano je dok se {folder} ne može pročitati. Popravi prava pristupa "

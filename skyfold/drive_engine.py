@@ -217,6 +217,9 @@ class DriveSyncer:
         self._late: tuple[dict, dict, DriveResult] | None = None
         self.mac_packages: set[str] = set()  # left in iCloud: Macs show these folders as one file
         self.approved: set[str] = set()
+        # what the last question showed, per side: an approval only counts for that side
+        self._asked_cloud: set[str] = set()
+        self._asked_pc: set[str] = set()
         self.own_paths: dict[str, float] = {}
         self.cache: dict[str, DriveItem] = {}  # iCloud tree as of the last read
         self.account = ""  # short fingerprint of the Apple ID this folder belongs to (set by the worker)
@@ -719,6 +722,7 @@ class DriveSyncer:
             for p in [p for p, b in base.items() if not in_scope(p, b.is_dir, self.folders)]:
                 self.state.drop(p)  # e.g. written by a pass that ran while the choice changed
                 del base[p]
+        local = self._local_as_synced(local, base, remote)
         now = time.time()
 
         downloads: list[DriveItem] = []
@@ -779,7 +783,8 @@ class DriveSyncer:
             if r and not lo and not b and self._skip_unsupported(path):
                 continue
             if b and r and b.is_dir != r.is_dir:
-                self.state.drop(path)  # replaced in iCloud by the other kind: what is there now is new
+                self.state.drop_one(path)  # replaced in iCloud by the other kind: what is there now is new
+                # (only this row: files below keep theirs while their deletion may still be waiting)
                 base.pop(path, None)
                 b = None
             if r and lo and r.is_dir != lo.is_dir:
@@ -952,8 +957,11 @@ class DriveSyncer:
         to_pc = self._keep_unsynced_local(to_pc, base)
         to_cloud = self._keep_unsynced_remote(to_cloud, remote, base)
         self._deletions(to_cloud, to_pc, remote, base, res)
-        if scope is None:  # approvals only count for deletions that are still waiting
-            self.approved &= set(res.pending_to_cloud) | set(res.pending_to_pc)
+        if scope is None:  # approvals only count for deletions still waiting, on the side they were asked for
+            self.approved = {p for p in self.approved if (p in res.pending_to_cloud and p in self._asked_cloud)
+                             or (p in res.pending_to_pc and p in self._asked_pc)}
+        if scope is None or res.pending_to_cloud or res.pending_to_pc:
+            self._asked_cloud, self._asked_pc = set(res.pending_to_cloud), set(res.pending_to_pc)
         if res.pending_to_cloud or res.pending_to_pc:
             self._late = (remote, base, res)
             if self.on_pending:
@@ -1052,7 +1060,12 @@ class DriveSyncer:
         (and go up again); only what is unchanged since the last sync goes to the Recycle Bin."""
         out: list[str] = []
         known = self.state.all() if to_pc else {}  # a quick pass holds only a slice in `base`
+        known_low = {k.lower(): v for k, v in known.items()}  # (Windows matches names in any letter case)
         shells = self.state.meta_items("shell:") if to_pc else {}
+
+        def record(rel: str) -> Base | None:
+            return base.get(rel) or known.get(rel) or known_low.get(rel.lower())
+
         for p in to_pc:
             b = base.get(p)
             if b is None or not b.is_dir:
@@ -1073,12 +1086,14 @@ class DriveSyncer:
                         _dirs.remove(d)
                     else:
                         shell.append(f"{rel_dir}/{d}")
+                        if record(f"{rel_dir}/{d}") is None:
+                            dirty = edited = True  # a folder made on this PC since: never deleted with it
                 for f in files:
                     rel = f"{rel_dir}/{f}"
                     if _ignored_path(rel):
                         dirty = True  # never synced (a .tmp draft, …): it and its folder stay
                         continue
-                    fb = base.get(rel) or known.get(rel)
+                    fb = record(rel)
                     try:
                         st = os.stat(Path(dirpath) / f)
                         same = fb is not None and (st.st_size, round(st.st_mtime, 2)) == \
@@ -1090,9 +1105,9 @@ class DriveSyncer:
                     if not same:
                         dirty = edited = True
                         if fb is not None:
-                            drops.append(rel)
+                            drops.append(fb.path)
                     else:
-                        clean.append(rel)
+                        clean.append(fb.path)  # (under the spelling it was synced with)
             if unreadable:
                 log.warning("Drive: %s couldn't be read completely; not deleted (%s)", p, unreadable[:2])
                 continue  # can't check what's inside: decide another time (nothing forgotten)
@@ -1156,6 +1171,27 @@ class DriveSyncer:
             return True
         return False
 
+    @staticmethod
+    def _local_as_synced(local: dict[str, "Local"], base: dict[str, Base],
+                         remote: dict[str, DriveItem]) -> dict[str, "Local"]:
+        """Windows sees TRIP and Trip as one name. A PC path spelled only differently from a synced
+        item that iCloud no longer has is that item (its records, and a deletion that may be waiting
+        for your OK, follow it): it keeps the synced spelling. Nothing to rename in iCloud there."""
+        by_low: dict[str, str] = {}
+        for q in base:
+            if q not in remote:
+                by_low.setdefault(q.lower(), q)
+        if not by_low:
+            return local
+        out: dict[str, Local] = {}
+        for p, lo in local.items():
+            q = by_low.get(p.lower())
+            if q is not None and q != p and p not in base and p not in remote and q not in local:
+                out[q] = lo
+            else:
+                out[p] = lo
+        return out
+
     def _lower_known(self, known: dict[str, Base]) -> set[str]:
         cached = getattr(self, "_known_low", None)
         if cached is None or cached[0] is not known:
@@ -1189,7 +1225,10 @@ class DriveSyncer:
                 kept = json.loads(val or "[]")
             except (ValueError, TypeError):
                 kept = []
-            still = [k for k in kept if k.lower() in here]
+            if side == "pc":  # (one that can't be looked at now is kept)
+                still = [k for k in kept if k.lower() in here or not known_missing(self._abs(k))]
+            else:
+                still = [k for k in kept if k.lower() in here]
             if still != kept:
                 self.state.set_meta(key, json.dumps(still))
 
@@ -1318,6 +1357,8 @@ class DriveSyncer:
                     continue
                 if any(n.startswith(m + "/") for m in new if m != n):
                     continue
+                if not self._same_content_moved(base, g, n):
+                    continue  # look-alike, or not provably the same files: synced as add + delete
                 moved = self._remote_move(remote, g, n, res)
                 if moved == "partial":  # finished next pass; nothing else under these two now
                     drop_under(to_cloud, g)
@@ -1365,6 +1406,8 @@ class DriveSyncer:
             key_old = {g: (base[g].lsize, round(base[g].lmtime or 0, 2)) for g in gone}
             key_new = {n: (local[n].size, round(local[n].mtime, 2)) for n in new}
             for g, n in _pairs(key_old, key_new):
+                if not self._same_content_moved(base, g, n):
+                    continue  # same size and time, but not provably the same file: add + delete
                 moved = self._remote_move(remote, g, n, res)
                 if moved == "partial":  # finished next pass; nothing else for these two now
                     to_cloud.remove(g)
@@ -1401,6 +1444,27 @@ class DriveSyncer:
                     self._journal_put(self._pc_key, None)
                 to_pc.remove(g)
                 downloads[:] = [d for d in downloads if d.path != n]
+
+    def _same_content_moved(self, base: dict[str, Base], old: str, new: str) -> bool:
+        """Is what is now at `new` on this PC provably what was synced at `old`? Every file's content
+        must match its stored fingerprint; a missing fingerprint or an unreadable file proves nothing."""
+        b = base.get(old)
+        if b is None:
+            return False
+        pairs = [(old, new)] if not b.is_dir else \
+            [(p, new + p[len(old):]) for p, q in base.items() if p.startswith(old + "/") and not q.is_dir]
+        if not pairs:
+            return False
+        for p, q in pairs:
+            fp = base[p].hash
+            if not fp:
+                return False
+            try:
+                if file_hash(self._abs(q)) != fp:
+                    return False
+            except OSError:
+                return False
+        return True
 
     def _same_item(self, old: str, new: str, remote: dict[str, DriveItem]) -> bool:
         """iCloud keeps an item's id when it is renamed or moved; a deleted and re-created look-alike
@@ -1549,6 +1613,11 @@ class DriveSyncer:
                     self.cb.activity("error", t("Drive: can't read {name} on this PC right now; it is left "
                                                 "alone and checked again next time", name=new))
                     continue
+                if fid is None and now_old is not None and now_new is not None:
+                    # no file id and something under both names: which one is the moved file can't be
+                    # shown. Kept written down: both names are left alone until one of them is gone.
+                    log.info("Drive: an interrupted rename on this PC can't be told apart (%s, %s); held", old, new)
+                    continue
                 if now_old is not None and (now_old == fid if fid else now_new is None):
                     with self.state.transaction():  # the rename never happened
                         self._journal_put(ident, None)
@@ -1666,8 +1735,9 @@ class DriveSyncer:
             if old.lower() == new.lower() and src.exists():
                 pass  # only the letter case changes: Windows sees one name, rename in place
             elif dst.exists():
-                if dst.is_dir() and not any(dst.iterdir()):
-                    dst.rmdir()  # an empty folder made for the new name: replace it
+                made = self.state.all().get(new)
+                if made is not None and made.is_dir and dst.is_dir() and not _is_link(dst) and not any(dst.iterdir()):
+                    dst.rmdir()  # an empty folder Skyfold made for the new name: replace it
                 else:
                     return False
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -1852,7 +1922,8 @@ class DriveSyncer:
             if not self.delete_pc_to_cloud:
                 for p in to_cloud:  # keep in iCloud: download it again
                     self.state.drop(p)
-            elif count(to_cloud, base) > threshold and not set(to_cloud) <= self.approved:
+            elif count(to_cloud, base) > threshold and not (set(to_cloud) <= self.approved
+                                                            and set(to_cloud) <= self._asked_cloud):
                 res.pending_to_cloud = to_cloud
             else:
                 for p in to_cloud:
@@ -1883,7 +1954,8 @@ class DriveSyncer:
             if not self.delete_cloud_to_pc:
                 for p in to_pc:  # keep on PC: it will be uploaded again
                     self.state.drop(p)
-            elif count(to_pc, base) > threshold and not set(to_pc) <= self.approved:
+            elif count(to_pc, base) > threshold and not (set(to_pc) <= self.approved
+                                                         and set(to_pc) <= self._asked_pc):
                 res.pending_to_pc = to_pc
             else:
                 queue = list(to_pc)
@@ -2334,7 +2406,9 @@ def unsynced_local_dirs(root: Path, old: list[str] | None, new: list[str] | None
 
 def _signature(files: dict[str, int | None]) -> tuple | None:
     """What a folder holds (relative paths and sizes); None for an empty folder (never matched)."""
-    return tuple(sorted((k.casefold(), v or 0) for k, v in files.items())) or None
+    if any(v is None for v in files.values()):
+        return None  # a size isn't known: never matched
+    return tuple(sorted((k.casefold(), v) for k, v in files.items())) or None
 
 
 def _pairs(old: dict, new: dict) -> list[tuple[str, str]]:
