@@ -9,13 +9,13 @@ from tests.test_notes import env as notes_env  # noqa: F401
 
 def test_gone_only_for_a_path_that_is_really_missing(tmp_path, monkeypatch):
     f = tmp_path / "x.txt"
-    assert pe.gone(f) and pe.gone(tmp_path / "x.txt" / "below")
+    assert pe.known_missing(f) and pe.known_missing(tmp_path / "x.txt" / "below")
     f.write_bytes(b"x")
-    assert not pe.gone(f)
+    assert not pe.known_missing(f)
     real = os.lstat
     monkeypatch.setattr(os, "lstat", lambda p, *a, **k: (_ for _ in ()).throw(PermissionError(13, "denied"))
                         if Path(p) == f else real(p, *a, **k))
-    assert not pe.gone(f)  # couldn't look: not gone
+    assert not pe.known_missing(f)  # couldn't look: not gone
 
 
 def test_two_unknown_identities_are_never_the_same_file(tmp_path, monkeypatch):

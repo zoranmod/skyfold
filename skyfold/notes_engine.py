@@ -13,6 +13,7 @@ import html
 import json
 import logging
 import os
+import stat
 import tempfile
 import re
 import sqlite3
@@ -24,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
-from .engine import Callbacks, Cancelled, SyncError, _is_link, gone, inside_root, now_iso
+from .engine import Callbacks, Cancelled, SyncError, _is_link, create_marker, known_missing, inside_root, marker_present, now_iso
 from .i18n import t
 from .safelog import brief, value
 from .remote import AuthRequired, RemoteUnavailable, _translate
@@ -598,15 +599,11 @@ class NotesSyncer:
                 raise SyncError(t("Notes folder is not available: {path}", path=self.root))
             self.root.mkdir(parents=True, exist_ok=True)
         marker = self.root / MARKER
-        if not marker.exists():
+        if not marker_present(marker):
             if has:
                 raise SyncError(t("The Notes folder doesn't look like before (its sync marker is missing). "
                                   "Syncing has stopped so nothing gets deleted by mistake."))
-            marker.write_text(t("This folder is synced by Skyfold. Don't delete this file.\n"), encoding="utf-8")
-            if os.name == "nt":
-                import ctypes
-
-                ctypes.windll.kernel32.SetFileAttributesW(str(marker), 0x2)
+            create_marker(marker, t("This folder is synced by Skyfold. Don't delete this file.\n"))
 
     def _folder_paths(self) -> dict[str, str]:
         raw = self.remote.folders()
@@ -646,15 +643,15 @@ class NotesSyncer:
         index comes back if Notes.html is missing. A file that merely has such a name is someone's."""
         for key, kind in self.state.items("tmp:"):
             p = self.root / key[len("tmp:"):]
-            if gone(p):
+            if known_missing(p):
                 self.state.set(key, None)
                 continue
             try:
-                os.lstat(p)
+                st = os.lstat(p)
             except OSError:
                 continue  # couldn't be looked at: stays written down, tried again next time
             try:
-                if p.is_file() and not _is_link(p) and inside_root(self.root, p):
+                if stat.S_ISREG(st.st_mode) and not _is_link(p) and inside_root(self.root, p):
                     if kind == "index" and not (self.root / INDEX).exists():
                         os.rename(p, self.root / INDEX)
                     elif kind in ("old", "index"):
@@ -762,7 +759,7 @@ class NotesSyncer:
                 continue
             self.state.set(f"failed:{n.id}", None)
             if old and old[1] and old[1].lower() != rel.lower():
-                if not (self.root / old[1]).exists() or self._remove(old, res, count=False):
+                if known_missing(self.root / old[1]) or self._remove(old, res, count=False):
                     self.state.set(f"obsolete:{old[1]}", None)  # renamed or moved: the old file is gone
             self.state.put(n.id, rel, n.title, folder, modified, False)
             taken.add(rel.lower())
@@ -810,8 +807,16 @@ class NotesSyncer:
         for key, recorded in self.state.items("obsolete:"):
             rel = key[len("obsolete:"):]
             p = self.root / rel
+            if not known_missing(p):
+                try:
+                    st = os.lstat(p)
+                except OSError:
+                    continue  # couldn't be looked at: stays written down, tried again next time
+                if not stat.S_ISREG(st.st_mode):
+                    self.state.set(key, None)  # a folder or link there now: not the page written down
+                    continue
             try:
-                if rel.lower() not in tracked and recorded and p.is_file() and not _is_link(p)                         and inside_root(self.root, p) and _digest(p) == recorded:
+                if rel.lower() not in tracked and recorded and not known_missing(p) and not _is_link(p)                         and inside_root(self.root, p) and _digest(p) == recorded:
                     self._trash(p)
                     res.removed += 1
                     self.cb.activity("trash", t("Notes: removed {name}", name=rel))
@@ -860,7 +865,7 @@ class NotesSyncer:
             raise
         if aside is not None:
             self._let_go(aside, target, nid, old, modified)
-            if gone(aside):  # still there (the Recycle Bin refused it): tried again later
+            if known_missing(aside):  # still there (the Recycle Bin refused it): tried again later
                 self._disown(aside)
         self.state.set(f"page:{nid}", digest)
 
@@ -921,10 +926,11 @@ class NotesSyncer:
             log.warning("Notes: %s leads outside the notes folder; not removed", row[1])
             return True  # nothing of ours to remove there
         try:
-            if p.exists() and p.suffix.lower() == ".html" and not _is_our_page(p):
-                log.info("Notes: %s isn't a page Skyfold wrote; left alone", row[1])
-                return True  # someone else's file now: forget the note's old path, keep the file
-            if p.exists():
+            if not known_missing(p):
+                os.lstat(p)  # can't be looked at: raises, the note is remembered and tried again
+                if p.suffix.lower() == ".html" and not _is_our_page(p):
+                    log.info("Notes: %s isn't a page Skyfold wrote; left alone", row[1])
+                    return True  # someone else's file now: forget the note's old path, keep the file
                 self._trash(p)
             if count:
                 res.removed += 1
@@ -1002,7 +1008,7 @@ class NotesSyncer:
                     self._trash(aside)
                 except OSError as exc:  # stays written down: tried again next time
                     log.warning("Notes: couldn't move the previous index to the Recycle Bin: %s", exc)
-            if gone(aside):
+            if known_missing(aside):
                 self._disown(aside)
         self.state.set("index_digest", written)
 

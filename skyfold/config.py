@@ -8,6 +8,7 @@ live in %LOCALAPPDATA%\\Skyfold, so they never leave this PC.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import sys
@@ -95,14 +96,65 @@ _load_language()
 PRIVATE_FILES = ("session", "state.sqlite3", "state.sqlite3-wal", "state.sqlite3-shm")
 
 
+def _missing(p: Path) -> bool:
+    """Known not to exist. A file that couldn't be looked at is not missing."""
+    try:
+        os.lstat(p)
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _copy_new(src: Path, dst: Path) -> bool:
+    """Copy src to dst only as a new file: an existing dst is never replaced (False then)."""
+    import tempfile
+
+    fd, tmp = tempfile.mkstemp(prefix=dst.name + ".", suffix=".new", dir=dst.parent)
+    try:
+        with os.fdopen(fd, "wb") as out, open(src, "rb") as inp:
+            shutil.copyfileobj(inp, out)
+        shutil.copystat(src, tmp)
+        if os.name == "nt":
+            os.rename(tmp, dst)  # refuses an existing name
+        else:
+            os.link(tmp, dst)  # refuses an existing name
+        return True
+    except FileExistsError:
+        return False
+    finally:
+        try:
+            os.unlink(tmp)  # the private copy (already gone when it was renamed into place)
+        except FileNotFoundError:
+            pass
+
+
+def _move_new(src: Path, dst: Path) -> None:
+    """Move src to dst only as a new file; the source is removed only once the copy is in place."""
+    if os.name == "nt":
+        try:
+            os.rename(src, dst)  # same drive: refuses an existing name
+            return
+        except FileExistsError:
+            return
+        except OSError:
+            pass  # another drive: copied below
+    if _copy_new(src, dst):
+        src.unlink()
+
+
 def _move_private(src_dir: Path) -> None:
-    if src_dir == PRIVATE_DIR or not src_dir.exists():
+    if src_dir == PRIVATE_DIR or _missing(src_dir):
         return
     PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
     for name in PRIVATE_FILES:
         src, dst = src_dir / name, PRIVATE_DIR / name
-        if src.exists() and not dst.exists():
-            shutil.move(str(src), str(dst))
+        if src.is_file() and _missing(dst):
+            try:
+                _move_new(src, dst)
+            except OSError as exc:  # left where it is: tried again next start
+                logging.getLogger("skyfold").info("Couldn't move %s: %s", name, exc)
         # If both exist, the local copy wins and the other one is simply left alone: never
         # delete a session or database automatically.
 
@@ -115,13 +167,16 @@ def migrate_private_files() -> None:
       so the user doesn't have to sign in or download everything again.
     """
     local = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
-    if not (PRIVATE_DIR / "state.sqlite3").exists():
+    if _missing(PRIVATE_DIR / "state.sqlite3"):
         _move_private(local / "iSync")
     _move_private(DATA_DIR)
     legacy_settings = APP_DIR.parent / "iSync" / "data" / "settings.json"
-    if not SETTINGS_FILE.exists() and legacy_settings.exists():
+    if _missing(SETTINGS_FILE) and legacy_settings.is_file():
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(legacy_settings, SETTINGS_FILE)
+        try:
+            _copy_new(legacy_settings, SETTINGS_FILE)  # never over settings that exist
+        except OSError as exc:
+            logging.getLogger("skyfold").info("Couldn't take over the earlier settings: %s", exc)
 
 
 def check_photos_dir(path: str) -> tuple[str | None, str | None]:

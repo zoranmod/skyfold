@@ -182,6 +182,9 @@ BS: dict[str, str] = {
         "Folder za bilješke već ima Notes.html koji nije od Skyfolda. U Postavkama izaberi prazan folder za bilješke.",
     "Notes.html in the Notes folder wasn't written by this Skyfold; it is left as it is. Move or delete it to get a new index.":
         "Notes.html u folderu za bilješke nije napisao ovaj Skyfold; ostavljen je kako jeste. Premjesti ga ili obriši da dobiješ novi indeks.",
+    "Couldn't check the sync marker in {path}: {error}. Syncing has stopped so nothing gets changed by mistake; it is tried again next time.":
+        "Oznaka sinhronizacije u {path} se ne može provjeriti: {error}. Sinhronizacija je zaustavljena da se ništa ne promijeni greškom; pokušava se ponovo sljedeći put.",
+    "it appeared while it was being checked": "pojavila se dok se provjeravala",
     "This Drive folder belongs to another Apple ID. Choose a new, empty folder for iCloud Drive in Settings.":
         "Ovaj Drive folder pripada drugom Apple ID-u. U Postavkama izaberi novi, prazan folder za iCloud Drive.",
     "{name} leads outside the Drive folder; left alone": "{name} vodi izvan Drive foldera; ostavljeno kako jeste",

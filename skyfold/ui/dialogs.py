@@ -209,6 +209,9 @@ class Toggle(QCheckBox):
         self.setMinimumHeight(30)
         self.setAttribute(Qt.WA_Hover)
 
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
+
     def sizeHint(self) -> QSize:  # noqa: N802
         fm = self.fontMetrics()
         return QSize(52 + 2 * self.PAD + fm.horizontalAdvance(self.text()), max(30, fm.height() + 8))
@@ -248,18 +251,20 @@ class Toggle(QCheckBox):
         p.drawText(QRectF(x + w + 12, 0, self.width() - x - w - 12, self.height()), Qt.AlignVCenter | Qt.AlignLeft, self.text())
 
 
-def refresh_palette(palette: dict[str, str]) -> None:
-    """The theme changed: widgets that paint themselves with a palette they were given (switches,
-    the storage bar, …) in every open window take the new one."""
+def refresh_palette(palette: dict[str, str], skip: tuple = ()) -> None:
+    """The theme changed: in every open window (except those in skip, refreshed by their owner), each
+    widget that paints with a palette it was given re-renders with the new one. Only widgets that
+    say how (an apply_palette method) are touched."""
     from PySide6.QtWidgets import QApplication
 
-    for w in QApplication.allWidgets():
-        if isinstance(getattr(w, "c", None), dict):
-            if hasattr(w, "apply_palette"):
-                w.apply_palette(palette)
-            else:
-                w.c = palette
-            w.update()
+    for top in QApplication.topLevelWidgets():
+        if top in skip:
+            continue
+        for w in [top, *top.findChildren(QWidget)]:
+            fn = getattr(w, "apply_palette", None)
+            if callable(fn):
+                fn(palette)
+                w.update()
 
 
 def make_popup_round(w: QWidget) -> None:
@@ -559,9 +564,18 @@ class SettingsDialog(_Dialog):
         btns.addWidget(save)
         outer.addWidget(footer)
 
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
+        for i in range(self.nav.count()):
+            item = self.nav.item(i)
+            name = item.data(Qt.UserRole)
+            if name:
+                item.setIcon(glyph(name, palette["muted"]))
+
     # page helpers ---------------------------------------------------------------------
     def _page(self, name: str, glyph_name: str) -> QVBoxLayout:
         item = QListWidgetItem(glyph(glyph_name, self.c["muted"]), name)
+        item.setData(Qt.UserRole, glyph_name)  # drawn again in the new colour when the theme changes
         self.nav.addItem(item)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1248,6 +1262,7 @@ class PendingDialog(_Dialog):
         head = QHBoxLayout()
         ic = QLabel()
         ic.setPixmap(glyph("trash", palette["warn_text"], 28).pixmap(QSize(28, 28)))
+        self._icon = ic
         head.addWidget(ic)
         head.addWidget(_label(t("A large deletion is waiting for your OK"), "Title"), 1)
         lay.addLayout(head)
@@ -1269,6 +1284,9 @@ class PendingDialog(_Dialog):
                           else t("{n} photos were deleted on this PC", n=len(pending.to_cloud)),
                           t("Delete in iCloud too"), t("Bring them back to this PC"))
 
+
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self._icon.setPixmap(glyph("trash", palette["warn_text"], 28).pixmap(QSize(28, 28)))
 
     def _section(self, lay, pending, ids, title, yes, no) -> None:
         if getattr(self, "_sections", 0):  # a second list: set it clearly apart from the first
@@ -1484,11 +1502,17 @@ class FolderSetupDialog(_Dialog):
         if d:
             self.path.setText(str(Path(d)))
 
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
+        key = getattr(self, "_msg_key", None)
+        if key:
+            self.msg.setStyleSheet(f"color: {palette[key]};")
+
     def _validate(self) -> bool:
         error, warning = check_photos_dir(self.path.text())
         text = error or warning or ""
-        color = self.c["err_text"] if error else self.c["warn_text"]
-        self.msg.setStyleSheet(f"color: {color};")
+        self._msg_key = "err_text" if error else "warn_text"
+        self.msg.setStyleSheet(f"color: {self.c[self._msg_key]};")
         self.msg.setText(text)
         self.msg.setVisible(bool(text))
         self.ok.setEnabled(error is None and self.agree.isChecked())
@@ -1504,6 +1528,7 @@ class FolderSetupDialog(_Dialog):
         try:
             p.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
+            self._msg_key = "err_text"
             self.msg.setStyleSheet(f"color: {self.c['err_text']};")
             self.msg.setText(t("Can't create the folder: {error}", error=exc))
             self.msg.show()
@@ -1522,6 +1547,7 @@ class DeviceRow(QFrame):
         lay.setSpacing(12)
         icon = QLabel()
         icon.setPixmap(glyph("device", palette["accent_fg"], 22).pixmap(QSize(22, 22)))
+        self._icon = icon
         col = QVBoxLayout()
         col.setSpacing(1)
         name = QLabel(dev.name)
@@ -1552,6 +1578,10 @@ class DeviceRow(QFrame):
         self.sound_btn.clicked.connect(self._sound)
         lay.addWidget(self.map_btn)
         lay.addWidget(self.sound_btn)
+
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
+        self._icon.setPixmap(glyph("device", palette["accent_fg"], 22).pixmap(QSize(22, 22)))
 
     def _map(self) -> None:
         from PySide6.QtCore import QUrl

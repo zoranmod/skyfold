@@ -134,7 +134,7 @@ def inside_root(root: Path, p: Path) -> bool:
     return real == real_root or real_root in real.parents
 
 
-def gone(p: Path | str) -> bool:
+def known_missing(p: Path | str) -> bool:
     """True only when p is known not to exist. A path that couldn't be looked at (access denied, a disk
     hiccup) is not gone: a record about it is kept and the file is left alone until it can be looked at."""
     try:
@@ -144,6 +144,36 @@ def gone(p: Path | str) -> bool:
     except OSError:
         return False
     return False
+
+
+def marker_present(marker: Path) -> bool:
+    """Is the folder's sync marker there? A marker that can't be looked at (access denied, a disk that
+    isn't ready) stops the sync: it is never taken for a missing one and written over."""
+    try:
+        os.lstat(marker)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError as exc:
+        raise SyncError(t("Couldn't check the sync marker in {path}: {error}. Syncing has stopped so nothing "
+                          "gets changed by mistake; it is tried again next time.",
+                          path=marker.parent, error=brief(exc))) from exc
+    return True
+
+
+def create_marker(marker: Path, text: str) -> None:
+    """Write a new sync marker. Only a new file is ever created: if something appeared at that name
+    meanwhile, it is left exactly as it is and this pass stops."""
+    try:
+        with open(marker, "x", encoding="utf-8") as fh:
+            fh.write(text)
+    except FileExistsError:
+        raise SyncError(t("Couldn't check the sync marker in {path}: {error}. Syncing has stopped so nothing "
+                          "gets changed by mistake; it is tried again next time.",
+                          path=marker.parent, error=t("it appeared while it was being checked"))) from None
+    if os.name == "nt":
+        import ctypes
+
+        ctypes.windll.kernel32.SetFileAttributesW(str(marker), 0x2)  # hidden
 
 
 def check_free_space(folder: Path, needed: int) -> None:
@@ -341,23 +371,20 @@ class Syncer:
         # proves who wrote such a file, so it is never renamed or changed: when this database tracks
         # files here, its presence only lets Skyfold add its own new marker next to it.
         legacy = has_files and any((root / old).is_file() for old in LEGACY_MARKERS)
-        if not marker.exists():
+        if not marker_present(marker):
             if has_files and not legacy:
                 raise SyncError(t(
                     "The photos folder doesn't look like before (its sync marker is missing). "
                     "Syncing has stopped so nothing gets deleted by mistake."
                 ))
-            marker.write_text(t("This folder is synced by Skyfold. Don't delete this file.\n"), encoding="utf-8")
-            if os.name == "nt":
-                import ctypes
-
-                ctypes.windll.kernel32.SetFileAttributesW(str(marker), 0x2)  # hidden
+            create_marker(marker, t("This folder is synced by Skyfold. Don't delete this file.\n"))
 
     # local changes --------------------------------------------------------
     def scan_local(self) -> tuple[list[str], int]:
         """Return (asset ids whose main file was deleted on the PC, number of files relocated)."""
         rows = self.state.files()
-        missing = [r for r in rows if not self._abs(r.rel_path).exists()]
+        # Only files that are really missing count; one that can't be looked at now decides nothing.
+        missing = [r for r in rows if known_missing(self._abs(r.rel_path))]
         if not missing:
             return [], 0
 
@@ -365,7 +392,9 @@ class Syncer:
         tracked = {r.rel_path.lower() for r in rows}
         album_entries = {rel.lower() for rel in self.state.album_links()}  # same name and size as the originals
         index: dict[tuple[str, int], list[str]] = defaultdict(list)  # every look-alike, not just one
-        for dirpath, dirs, files in os.walk(self.root):
+        unsure = []  # a folder or file that couldn't be read: a missing photo may have moved there
+
+        for dirpath, dirs, files in os.walk(self.root, onerror=unsure.append):
             dirs[:] = [d for d in dirs if not _is_link(Path(dirpath) / d)]  # a junction may lead anywhere
             for fn in files:
                 if fn.startswith(TMP_PREFIX) or fn == MARKER:
@@ -376,8 +405,11 @@ class Syncer:
                     continue
                 try:
                     index[(fn.lower(), full.stat().st_size)].append(rel)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    unsure.append(exc)
+        if unsure:
+            log.info("Photos: %d places couldn't be read; missing photos are looked at again next time",
+                     len(unsure))
 
         moved = 0
         by_asset: dict[str, list[FileRow]] = defaultdict(list)
@@ -407,6 +439,8 @@ class Syncer:
                 self.state.move_file(r.asset_id, r.resource_key, new_rel)
                 moved += 1
                 continue
+            if unsure:
+                continue  # it may be in a place that couldn't be read: nothing is decided this pass
             if r.resource_key == "original" and where in maybe:
                 # Look-alikes exist but none is this photo. Whether it was deleted or changed and
                 # moved can't be told: nothing is deleted in iCloud and no file is touched; Skyfold
@@ -575,7 +609,7 @@ class Syncer:
                     # remove the leftover Live Photo video, if any (never a photo put back meanwhile)
                     for r in rows_by_asset[a]:
                         p = self._abs(r.rel_path)
-                        if r.resource_key != "original" and p.exists() and not self._changed_on_pc(r):
+                        if r.resource_key != "original" and not known_missing(p) and not self._changed_on_pc(r):
                             try:
                                 self._trash_inside(p)
                             except OSError:
@@ -612,7 +646,7 @@ class Syncer:
                         continue
                     for r in rows_now:
                         p = self._abs(r.rel_path)
-                        if p.exists():
+                        if not known_missing(p):  # also one that can't be looked at: that attempt fails, kept
                             try:
                                 self._trash_inside(p)
                             except OSError as exc:
@@ -871,7 +905,7 @@ class Syncer:
             self.state.drop_album_link(rel)  # leads elsewhere now: forget it, touch nothing there
             return
         try:
-            if p.exists():
+            if not known_missing(p):  # also when it can't be looked at: the move below fails and all is kept
                 self._touch_own(p)
                 # Moved to a private name first: the file checked is then the file removed, even if
                 # something is saved at the album path in between.
@@ -894,7 +928,7 @@ class Syncer:
                     self._trash(self._put_back(staged, p))
                 else:
                     self._put_back(staged, p)  # can't prove it's ours: it stays, untouched
-                if gone(staged):
+                if known_missing(staged):
                     self.state.set(stage_key, None)
         except OSError:
             return
@@ -925,7 +959,7 @@ class Syncer:
                     self._put_back(staged, self._abs(rel))
             except OSError:
                 continue
-            if gone(staged):
+            if known_missing(staged):
                 self.state.set(key, None)
 
     def _note_album_file(self, rel: str, p: Path) -> None:
@@ -969,10 +1003,13 @@ class Syncer:
                 if not inside_root(self.root, p.parent) or p.is_symlink() or                         (hasattr(os.path, "isjunction") and os.path.isjunction(p)):
                     self.state.set(key, None)  # no longer the folder Skyfold made
                     continue
-                if gone(p):
+                if known_missing(p):
                     self.state.set(key, None)
                     continue
-                if self._file_id(p) != made:
+                found = self._file_id(p)
+                if found is None:
+                    continue  # can't tell which folder this is now: kept, looked at again next time
+                if found != made:
                     self.state.set(key, None)  # another folder has that name now: someone's
                     continue
                 p.rmdir()  # only succeeds when empty
@@ -1020,7 +1057,7 @@ class Syncer:
             if r.size and os.stat(p).st_size != r.size:
                 return True
         except OSError:
-            return False  # not there: nothing to keep
+            return not known_missing(p)  # not there: nothing to keep; can't be looked at: kept
         if not r.hash:
             return False  # downloaded before fingerprints existed: only the size can be compared
         try:
@@ -1031,12 +1068,13 @@ class Syncer:
     def _original_is_back(self, rows: list[FileRow]) -> bool:
         """Asked right before a "deleted on this PC" decision is carried out: the photo was missing
         when the folder was scanned - is it there again (Undo in Explorer, an editor's save)?"""
-        return any(r.resource_key == "original" and os.path.lexists(self._abs(r.rel_path)) for r in rows)
+        # "can't be looked at" counts as back: nothing is deleted on an answer that isn't sure
+        return any(r.resource_key == "original" and not known_missing(self._abs(r.rel_path)) for r in rows)
 
     def _forget_local_only(self, asset_id: str, rows: list[FileRow]) -> None:
         for r in rows:
             p = self._abs(r.rel_path)
-            if p.exists() and not self._changed_on_pc(r):
+            if not known_missing(p) and not self._changed_on_pc(r):
                 try:
                     self._trash_inside(p)
                 except OSError:
