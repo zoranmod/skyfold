@@ -32,7 +32,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from .drive_remote import WORKERS, DriveItem, DriveRemote, MacPackage, is_transient
-from .engine import Callbacks, Cancelled, SyncError, check_free_space, inside_root, now_iso, transfer_text, THROTTLE
+from .engine import Callbacks, Cancelled, SyncError, check_free_space, gone, inside_root, now_iso, transfer_text, THROTTLE
 from .i18n import t
 from .safelog import brief
 from .remote import AuthRequired, RemoteUnavailable
@@ -447,10 +447,10 @@ class DriveSyncer:
         owned: dict[str, str] = {}
         for kind in ("aside:", "tmp:", "prev:"):
             for key, val in self.state.meta_items(kind).items():
-                if os.path.lexists(self.root / key[len(kind):]):
-                    owned[key] = val
-                else:
+                if gone(self.root / key[len(kind):]):
                     self.state.set_meta(key, None)  # the file is gone: nothing left to finish
+                else:
+                    owned[key] = val  # also when it couldn't be looked at: kept, and left alone
         previous = any(k.startswith("prev:") for k in owned)
         for dirpath, dirs, files in os.walk(self.root, onerror=lambda e: self._unreadable_add(e.filename or "")):
             dirs[:] = [d for d in dirs if not ignored(d)]
@@ -468,17 +468,22 @@ class DriveSyncer:
             for f in files:
                 if previous and f"prev:{self._rel(Path(dirpath) / f)}" in owned:
                     # A replaced version that was on its way to the Recycle Bin when Skyfold stopped:
-                    # it goes there now. It is never taken for a new file - if it is still that file.
+                    # it goes there now. It is never taken for a new file while it may still be that file.
                     full = Path(dirpath) / f
+                    rel_f = self._rel(full)
                     fid = self._file_id(full)
-                    if fid and fid == owned[f"prev:{self._rel(full)}"]:
+                    if fid and fid == owned[f"prev:{rel_f}"]:
                         try:
                             self._trash_local(full)
                             self._disown(full, "prev")
                         except Exception as exc:  # noqa: BLE001 - tried again next time
                             log.warning("Drive: couldn't move %s to the Recycle Bin: %s", f, exc)
+                            self.unreadable.add(rel_f)  # still ours: left alone on both sides
                         continue
-                    self._disown(full, "prev")  # another file has that name now: someone's
+                    if not fid:  # can't tell which file this is now: kept on record, left alone
+                        self.unreadable.add(rel_f)
+                        continue
+                    self._disown(full, "prev")  # provably another file has that name now: someone's
                 if f.startswith(TMP_PREFIX):
                     # Skyfold's own leftovers (written down when they were made) are finished off here.
                     # A file that only has such a name is someone's: left alone, and not synced.
@@ -486,7 +491,7 @@ class DriveSyncer:
                     rel_f = self._rel(full)
                     if f"aside:{rel_f}" in owned:
                         self._recover_aside(full)
-                        if not os.path.lexists(full):
+                        if gone(full):
                             self._disown(full, "aside")
                     elif f"tmp:{rel_f}" in owned:
                         try:
@@ -567,6 +572,9 @@ class DriveSyncer:
         """Direct contents of some folders (quick sync), same shape as scan_local()."""
         out: dict[str, Local] = {}
         self.unreadable = set()
+        # A replaced version still on its way to the Recycle Bin (see scan_local) is never a new file:
+        # a quick pass leaves it alone on both sides, the next full pass finishes the move.
+        private = {k[len("prev:"):] for k in self.state.meta_items("prev:")}
         for rel_dir in folders:
             d = self._abs(rel_dir) if rel_dir else self.root
             if rel_dir and (_is_link(d) or not inside_root(self.root, d)):
@@ -583,6 +591,9 @@ class DriveSyncer:
                 if ignored(e.name):
                     continue
                 rel = f"{rel_dir}/{e.name}" if rel_dir else e.name
+                if rel in private:
+                    self.unreadable.add(rel)
+                    continue
                 try:
                     if e.is_dir() and _is_link(Path(e.path)):
                         self.unreadable.add(rel)

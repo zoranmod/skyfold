@@ -160,6 +160,12 @@ Fixes from the second independent code review (OpenAI Codex) of 1.0.5. Each has 
   - Album folders: an entry is treated as Skyfold's only when its recorded identity is known and matches; an unknown identity never counts as a match. An entry that was under its private name when Skyfold stopped gets its name back. An album folder is removed only when it is the very folder Skyfold made, not another one created later under that name.
   - Notes: when the Recycle Bin refuses a previous page or index, the file stays written down and the move is tried again on the next sync.
   - A marker file from an earlier version of the app (.isync, .galerija-sync) is taken over only when the database really tracks files in that folder; otherwise a file with such a name is left alone.
+- Twenty-fifth follow-up review (tests in tests/test_review27_codex_probes.py, tests/test_review27_codex_ui_probes.py and tests/test_review27_fixes.py):
+  - Album folders: an album entry counts as a second name of the photo only when both files' identities are known and equal. On a drive that can't tell files apart (no file IDs), a picture saved at an album path is never removed.
+  - iCloud Drive: a replaced version on its way to the Recycle Bin is left alone by quick syncs too (the next full sync finishes the move), and also while Skyfold can't tell which file is at that name; it is never uploaded as a new file.
+  - Photos, iCloud Drive and Notes: a record of a private file is dropped only when the file is really missing. A file that couldn't be looked at (access denied, a disk hiccup) keeps its record and is left alone until it can.
+  - A marker file from an earlier version of the app (.isync, .galerija-sync) is never renamed or changed; in a folder Skyfold already tracks, Skyfold adds its own marker next to it.
+  - Dark theme: selected text and the knob of a switch that is on use the dark text colour on the light blue accent, so they are readable. The iCloud storage bar shows a focus frame when reached with Tab. Switching between light and dark updates switches in windows that are already open.
 
 ### Changed
 - Panel: no focus frame on the settings button when the panel opens; the activity list gives way on small screens so the buttons stay visible; each file keeps its own activity row; long folders are shortened; the deletion banner counts files; one Resume button when paused; better contrast.

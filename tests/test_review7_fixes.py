@@ -216,7 +216,7 @@ def test_album_cleanup_removes_only_the_file_it_checked(photos_env, monkeypatch)
     r.album_map = {"Trip": ["A1"]}
     s.run()
     entry = root / "Albums/Trip/IMG.JPG"
-    real = os.path.samefile
+    real = s._same_file  # the identity check (os.path.samefile before review 27)
 
     def samefile(a, b):
         same = real(a, b)
@@ -225,7 +225,7 @@ def test_album_cleanup_removes_only_the_file_it_checked(photos_env, monkeypatch)
         entry.write_bytes(b"saved right after the check")
         return same
 
-    monkeypatch.setattr(os.path, "samefile", samefile)
+    monkeypatch.setattr(s, "_same_file", samefile)
     s.settings.albums_as_folders = False
     s.run(force_full=True)
     assert entry.exists() and entry.read_bytes() == b"saved right after the check"

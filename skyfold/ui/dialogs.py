@@ -238,7 +238,7 @@ class Toggle(QCheckBox):
         knob = 14 if on else 12
         cx = x + (w - h / 2 if on else h / 2)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor("#ffffff") if on else QColor(c["muted"]))
+        p.setBrush(QColor(c["accent_text"]) if on else QColor(c["muted"]))  # contrasts with the accent
         p.drawEllipse(QPointF(cx, y + h / 2), knob / 2, knob / 2)
         if self.hasFocus():
             p.setPen(QPen(QColor(c["accent"]), 2))
@@ -246,6 +246,20 @@ class Toggle(QCheckBox):
             p.drawRoundedRect(track.adjusted(-2.5, -2.5, 2.5, 2.5), h / 2 + 2, h / 2 + 2)
         p.setPen(QColor(c["text"]))
         p.drawText(QRectF(x + w + 12, 0, self.width() - x - w - 12, self.height()), Qt.AlignVCenter | Qt.AlignLeft, self.text())
+
+
+def refresh_palette(palette: dict[str, str]) -> None:
+    """The theme changed: widgets that paint themselves with a palette they were given (switches,
+    the storage bar, …) in every open window take the new one."""
+    from PySide6.QtWidgets import QApplication
+
+    for w in QApplication.allWidgets():
+        if isinstance(getattr(w, "c", None), dict):
+            if hasattr(w, "apply_palette"):
+                w.apply_palette(palette)
+            else:
+                w.c = palette
+            w.update()
 
 
 def make_popup_round(w: QWidget) -> None:

@@ -369,6 +369,9 @@ class Controller(QObject):
         self.app.setStyleSheet(theme.stylesheet(self.c))
         self.app.setPalette(theme.qpalette(self.c))
         self.flyout.apply_palette(self.c)
+        from .ui.dialogs import refresh_palette
+
+        refresh_palette(self.c)  # open Settings, Find My, … too
         # the tray mark is black or white depending on the taskbar colour
         QTimer.singleShot(500, lambda: self._on_state(self.state, self.flyout.status_text.text()))
 

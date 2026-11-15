@@ -141,6 +141,8 @@ QFrame#Card, QFrame#Tile {{ background: {c['group']}; border: none; border-radiu
 QFrame#Row {{ background: transparent; border: none; border-radius: 9px; }}
 QFrame#Row:hover {{ background: {c['tile']}; }}
 QFrame#Row:focus {{ border: 2px solid {c['focus_ring']}; }}
+QFrame#Storage {{ background: transparent; border: 2px solid transparent; border-radius: 9px; }}
+QFrame#Storage:focus {{ border-color: {c['focus_ring']}; }}
 QLabel#Brand {{ background: {c['accent_soft']}; border-radius: 11px; }}
 QLabel#SvcTile {{ background: {c['tile']}; border-radius: 9px; }}
 QFrame#BottomBar {{ background: {c['surface']}; border: none; border-top: 1px solid {c['border']};
@@ -214,7 +216,7 @@ QToolButton:focus {{ border: 1px solid {c['accent']}; }}
 QLabel#Hint:disabled, QLabel#Muted:disabled {{ color: {c['disabled']}; }}
 
 QLineEdit, QSpinBox, QComboBox {{ background: {c['surface']}; border: 1px solid {c['border_strong']}; border-radius: 8px;
-    padding: 0 10px; min-height: 32px; selection-background-color: {c['accent']}; selection-color: #ffffff; }}
+    padding: 0 10px; min-height: 32px; selection-background-color: {c['accent']}; selection-color: {c['accent_text']}; }}
 QLineEdit:hover, QSpinBox:hover, QComboBox:hover {{ border-color: {c['text']}; }}
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QComboBox:on {{ border-color: {c['accent']}; }}
 QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {{ color: {c['disabled']}; background: {c['surface2']}; }}

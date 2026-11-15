@@ -134,6 +134,18 @@ def inside_root(root: Path, p: Path) -> bool:
     return real == real_root or real_root in real.parents
 
 
+def gone(p: Path | str) -> bool:
+    """True only when p is known not to exist. A path that couldn't be looked at (access denied, a disk
+    hiccup) is not gone: a record about it is kept and the file is left alone until it can be looked at."""
+    try:
+        os.lstat(p)
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError:
+        return False
+    return False
+
+
 def check_free_space(folder: Path, needed: int) -> None:
     """Refuse to start downloads that would fill the disk (keeps a 2 GB reserve)."""
     import shutil
@@ -325,16 +337,12 @@ class Syncer:
                 raise SyncError(t("Photos folder is not available: {path}", path=root))
             root.mkdir(parents=True, exist_ok=True)
         marker = root / MARKER
-        for old in LEGACY_MARKERS:  # folder set up by an earlier version of the app
-            # Only when this database really tracks files here: otherwise a file that merely has
-            # such a name is someone's, and the folder simply gets its own new marker.
-            if has_files and not marker.exists() and (root / old).is_file():
-                try:
-                    os.rename(root / old, marker)
-                except OSError:
-                    pass
+        # A folder set up by an earlier version of the app has one of the old marker names. Nothing
+        # proves who wrote such a file, so it is never renamed or changed: when this database tracks
+        # files here, its presence only lets Skyfold add its own new marker next to it.
+        legacy = has_files and any((root / old).is_file() for old in LEGACY_MARKERS)
         if not marker.exists():
-            if has_files:
+            if has_files and not legacy:
                 raise SyncError(t(
                     "The photos folder doesn't look like before (its sync marker is missing). "
                     "Syncing has stopped so nothing gets deleted by mistake."
@@ -803,11 +811,8 @@ class Syncer:
             if rel in links and target.exists():
                 if links[rel] == aid:
                     if not self.state.get("albumid:" + rel):  # a link made by an earlier version
-                        try:
-                            if os.path.samefile(target, self._abs(source[rel])):
-                                self._note_album_file(rel, target)
-                        except OSError:
-                            pass
+                        if self._same_file(target, self._abs(source[rel])):
+                            self._note_album_file(rel, target)
                     continue
                 # the name now belongs to another photo (e.g. two IMG_0001 and the album changed)
                 self._unlink_album(rel, [self._abs(r.rel_path) for r in by_asset.get(links[rel], [])])
@@ -878,12 +883,9 @@ class Syncer:
                 os.rename(p, staged)
                 ours = False
                 for src in sources:
-                    try:
-                        if src.exists() and os.path.samefile(staged, src):
-                            ours = True
-                            break
-                    except OSError:
-                        pass
+                    if self._same_file(staged, src):
+                        ours = True  # provably a second name of the photo (both identities known)
+                        break
                 recorded, found = self.state.get("albumid:" + rel), self._file_id(staged)
                 if ours:
                     staged.unlink()  # just a second name of the photo: nothing is lost
@@ -892,7 +894,7 @@ class Syncer:
                     self._trash(self._put_back(staged, p))
                 else:
                     self._put_back(staged, p)  # can't prove it's ours: it stays, untouched
-                if not os.path.lexists(staged):
+                if gone(staged):
                     self.state.set(stage_key, None)
         except OSError:
             return
@@ -907,6 +909,13 @@ class Syncer:
             return None
         return f"{st.st_dev}:{st.st_ino}" if st.st_ino else None
 
+    @classmethod
+    def _same_file(cls, a: Path, b: Path) -> bool:
+        """Provably one file under two names: both identities known, and equal. Where the file system
+        can't tell (no file IDs, an error), the answer is no - and nothing is removed because of it."""
+        ia, ib = cls._file_id(a), cls._file_id(b)
+        return bool(ia and ib and ia == ib)
+
     def _recover_album_stage(self) -> None:
         """An album entry that was under its private name when Skyfold stopped gets its name back."""
         for key, rel in self.state.items("albumstage:"):
@@ -916,7 +925,7 @@ class Syncer:
                     self._put_back(staged, self._abs(rel))
             except OSError:
                 continue
-            if not os.path.lexists(staged):
+            if gone(staged):
                 self.state.set(key, None)
 
     def _note_album_file(self, rel: str, p: Path) -> None:
@@ -960,7 +969,7 @@ class Syncer:
                 if not inside_root(self.root, p.parent) or p.is_symlink() or                         (hasattr(os.path, "isjunction") and os.path.isjunction(p)):
                     self.state.set(key, None)  # no longer the folder Skyfold made
                     continue
-                if not p.exists():
+                if gone(p):
                     self.state.set(key, None)
                     continue
                 if self._file_id(p) != made:

@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
-from .engine import Callbacks, Cancelled, SyncError, _is_link, inside_root, now_iso
+from .engine import Callbacks, Cancelled, SyncError, _is_link, gone, inside_root, now_iso
 from .i18n import t
 from .safelog import brief, value
 from .remote import AuthRequired, RemoteUnavailable, _translate
@@ -646,6 +646,13 @@ class NotesSyncer:
         index comes back if Notes.html is missing. A file that merely has such a name is someone's."""
         for key, kind in self.state.items("tmp:"):
             p = self.root / key[len("tmp:"):]
+            if gone(p):
+                self.state.set(key, None)
+                continue
+            try:
+                os.lstat(p)
+            except OSError:
+                continue  # couldn't be looked at: stays written down, tried again next time
             try:
                 if p.is_file() and not _is_link(p) and inside_root(self.root, p):
                     if kind == "index" and not (self.root / INDEX).exists():
@@ -853,7 +860,7 @@ class NotesSyncer:
             raise
         if aside is not None:
             self._let_go(aside, target, nid, old, modified)
-            if not os.path.lexists(aside):  # still there (the Recycle Bin refused it): tried again later
+            if gone(aside):  # still there (the Recycle Bin refused it): tried again later
                 self._disown(aside)
         self.state.set(f"page:{nid}", digest)
 
@@ -995,7 +1002,7 @@ class NotesSyncer:
                     self._trash(aside)
                 except OSError as exc:  # stays written down: tried again next time
                     log.warning("Notes: couldn't move the previous index to the Recycle Bin: %s", exc)
-            if not os.path.lexists(aside):
+            if gone(aside):
                 self._disown(aside)
         self.state.set("index_digest", written)
 

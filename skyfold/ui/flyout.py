@@ -192,10 +192,11 @@ class StorageBar(QFrame):
         self.c = palette
         self.parts: list[tuple[str, int, str]] = []  # (label, bytes, colour key)
         self.used = self.total = 0
+        self.setObjectName("Storage")  # its focus frame is in the style sheet (room for it kept)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setCursor(Qt.PointingHandCursor)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(2, 3, 2, 3)
+        lay.setContentsMargins(4, 3, 4, 3)
         lay.setSpacing(6)
         head = QHBoxLayout()
         self.title = QLabel(t("iCloud storage"))

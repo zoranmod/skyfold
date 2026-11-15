@@ -31,13 +31,14 @@ def test_drive_records_of_files_that_are_gone_are_dropped(drive_env):  # noqa: F
     assert not s.state.meta_items("tmp:") and not s.state.meta_items("aside:")
 
 
-def test_legacy_marker_is_still_taken_over_when_the_database_tracks_files(photos_env):  # noqa: F811
+def test_legacy_marker_still_lets_a_tracked_folder_sync(photos_env):  # noqa: F811
     s, r, root, _ = photos_env
     r.add("A1", "photo.jpg", b"one")
     s.run()
     os.rename(root / pe.MARKER, root / pe.LEGACY_MARKERS[0])  # as left by the earlier app
     s.run()
-    assert (root / pe.MARKER).is_file() and not (root / pe.LEGACY_MARKERS[0]).exists()
+    # since review 27 the old file is never renamed: Skyfold adds its own marker next to it
+    assert (root / pe.MARKER).is_file() and (root / pe.LEGACY_MARKERS[0]).is_file()
 
 
 def test_album_folder_recorded_without_identity_is_kept(photos_env):  # noqa: F811
