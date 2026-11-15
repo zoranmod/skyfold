@@ -8,8 +8,11 @@ red error) and there is one accent. Type 10/11/12/13/17 px, spacing 4/8/12/16, r
 
 from __future__ import annotations
 
+import atexit
+import shutil
 import tempfile
 from pathlib import Path
+from tempfile import mkdtemp
 
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPalette, QPen, QPixmap
@@ -75,9 +78,22 @@ def palette(mode: str = "system") -> dict[str, str]:
     return DARK if is_dark() else LIGHT
 
 
+_image_dir: Path | None = None
+
+
+def _images() -> Path:
+    """A folder of our own (new and private to this run) for the small images style sheets need: a
+    file someone else has in the temp folder is never written over."""
+    global _image_dir
+    if _image_dir is None or not _image_dir.is_dir():
+        _image_dir = Path(mkdtemp(prefix="skyfold-ui-", dir=tempfile.gettempdir()))
+        atexit.register(shutil.rmtree, _image_dir, True)
+    return _image_dir
+
+
 def chevron_file(color: str) -> str:
-    """Combo-box arrow drawn once into a temp PNG (QSS can only reference image files)."""
-    path = Path(tempfile.gettempdir()) / f"skyfold_chevron_{color.lstrip('#')}.png"
+    """Combo-box arrow drawn once into a PNG of our own (QSS can only reference image files)."""
+    path = _images() / f"chevron_{color.lstrip('#')}.png"
     if not path.exists():
         pm = QPixmap(24, 24)
         pm.fill(Qt.transparent)
@@ -92,7 +108,7 @@ def chevron_file(color: str) -> str:
 
 def mark_file(color: str, kind: str) -> str:
     """Tick ("check") or dash ("part") for tree check boxes, drawn into a temp PNG like the chevron."""
-    path = Path(tempfile.gettempdir()) / f"skyfold_{kind}_{color.lstrip('#')}.png"
+    path = _images() / f"{kind}_{color.lstrip('#')}.png"
     if not path.exists():
         pm = QPixmap(32, 32)
         pm.fill(Qt.transparent)

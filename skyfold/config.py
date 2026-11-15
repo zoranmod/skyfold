@@ -93,7 +93,26 @@ def _load_language() -> None:
 _load_language()
 
 
-PRIVATE_FILES = ("session", "state.sqlite3", "state.sqlite3-wal", "state.sqlite3-shm")
+DATABASE = "state.sqlite3"
+DATABASE_FILES = (DATABASE, DATABASE + "-wal", DATABASE + "-shm")  # one unit: never mixed between copies
+
+
+def save_text(path: Path, text: str) -> None:
+    """Write path through a private temp file next to it, then put it in place. Only path itself is
+    replaced: no fixed scratch name that could already belong to someone else."""
+    import tempfile
+
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".new", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _missing(p: Path) -> bool:
@@ -144,19 +163,85 @@ def _move_new(src: Path, dst: Path) -> None:
         src.unlink()
 
 
+def place_new(tmp: str | Path, dst: Path) -> bool:
+    """Put a private temp file or folder in place under dst only as a new name (False if taken)."""
+    try:
+        if os.name == "nt" or Path(tmp).is_dir():
+            os.rename(tmp, dst)  # Windows refuses an existing name
+        else:
+            os.link(tmp, dst)  # refuses an existing name
+            os.unlink(tmp)
+        return True
+    except FileExistsError:
+        return False
+
+
+def _move_dir_new(src: Path, dst: Path) -> None:
+    """Move a folder to dst only as a new name; the source goes only once the copy is in place."""
+    if os.name == "nt":
+        try:
+            os.rename(src, dst)  # same drive: refuses an existing name
+            return
+        except FileExistsError:
+            return
+        except OSError:
+            pass  # another drive: copied below
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(prefix=dst.name + ".", suffix=".new", dir=dst.parent))
+    try:
+        shutil.copytree(src, tmp, dirs_exist_ok=True)
+        if not place_new(tmp, dst):
+            return
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)  # only the private copy (gone when it was put in place)
+    shutil.rmtree(src)
+
+
+def _move_database(src_dir: Path) -> None:
+    """Take over a database together with its journal, as one consistent snapshot. Only when this PC
+    has no database at all (none of its files): a journal is never put next to another database."""
+    import sqlite3
+    import tempfile
+    from contextlib import closing
+
+    fd, tmp = tempfile.mkstemp(prefix=DATABASE + ".", suffix=".new", dir=PRIVATE_DIR)
+    os.close(fd)
+    try:
+        with closing(sqlite3.connect(src_dir / DATABASE)) as old, closing(sqlite3.connect(tmp)) as new:
+            old.backup(new)  # the database as it is with its journal applied
+        if not place_new(tmp, PRIVATE_DIR / DATABASE):
+            return
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+    for name in (DATABASE + "-wal", DATABASE + "-shm", DATABASE):  # taken over: the old copy goes
+        try:
+            os.unlink(src_dir / name)
+        except FileNotFoundError:
+            pass
+
+
 def _move_private(src_dir: Path) -> None:
     if src_dir == PRIVATE_DIR or _missing(src_dir):
         return
     PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
-    for name in PRIVATE_FILES:
-        src, dst = src_dir / name, PRIVATE_DIR / name
-        if src.is_file() and _missing(dst):
-            try:
-                _move_new(src, dst)
-            except OSError as exc:  # left where it is: tried again next start
-                logging.getLogger("skyfold").info("Couldn't move %s: %s", name, exc)
-        # If both exist, the local copy wins and the other one is simply left alone: never
-        # delete a session or database automatically.
+    log = logging.getLogger("skyfold")
+    src = src_dir / "session"
+    if src.is_dir() and not src.is_symlink() and _missing(PRIVATE_DIR / "session"):
+        try:
+            _move_dir_new(src, PRIVATE_DIR / "session")
+        except OSError as exc:  # left where it is: tried again next start
+            log.info("Couldn't move the session: %s", exc)
+    if (src_dir / DATABASE).is_file() and all(_missing(PRIVATE_DIR / n) for n in DATABASE_FILES):
+        try:
+            _move_database(src_dir)
+        except Exception as exc:  # noqa: BLE001 - left where it is: tried again next start
+            log.info("Couldn't move the database: %s", exc)
+    # If both exist, the local copy wins and the other one is simply left alone: never
+    # delete a session or database automatically.
 
 
 def migrate_private_files() -> None:
@@ -167,7 +252,7 @@ def migrate_private_files() -> None:
       so the user doesn't have to sign in or download everything again.
     """
     local = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
-    if _missing(PRIVATE_DIR / "state.sqlite3"):
+    if _missing(PRIVATE_DIR / DATABASE):
         _move_private(local / "iSync")
     _move_private(DATA_DIR)
     legacy_settings = APP_DIR.parent / "iSync" / "data" / "settings.json"
@@ -279,9 +364,7 @@ class Settings:
 
     def save(self) -> None:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = SETTINGS_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(asdict(self), indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, SETTINGS_FILE)
+        save_text(SETTINGS_FILE, json.dumps(asdict(self), indent=2, ensure_ascii=False))
 
     def copy(self) -> "Settings":
         return Settings(**asdict(self))

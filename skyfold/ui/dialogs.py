@@ -261,6 +261,8 @@ def refresh_palette(palette: dict[str, str], skip: tuple = ()) -> None:
         if top in skip:
             continue
         for w in [top, *top.findChildren(QWidget)]:
+            if any(w is s or s.isAncestorOf(w) for s in skip):
+                continue  # (also when that window sits inside another one)
             fn = getattr(w, "apply_palette", None)
             if callable(fn):
                 fn(palette)
@@ -1087,6 +1089,9 @@ class DriveFoldersDialog(_Dialog):
     PATH = Qt.UserRole
     LOADED = Qt.UserRole + 1
 
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette  # folders read later are drawn in the new colours
+
     def __init__(self, selection: list[str] | None, palette: dict[str, str], get_api,
                  sizes: dict[str, tuple[int, int]] | None = None) -> None:
         super().__init__(t("Choose iCloud Drive folders – {app}", app=APP_NAME))
@@ -1614,6 +1619,9 @@ class FindMyDialog(_Dialog):
     """Your Apple devices with battery, last location (opens a map) and 'play sound'."""
 
     signInAgain = Signal()
+
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette  # rows made later (Refresh) take the new colours too
 
     def __init__(self, palette: dict[str, str], get_api) -> None:
         super().__init__(t("Find My – {app}", app=APP_NAME))

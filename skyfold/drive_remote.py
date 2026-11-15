@@ -43,6 +43,10 @@ class DriveItem:
     size: int = 0
     mtime: float | None = None  # epoch seconds (UTC)
 
+    def __post_init__(self) -> None:
+        if not self.etag:
+            self.etag = None  # an empty version tag says nothing: the same as no tag (never "unchanged")
+
 
 class DriveRemote(Protocol):
     def walk(self, on_progress: Callable[[int], None] | None = None,

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import stat
 import tempfile
 import threading
 import time
@@ -150,14 +151,26 @@ def marker_present(marker: Path) -> bool:
     """Is the folder's sync marker there? A marker that can't be looked at (access denied, a disk that
     isn't ready) stops the sync: it is never taken for a missing one and written over."""
     try:
-        os.lstat(marker)
+        st = os.lstat(marker)
     except (FileNotFoundError, NotADirectoryError):
         return False
     except OSError as exc:
         raise SyncError(t("Couldn't check the sync marker in {path}: {error}. Syncing has stopped so nothing "
                           "gets changed by mistake; it is tried again next time.",
                           path=marker.parent, error=brief(exc))) from exc
+    if not stat.S_ISREG(st.st_mode) or _is_link(marker):  # a folder, link or shortcut there: not a marker
+        raise SyncError(t("Couldn't check the sync marker in {path}: {error}. Syncing has stopped so nothing "
+                          "gets changed by mistake; it is tried again next time.",
+                          path=marker.parent, error=t("it isn't an ordinary file")))
     return True
+
+
+def _regular_file(p: Path) -> bool:
+    """An ordinary file (not a link) at p? Can't be looked at: no."""
+    try:
+        return stat.S_ISREG(os.lstat(p).st_mode) and not _is_link(p)
+    except OSError:
+        return False
 
 
 def create_marker(marker: Path, text: str) -> None:
@@ -370,8 +383,9 @@ class Syncer:
         # A folder set up by an earlier version of the app has one of the old marker names. Nothing
         # proves who wrote such a file, so it is never renamed or changed: when this database tracks
         # files here, its presence only lets Skyfold add its own new marker next to it.
-        legacy = has_files and any((root / old).is_file() for old in LEGACY_MARKERS)
         if not marker_present(marker):
+            # (the old names are only looked at when the current marker is missing)
+            legacy = has_files and any(_regular_file(root / old) for old in LEGACY_MARKERS)
             if has_files and not legacy:
                 raise SyncError(t(
                     "The photos folder doesn't look like before (its sync marker is missing). "
@@ -392,7 +406,8 @@ class Syncer:
         tracked = {r.rel_path.lower() for r in rows}
         album_entries = {rel.lower() for rel in self.state.album_links()}  # same name and size as the originals
         index: dict[tuple[str, int], list[str]] = defaultdict(list)  # every look-alike, not just one
-        unsure = []  # a folder or file that couldn't be read: a missing photo may have moved there
+        unsure = []  # a folder that couldn't be read: any missing photo may have moved there
+        unsure_names: set[str] = set()  # files that couldn't be looked at: a photo of that name may be one
 
         for dirpath, dirs, files in os.walk(self.root, onerror=unsure.append):
             dirs[:] = [d for d in dirs if not _is_link(Path(dirpath) / d)]  # a junction may lead anywhere
@@ -405,11 +420,12 @@ class Syncer:
                     continue
                 try:
                     index[(fn.lower(), full.stat().st_size)].append(rel)
-                except OSError as exc:
-                    unsure.append(exc)
-        if unsure:
-            log.info("Photos: %d places couldn't be read; missing photos are looked at again next time",
-                     len(unsure))
+                except OSError:
+                    unsure_names.add(fn.lower())
+        if unsure or unsure_names:
+            log.info("Photos: %d folders and %d files couldn't be read; missing photos that may be there "
+                     "are looked at again next time", len(unsure), len(unsure_names))
+        held = 0
 
         moved = 0
         by_asset: dict[str, list[FileRow]] = defaultdict(list)
@@ -439,7 +455,8 @@ class Syncer:
                 self.state.move_file(r.asset_id, r.resource_key, new_rel)
                 moved += 1
                 continue
-            if unsure:
+            if unsure or PurePosixPath(r.rel_path).name.lower() in unsure_names:
+                held += 1
                 continue  # it may be in a place that couldn't be read: nothing is decided this pass
             if r.resource_key == "original" and where in maybe:
                 # Look-alikes exist but none is this photo. Whether it was deleted or changed and
@@ -450,6 +467,9 @@ class Syncer:
                 deleted_assets.append(r.asset_id)
             else:
                 lone_videos.append(r)
+        if held:
+            self.cb.activity("info", t("Photos: {n} missing files are kept for now, part of the photos folder "
+                                       "couldn't be read", n=held))
         for r in untracked:
             self.state.remove_asset(r.asset_id)
             self.state.exclude(r.asset_id, "deleted on PC")

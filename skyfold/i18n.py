@@ -185,6 +185,9 @@ BS: dict[str, str] = {
     "Couldn't check the sync marker in {path}: {error}. Syncing has stopped so nothing gets changed by mistake; it is tried again next time.":
         "Oznaka sinhronizacije u {path} se ne može provjeriti: {error}. Sinhronizacija je zaustavljena da se ništa ne promijeni greškom; pokušava se ponovo sljedeći put.",
     "it appeared while it was being checked": "pojavila se dok se provjeravala",
+    "it isn't an ordinary file": "nije običan fajl",
+    "Photos: {n} missing files are kept for now, part of the photos folder couldn't be read":
+        "Fotografije: {n} fajlova koji nedostaju zasad se ne diraju, dio foldera s fotografijama se ne može pročitati",
     "This Drive folder belongs to another Apple ID. Choose a new, empty folder for iCloud Drive in Settings.":
         "Ovaj Drive folder pripada drugom Apple ID-u. U Postavkama izaberi novi, prazan folder za iCloud Drive.",
     "{name} leads outside the Drive folder; left alone": "{name} vodi izvan Drive foldera; ostavljeno kako jeste",

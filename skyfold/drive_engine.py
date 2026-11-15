@@ -31,6 +31,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
+from .config import save_text
 from .drive_remote import WORKERS, DriveItem, DriveRemote, MacPackage, is_transient
 from .engine import (Callbacks, Cancelled, SyncError, THROTTLE, check_free_space, create_marker, known_missing, inside_root,
                      marker_present, now_iso, transfer_text)
@@ -236,10 +237,8 @@ class DriveSyncer:
         if not self.cache_file:
             return
         try:
-            tmp = self.cache_file.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"root": str(self.root),
-                                       "items": [asdict(i) for i in self.cache.values()]}), encoding="utf-8")
-            os.replace(tmp, self.cache_file)
+            save_text(self.cache_file, json.dumps({"root": str(self.root),
+                                                   "items": [asdict(i) for i in self.cache.values()]}))
         except OSError as exc:
             log.warning("Could not save Drive cache: %s", exc)
 
@@ -325,19 +324,23 @@ class DriveSyncer:
             if tmp_path is not None:
                 tmp_path.unlink(missing_ok=True)
                 self._disown(tmp_path, "tmp")
-        self._hashes[key] = got
+        if r.etag:  # without a version tag the next look may see other content: never reused
+            self._hashes[key] = got
         return got
 
-    def _pc_has_synced_content(self, b: Base | None, p: Path) -> bool:
+    def _pc_has_synced_content(self, b: Base | None, p: Path, strict: bool = False) -> bool:
         """Before a PC file is replaced or sent to the Recycle Bin as "the old synced version": is it?
         Size and time must match the database; when its fingerprint is known, the content must too
-        (a file can be changed while keeping size and time). Unreadable: no."""
+        (a file can be changed while keeping size and time). Unreadable: no (strict: the error is
+        raised, as "can't tell" is not "changed")."""
         try:
             st = p.stat()
             if b is None or (st.st_size, round(st.st_mtime, 2)) != (b.lsize, round(b.lmtime or 0, 2)):
                 return False
             return not b.hash or file_hash(p) == b.hash
         except OSError:
+            if strict:
+                raise
             return False
 
     def _scrub(self, remote: dict[str, DriveItem], local: dict[str, "Local"], base: dict[str, Base],
@@ -453,6 +456,7 @@ class DriveSyncer:
         # until this scan proves what is at that name now; whether or not the walk lists it.
         held = {k[len("prev:"):] for k in owned if k.startswith("prev:")}
         self.unreadable |= held
+        prev_key = {k[len("prev:"):].lower(): k for k in owned if k.startswith("prev:")}  # Windows: case-blind
         for dirpath, dirs, files in os.walk(self.root, onerror=lambda e: self._unreadable_add(e.filename or "")):
             dirs[:] = [d for d in dirs if not ignored(d)]
             for d in [d for d in dirs if _is_link(Path(dirpath) / d)]:
@@ -463,32 +467,36 @@ class DriveSyncer:
             rel_dir = "" if rel_dir == "." else rel_dir
             for d in dirs:
                 rel = f"{rel_dir}/{d}" if rel_dir else d
-                if rel in held:  # a folder at that name now: provably not the file Skyfold wrote down
-                    self._disown(Path(dirpath) / d, "prev")
-                    self.unreadable.discard(rel)
+                key = prev_key.get(rel.lower())
+                if key:  # a folder at that name now: provably not the file Skyfold wrote down
+                    self.state.set_meta(key, None)
+                    self.unreadable.discard(key[len("prev:"):])
                 out[rel] = Local(True, 0, 0.0)
                 if d.startswith("."):
                     hide_like_mac(Path(dirpath) / d)
             for f in files:
-                if previous and f"prev:{self._rel(Path(dirpath) / f)}" in owned:
+                key = prev_key.get(f"{rel_dir}/{f}".lower() if rel_dir else f.lower()) if previous else None
+                if key:
                     # A replaced version that was on its way to the Recycle Bin when Skyfold stopped:
                     # it goes there now. It is never taken for a new file while it may still be that file.
                     full = Path(dirpath) / f
                     rel_f = self._rel(full)
+                    recorded = key[len("prev:"):]
                     fid = self._file_id(full)
-                    if fid and fid == owned[f"prev:{rel_f}"]:
+                    if fid and fid == owned[key]:
                         try:
                             self._trash_local(full)
-                            self._disown(full, "prev")
-                            self.unreadable.discard(rel_f)  # in the Recycle Bin: the name is free again
+                            self.state.set_meta(key, None)
+                            self.unreadable.discard(recorded)  # in the Recycle Bin: the name is free again
                         except Exception as exc:  # noqa: BLE001 - tried again next time
                             log.warning("Drive: couldn't move %s to the Recycle Bin: %s", f, exc)
                             self.unreadable.add(rel_f)  # still ours: left alone on both sides
                         continue
                     if not fid:  # can't tell which file this is now: kept on record, left alone
+                        self.unreadable.add(rel_f)  # (under the spelling it has now, too)
                         continue
-                    self._disown(full, "prev")  # provably another file has that name now: someone's
-                    self.unreadable.discard(rel_f)
+                    self.state.set_meta(key, None)  # provably another file has that name now: someone's
+                    self.unreadable.discard(recorded)
                 if f.startswith(TMP_PREFIX):
                     # Skyfold's own leftovers (written down when they were made) are finished off here.
                     # A file that only has such a name is someone's: left alone, and not synced.
@@ -580,7 +588,9 @@ class DriveSyncer:
         # A replaced version still on its way to the Recycle Bin (see scan_local) is never a new file:
         # a quick pass leaves it alone on both sides, the next full pass finishes the move.
         private = {k[len("prev:"):] for k in self.state.meta_items("prev:")}
-        self.unreadable |= {p for p in private if _parent(p) in folders}  # also when not listed
+        scanned = {f.lower() for f in folders}
+        self.unreadable |= {p for p in private if _parent(p).lower() in scanned}  # also when not listed
+        private_key = {p.lower(): p for p in private}  # Windows: letter case doesn't count
         for rel_dir in folders:
             d = self._abs(rel_dir) if rel_dir else self.root
             if rel_dir and (_is_link(d) or not inside_root(self.root, d)):
@@ -597,12 +607,17 @@ class DriveSyncer:
                 if ignored(e.name):
                     continue
                 rel = f"{rel_dir}/{e.name}" if rel_dir else e.name
-                if rel in private:
-                    if e.is_dir(follow_symlinks=False):  # a folder now: provably not that file
-                        self._disown(Path(e.path), "prev")
-                        self.unreadable.discard(rel)
-                    else:
+                recorded = private_key.get(rel.lower())
+                if recorded is not None:
+                    try:
+                        is_dir = e.is_dir(follow_symlinks=False)
+                    except OSError:
+                        is_dir = False
+                    if not is_dir:
+                        self.unreadable.add(rel)  # left alone on both sides until a full pass decides
                         continue
+                    self.state.set_meta(f"prev:{recorded}", None)  # a folder now: provably not that file
+                    self.unreadable.discard(recorded)
                 try:
                     if e.is_dir() and _is_link(Path(e.path)):
                         self.unreadable.add(rel)
@@ -692,6 +707,7 @@ class DriveSyncer:
             remote = {p: r for p, r in remote.items() if p in dirs or _parent(p) in dirs}
         # Names the PC side never looks at (temp files, desktop.ini, …) are left alone in iCloud too:
         # otherwise a downloaded "x.tmp" would look deleted on the PC and be trashed in iCloud.
+        self._unsynced_remote = sorted(p for p in remote if _ignored_path(p))  # never deleted with a folder
         remote = {p: r for p, r in remote.items() if not _ignored_path(p)}
         base = {p: b for p, b in base.items() if not _ignored_path(p)}
         if self.folders is not None:  # only the chosen folders: everything else is left alone
@@ -1031,17 +1047,20 @@ class DriveSyncer:
                         unreadable.append(f"link: {Path(dirpath) / d}")
                 rel_dir = Path(dirpath).relative_to(self.root).as_posix()
                 for f in files:
-                    if ignored(f):
-                        continue
                     rel = f"{rel_dir}/{f}"
+                    if _ignored_path(rel):
+                        dirty = True  # never synced (a .tmp draft, …): it and its folder stay
+                        continue
                     fb = base.get(rel) or known.get(rel)
                     try:
                         st = os.stat(Path(dirpath) / f)
-                    except OSError:
-                        dirty = True
+                        same = fb is not None and (st.st_size, round(st.st_mtime, 2)) == \
+                            (fb.lsize, round(fb.lmtime or 0, 2)) and self._pc_has_synced_content(
+                                fb, Path(dirpath) / f, strict=True)
+                    except OSError as exc:  # can't be looked at: the folder is decided another time
+                        unreadable.append(str(exc))
                         continue
-                    if fb is None or (st.st_size, round(st.st_mtime, 2)) != (fb.lsize, round(fb.lmtime or 0, 2)) \
-                            or not self._pc_has_synced_content(fb, Path(dirpath) / f):
+                    if not same:
                         dirty = True
                         if fb is not None:
                             self.state.drop(rel)
@@ -1083,12 +1102,14 @@ class DriveSyncer:
                 continue
             all_below = below(p)
             inside = [q for q in all_below if not remote[q].is_dir]
-            if not all_below:
+            unsynced = [q for q in getattr(self, "_unsynced_remote", ()) if q.startswith(p + "/")]
+            if not all_below and not unsynced:
                 out.append(p)  # nothing inside listed (e.g. a quick pass): judged by its files' rows
                 continue
             changed = [q for q in inside if known.get(q) is None
-                       or (known[q].etag != remote[q].etag and not self._is_synced_content(known[q], remote[q]))]
-            if not changed:
+                       or ((known[q].etag is None or remote[q].etag is None or known[q].etag != remote[q].etag)
+                           and not self._is_synced_content(known[q], remote[q]))]
+            if not changed and not unsynced:  # (never-synced items, a .tmp draft, … keep the folder)
                 out.append(p)
                 continue
             log.info("Drive: %s was deleted on this PC but has changes in iCloud; keeping them", p)
@@ -1420,6 +1441,11 @@ class DriveSyncer:
                 self.remote.incomplete |= touched | ({_parent(t) for t in touched} if hit is None else set())
                 continue
             if hit is None:  # gone from iCloud: the PC copy (under its new name) follows that deletion
+                if not known_missing(self._abs(new)):
+                    try:
+                        os.lstat(self._abs(new))
+                    except OSError:
+                        continue  # can't tell where the PC copy is: decided next time
                 dst = at if known_missing(self._abs(new)) else new
                 self._move_rows(at, dst, None, ident, None, snapshot=e)
                 continue
@@ -1510,7 +1536,19 @@ class DriveSyncer:
             dst.parent.mkdir(parents=True, exist_ok=True)
             self._touch_own(src)
             self._touch_own(dst)
-            os.rename(src, dst)  # refuses an existing name (os.replace would overwrite a file saved just now)
+            carried = self._records_below(old)
+            for key, val in carried.items():  # written down at the new place too before the move:
+                kind, rel = key.split(":", 1)   # whichever name the file has after a crash, it is known
+                self.state.set_meta(f"{kind}:{new}{rel[len(old):]}", val)
+            try:
+                os.rename(src, dst)  # refuses an existing name (os.replace would overwrite a file saved just now)
+            except BaseException:
+                for key in carried:
+                    kind, rel = key.split(":", 1)
+                    self.state.set_meta(f"{kind}:{new}{rel[len(old):]}", None)
+                raise
+            for key in carried:
+                self.state.set_meta(key, None)
         except FileExistsError:
             log.info("Rename on this PC skipped (%s -> %s): the new name was taken meanwhile", old, new)
             return False
@@ -1520,6 +1558,17 @@ class DriveSyncer:
         res.moved += 1
         self.cb.activity("download", t("Drive: renamed/moved on this PC: {old} → {new}", old=old, new=new), str(dst))
         return True
+
+    def _records_below(self, folder: str) -> dict[str, str]:
+        """Skyfold's private files (replaced versions, temp and set-aside files) written down inside
+        this folder, matched the way Windows matches names (letter case doesn't count)."""
+        low = folder.lower() + "/"
+        out: dict[str, str] = {}
+        for kind in ("prev:", "aside:", "tmp:"):
+            for key, val in self.state.meta_items(kind).items():
+                if key[len(kind):].lower().startswith(low):
+                    out[key] = val
+        return out
 
     def _rebase(self, base: dict[str, Base], old: str, new: str, keep_etags: bool,
                 remote: dict[str, DriveItem] | None = None) -> None:
@@ -1572,6 +1621,14 @@ class DriveSyncer:
         before = set(getattr(self.remote, "incomplete", set()) or ())
         now: dict[str, DriveItem] = {}
         try:
+            if item.is_dir:  # the folder itself, as its parent lists it now (the same folder, not a new one)
+                parent = remote.get(_parent(p))
+                if parent is None:
+                    return False
+                there = self.remote.walk(folders=[parent]).get(p)
+                if there is None or not there.is_dir:
+                    return False
+                now[p] = there
             level = [top]
             for _ in range(64):
                 if not level:
@@ -1593,7 +1650,7 @@ class DriveSyncer:
         def shape(d: dict[str, DriveItem]) -> dict[str, tuple] | None:
             """Every item with what it is, which item it is and which version - or None when that
             can't be told for some item (no version tag, no identity): then nothing is proven."""
-            keys = [p] if not item.is_dir else [q for q in d if q.startswith(p + "/") and not _ignored_path(q)]
+            keys = [p] + ([q for q in d if q.startswith(p + "/")] if item.is_dir else [])
             out: dict[str, tuple] = {}
             for q in keys:
                 r = d.get(q)
@@ -1601,10 +1658,20 @@ class DriveSyncer:
                     out[q] = ("absent",)
                     continue
                 ident = r.docwsid or r.drivewsid
-                if not ident or (not r.is_dir and not r.etag):
+                if not ident:
                     return None
-                out[q] = ("dir", ident) if r.is_dir else ("file", ident, r.etag)
+                if r.is_dir:
+                    out[q] = ("dir", ident)
+                elif r.etag:
+                    out[q] = ("file", ident, r.etag)
+                else:  # no version tag: only the content can tell, against what was synced
+                    b = known.get(q)
+                    if b is None or not b.hash or (d is now and self._cloud_hash(r) != b.hash):
+                        return None
+                    out[q] = ("file", ident, "content", b.hash)
             return out
+
+        known = self.state.all()
 
         before_shape, now_shape = shape(remote), shape(now)
         return before_shape is not None and now_shape is not None and before_shape == now_shape
@@ -1651,8 +1718,13 @@ class DriveSyncer:
                     self._check_cancel()
                     if p in remote and base.get(p) is not None and remote[p].is_dir != base[p].is_dir:
                         continue  # iCloud has something else there now: not what was deleted on this PC
-                    if not known_missing(self._abs(p)):  # back on this PC since the question (or can't be told)
-                        self.state.drop(p)
+                    if not known_missing(self._abs(p)):
+                        try:
+                            os.lstat(self._abs(p))
+                        except OSError as exc:  # can't be told now: nothing decided, tried again
+                            log.info("Drive: %s couldn't be checked before deleting it in iCloud: %s", p, brief(exc))
+                            continue
+                        self.state.drop(p)  # back on this PC since the question: it goes up again
                         continue
                     try:
                         self.remote.trash(remote[p])
@@ -1699,8 +1771,13 @@ class DriveSyncer:
                     if b is not None and not b.is_dir and target.is_file():
                         # still the synced content? (size, time and - when known - the fingerprint; time
                         # has passed since it was decided, and since the user was asked)
-                        if not self._pc_has_synced_content(b, target):
-                            self.state.drop(p)  # edited on this PC meanwhile, or unreadable: keep it (it goes up)
+                        try:
+                            same = self._pc_has_synced_content(b, target, strict=True)
+                        except OSError as exc:  # can't be read now: nothing decided, tried again
+                            log.info("Drive: %s couldn't be checked before deleting it: %s", p, brief(exc))
+                            continue
+                        if not same:
+                            self.state.drop(p)  # edited on this PC meanwhile: keep it (it goes up)
                             continue
                     try:
                         if not known_missing(target):
@@ -1938,9 +2015,11 @@ class DriveSyncer:
                 self._disown(original, "aside")
                 aside = named
             except OSError:
-                if not os.path.lexists(named) or self._file_id(named) != fid:
+                there = None if known_missing(named) else self._file_id(named)
+                if known_missing(named) or (there is not None and there != fid):
                     self._disown(named, "prev")  # the rename didn't happen: nothing of ours there
                     promoted = False
+                # (can't tell: the record stays, the next full scan decides)
         try:
             self._trash_local(aside)
             self._disown(original, "aside")
@@ -1963,11 +2042,15 @@ class DriveSyncer:
         log.info("Drive: recovering %s left by an interrupted download", rel)
         b = self.state.all().get(rel)
         try:
-            if b is not None and self._abs(rel).exists() and self._pc_has_synced_content(b, p):
+            present = not known_missing(self._abs(rel))
+            if present:
+                os.lstat(self._abs(rel))
+            if b is not None and present and self._pc_has_synced_content(b, p, strict=True):
                 self._recycle_previous(p, rel)  # just the version both sides had: to the Recycle Bin
                 return
-        except OSError:
-            pass
+        except OSError as exc:  # can't be looked at now: stays as it is, tried again next time
+            log.info("Drive: %s couldn't be checked now: %s", rel, brief(exc))
+            return
         self._release_aside(p, rel, restore=False)
 
     def _uploads(self, paths: list[str], remote: dict[str, DriveItem], base: dict[str, Base],

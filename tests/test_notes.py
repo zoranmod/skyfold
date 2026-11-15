@@ -197,6 +197,9 @@ def test_embedded_pdf_becomes_page_images(tmp_path):
 def test_drawing_preview_is_swapped_for_full_bitmap(tmp_path):
     from PySide6.QtGui import QImage
 
+    import time
+
+    export_started = time.time()
     assets = tmp_path / "_assets" / "n1"
     assets.mkdir(parents=True)
     QImage(768, 768, QImage.Format.Format_RGB32).save(str(assets / "prev1"), "PNG")
@@ -212,7 +215,7 @@ def test_drawing_preview_is_swapped_for_full_bitmap(tmp_path):
         QImage(sizes[url], sizes[url], QImage.Format.Format_RGB32).save(str(target), "PNG")
         return str(target)
 
-    assert ne.upgrade_sketches(page, {"D1": "big", "D2": "small"}, download) == 1
+    assert ne.upgrade_sketches(page, {"D1": "big", "D2": "small"}, download, made_since=export_started) == 1
     html = page.read_text(encoding="utf-8")
     assert 'src="_assets/n1/asset-big.png"' in html and not (assets / "prev1").exists()
     assert 'src="_assets\\n1\\prev2"' in html and not (assets / "asset-small").exists()  # smaller: keep preview

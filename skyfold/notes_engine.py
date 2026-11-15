@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
+from .config import place_new
 from .engine import Callbacks, Cancelled, SyncError, _is_link, create_marker, known_missing, inside_root, marker_present, now_iso
 from .i18n import t
 from .safelog import brief, value
@@ -120,13 +121,15 @@ class ICloudNotes:
             _SKETCH_INFO.clear()
             if not filename.startswith(STAGE_PREFIX):
                 _CURRENT_NOTE[0] = str(out_dir.name + "/" + filename)
+            started = time.time()
             if not exporter.export(record, output_dir=str(out_dir), filename=filename):
                 raise SyncError(t("Note has no content"))
             if _SKETCH_FALLBACKS:
                 page = out_dir / (filename if filename.lower().endswith(".html") else filename + ".html")
                 if page.exists():
                     fallbacks = dict(_SKETCH_FALLBACKS)
-                    upgrade_sketches(page, fallbacks, lambda url, folder: self.svc._raw.download_asset_to(url, str(folder)))
+                    upgrade_sketches(page, fallbacks, lambda url, folder: self.svc._raw.download_asset_to(url, str(folder)),
+                                     made_since=started)
         self._call(run)
 
 
@@ -367,12 +370,33 @@ def render_pdf_pages(pdf: Path, width: int = 1500) -> list[Path]:
         img = doc.render(i, size)
         if not img.isNull():
             img = _on_white(img)  # drawings have no background: dark ink would vanish in dark mode
-        target = pdf.with_name(f"{pdf.name}.p{i + 1}.png")
-        if img.isNull() or not img.save(str(target)):
+        target = None if img.isNull() else _save_image_new(img, pdf.with_name(f"{pdf.name}.p{i + 1}.png"))
+        if target is None:
             continue
         out.append(target)
     doc.close()
     return out
+
+
+def _place_new_name(tmp: Path | str, target: Path) -> Path | None:
+    """Put a file of ours in place under target, or under a fresh variant of that name when it is
+    taken: an existing file is never replaced. None if neither name was free."""
+    for cand in (target, target.with_name(f"{target.stem}-{uuid.uuid4().hex[:8]}{target.suffix}")):
+        if place_new(tmp, cand):
+            return cand
+    return None
+
+
+def _save_image_new(img, target: Path) -> Path | None:
+    """Save an image as a new file at target (or a variant of the name); never over an existing one."""
+    fd, tmp = tempfile.mkstemp(prefix=STAGE_PREFIX, suffix=".png", dir=target.parent)
+    os.close(fd)
+    try:
+        if not img.save(tmp, "PNG"):
+            return None
+        return _place_new_name(tmp, target)
+    finally:
+        Path(tmp).unlink(missing_ok=True)  # only our private copy (gone once it was put in place)
 
 
 def local_datetime(value) -> str:
@@ -406,10 +430,23 @@ def _on_white(img):
 IMG_TAG = re.compile(r'<img\b[^>]*?\ssrc="([^"]+)"[^>]*>', re.IGNORECASE)
 
 
-def upgrade_sketches(page: Path, fallbacks: dict[str, str], download) -> int:
+def _made_since(p: Path, since: float | None) -> bool:
+    """Was this file created at or after `since` (by the export that just ran)? Unknown: no."""
+    if since is None:
+        return False
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return False
+    born = getattr(st, "st_birthtime", None) or st.st_ctime  # Windows: when the file was created
+    return stat.S_ISREG(st.st_mode) and born >= since - 2
+
+
+def upgrade_sketches(page: Path, fallbacks: dict[str, str], download, made_since: float | None = None) -> int:
     """Swap each pen drawing's small preview for its full-size bitmap, when that one is bigger and a
     browser can show it. download(url, folder) saves the file and returns its path. Returns the
-    number of drawings upgraded; on any problem the preview simply stays."""
+    number of drawings upgraded; on any problem the preview simply stays. The replaced preview is
+    removed only when this export made it (created since made_since); any other file stays."""
     import urllib.parse
 
     from PySide6.QtGui import QImageReader
@@ -444,8 +481,9 @@ def upgrade_sketches(page: Path, fallbacks: dict[str, str], download) -> int:
                 return tag
             ext = ".jpg" if fmt == "jpeg" else "." + fmt
             if new.suffix.lower() != ext:
-                renamed = new.with_name(new.name + ext)
-                os.replace(new, renamed)
+                renamed = _place_new_name(new, new.with_name(new.name + ext))  # never over another file
+                if renamed is None:
+                    raise OSError(f"no free name for {new.name}{ext}")
                 new = renamed
         except Exception as exc:  # noqa: BLE001 - keep the preview
             log.info("Full drawing not used: %s", exc)
@@ -453,10 +491,11 @@ def upgrade_sketches(page: Path, fallbacks: dict[str, str], download) -> int:
                 new.unlink(missing_ok=True)
             return tag
         count += 1
-        try:
-            current.unlink()
-        except OSError:
-            pass
+        if _made_since(current, made_since):  # written by this export, for this page only
+            try:
+                current.unlink()
+            except OSError:
+                pass
         rel = urllib.parse.quote(os.path.relpath(new, note_dir).replace("\\", "/"))
         return tag.replace(f'src="{src}"', f'src="{rel}"', 1)
 
@@ -571,13 +610,16 @@ def _digest(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-def _is_our_page(p: Path) -> bool:
+def _is_our_page(p: Path, strict: bool = False) -> bool:
     """Only pages Skyfold wrote (they carry its style block) are ever removed: an .html file the
-    user keeps in the same folder is left alone."""
+    user keeps in the same folder is left alone. A page that can't be read is not ours (strict:
+    the error is raised instead, as "can't tell" is not "someone else's")."""
     try:
         with open(p, encoding="utf-8", errors="replace") as fh:
             return 'id="skyfold"' in fh.read(200_000)
     except OSError:
+        if strict:
+            raise
         return False
 
 
@@ -928,7 +970,7 @@ class NotesSyncer:
         try:
             if not known_missing(p):
                 os.lstat(p)  # can't be looked at: raises, the note is remembered and tried again
-                if p.suffix.lower() == ".html" and not _is_our_page(p):
+                if p.suffix.lower() == ".html" and not _is_our_page(p, strict=True):  # unreadable: tried again
                     log.info("Notes: %s isn't a page Skyfold wrote; left alone", row[1])
                     return True  # someone else's file now: forget the note's old path, keep the file
                 self._trash(p)
@@ -961,9 +1003,11 @@ class NotesSyncer:
         target = self.root / INDEX
         not_ours = SyncError(t("The Notes folder already has a Notes.html that isn't from Skyfold. Choose an empty "
                                "folder for Notes in Settings."))
-        if target.exists() and not _is_our_index(target):
+        present = not known_missing(target)  # one that can't be looked at counts as there
+        if present and not _is_our_index(target):
             raise not_ours
-        if target.exists() and not (self.state.get("index_owned") or self.state.get("index_digest")):
+        was_owned = bool(self.state.get("index_owned") or self.state.get("index_digest"))
+        if present and not was_owned:
             # It looks like a Skyfold index, but this setup has no record of writing one here (a copy
             # brought into the folder, or the database is new). Looking like one isn't owning it.
             if not getattr(self, "_index_told", False):
@@ -990,6 +1034,8 @@ class NotesSyncer:
                     raise not_ours
             os.rename(tmp, target)  # refuses if a file was saved there meanwhile
         except BaseException:
+            if not was_owned and aside is None:
+                self.state.set("index_owned", None)  # nothing was put in place: no claim on that name
             if aside is not None:
                 try:
                     os.rename(aside, target)
