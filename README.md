@@ -11,6 +11,7 @@
 
 <p align="center">
   <a href="../../releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/zoranmod/skyfold?label=download"></a>
+  <a href="../../releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/zoranmod/skyfold/Skyfold-windows.zip?label=downloads"></a>
   <a href="LICENSE"><img alt="License: GPL v3" src="https://img.shields.io/badge/license-GPLv3-blue"></a>
   <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4">
 </p>
