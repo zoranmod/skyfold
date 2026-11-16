@@ -64,7 +64,17 @@ def save(widget, name: str) -> None:
     widget.show()
     for _ in range(3):
         app.processEvents()
-    widget.grab().save(str(OUT / name))
+    scale = float(os.environ.get("SKYFOLD_SHOT_SCALE", "1"))  # e.g. 2: sharp images for posts
+    if scale == 1:
+        widget.grab().save(str(OUT / name))
+    else:
+        from PySide6.QtGui import QImage
+
+        img = QImage(int(widget.width() * scale), int(widget.height() * scale), QImage.Format_ARGB32)
+        img.setDevicePixelRatio(scale)
+        img.fill(0)
+        widget.render(img)
+        img.save(str(OUT / name))
     print(name, widget.width(), widget.height())
     widget.hide()
     widget.deleteLater()
