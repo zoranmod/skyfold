@@ -188,7 +188,11 @@ BS: dict[str, str] = {
     "it isn't an ordinary file": "nije običan fajl",
     "Could not open sign-in: {error}": "Nije moguće otvoriti prijavu: {error}",
     "Waiting for Apple… this may take a few minutes. You can close this window; it will return when Apple answers. Cancel stops sign-in.":
-        "Čekanje na Apple… ovo može potrajati nekoliko minuta. Možete zatvoriti prozor; ponovo će se prikazati kada Apple odgovori. Odustani prekida prijavu.",
+        "Čekanje na Apple… to može potrajati i nekoliko minuta. Možeš zatvoriti ovaj prozor; ponovo će se pojaviti kad Apple odgovori. Otkaži prekida prijavu.",
+    "Apple didn't let the sign-in start right now (this happens after several attempts in a short time). Wait "
+    "about 15 minutes, then try again.":
+        "Apple trenutno nije dozvolio da prijava počne (to se dešava nakon više pokušaja u kratkom roku). "
+        "Pričekaj oko 15 minuta, pa pokušaj ponovo.",
     "Waiting for Apple… this can take up to a minute. Keep this window open: the code is asked for here.":
         "Čeka se Apple… to može potrajati do jedne minute. Ne zatvaraj ovaj prozor: ovdje se upisuje kod.",
     "Skyfold found a database journal without its database and couldn't keep a copy of it:\n{details}"

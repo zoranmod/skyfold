@@ -252,6 +252,12 @@ def start_login(apple_id: str, password: str) -> LoginStep:
         if _server_trouble(exc):  # an Apple outage, not a wrong password
             log.warning("Sign-in: Apple's servers failed: %s", _describe(exc))
             raise LoginError(t("Can't reach Apple's servers. Check your internet connection.")) from exc
+        if "initiate srp" in str(exc).lower():
+            # Apple refused to even start: the password wasn't checked yet. Usually after several
+            # sign-ins in a short time; it passes after a while.
+            log.warning("Sign-in not started by Apple: %s", _describe(exc))
+            raise LoginError(t("Apple didn't let the sign-in start right now (this happens after several "
+                               "attempts in a short time). Wait about 15 minutes, then try again.")) from exc
         log.warning("Sign-in rejected: %s", _describe(exc))
         raise LoginError(t("Wrong Apple ID or password.")) from exc
     except ex.PyiCloudConnectionException as exc:
