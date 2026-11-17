@@ -425,8 +425,11 @@ class Controller(QObject):
         self.req.applySettings.emit(self.settings.copy(), False, False)
 
     def _show_dialog(self, key: str, dlg) -> None:
+        from shiboken6 import isValid
+
+        self.flyout.hide()  # the topmost tray panel must also yield to an existing window
         old = self._dialogs.get(key)
-        if old is not None and old.isVisible():
+        if old is not None and isValid(old) and old.isVisible():
             log.info("Window %s is already open: brought to the front", key)
             if old.isMinimized():
                 old.showNormal()
@@ -442,23 +445,26 @@ class Controller(QObject):
     def open_login(self) -> None:
         try:
             Controller._open_login(self)  # (works for test doubles of the controller too)
-        except Exception:  # noqa: BLE001 - never silently: the log says why no window came
-            log.exception("Sign-in window couldn't be opened")
+        except Exception as exc:
+            from .safelog import brief, describe
+
+            log.error("Sign-in window couldn't be opened: %s", describe(exc))
+            self.flyout.hide()
+            warn(None, APP_NAME, t("Could not open sign-in: {error}", error=brief(exc)))
 
     def _open_login(self) -> None:
+        from shiboken6 import isValid
+
         old = self._dialogs.get("login")
-        try:
-            reuse = old is not None and not getattr(old, "finished_ok", True)
-        except RuntimeError:  # already destroyed
-            reuse = False
-        if reuse:  # one sign-in window only: a code Apple sent is entered in the window that asked for it
-            log.info("Sign-in window shown again")
-            old.reopen()
+        if old is not None and isValid(old) and not old._cancelled and not old._completed:
+            self.flyout.hide()
+            old._bring_forward()
+            log.info("Sign-in window reopened (existing attempt)")
             return
-        log.info("Sign-in window opened")
+        self._dialogs.pop("login", None)
         dlg = LoginDialog(self.settings.apple_id)
 
-        def logged_in(api, apple_id: str) -> None:
+        def commit(api, apple_id: str) -> None:
             _RedactEmails.remember(apple_id)
             if apple_id.lower() != (self.settings.apple_id or "").lower():
                 _close_stale_settings(self)  # it shows the other account's settings
@@ -473,11 +479,11 @@ class Controller(QObject):
                         None, APP_NAME, t("You signed in with another Apple ID. Turned off: {services}. Their folders hold the "
                                           "other account's files; choose a new, empty folder in Settings to turn them "
                                           "on again.", services=", ".join(turned_off))))
-            self._login_api = api  # Find My uses it right away, even while the worker is still busy
             auth.commit_login(api)  # the old session must not overwrite this one on disk
             self.worker.cancel()  # so the worker switches to the new sign-in now, not after a long pass
             self.settings.apple_id = apple_id
             self.settings.save()
+            self._login_api = api  # publish only after the session/settings have been saved
             self.req.applySettings.emit(self.settings.copy(), False, False)
             self.req.setApi.emit(api)
             self.flyout.set_account(apple_id)
@@ -487,8 +493,24 @@ class Controller(QObject):
             else:
                 self.flyout.show_at(self.tray.geometry())
 
+        def logged_in(api, apple_id: str) -> None:
+            try:
+                commit(api, apple_id)
+            except Exception as exc:
+                from .safelog import brief, describe
+
+                log.error("Sign-in completion failed: %s", describe(exc))
+                dlg._login_failed(brief(exc))
+
+        def finished(_result) -> None:
+            if self._dialogs.get("login") is dlg:
+                self._dialogs.pop("login", None)
+
         dlg.loggedIn.connect(logged_in)
+        dlg.finished.connect(finished)
         self._show_dialog("login", dlg)
+        dlg._bring_forward()
+        log.info("Sign-in window opened")
 
     def open_settings(self, page: int = 0) -> None:
         dlg = SettingsDialog(self.settings, self.c, storage=getattr(self.worker, "_storage", None),

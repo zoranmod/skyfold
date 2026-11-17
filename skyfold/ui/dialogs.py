@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 from .. import auth
 from ..config import APP_IN_CLOUD, APP_NAME, FOLDER_STRUCTURES, PRIVATE_DIR, VERSION, Settings, check_photos_dir, default_photos_dir
 from ..i18n import LANGUAGES, language, t
+from ..safelog import brief, describe
 from .icons import app_icon, draw_logo, glyph
 
 log = logging.getLogger(__name__)
@@ -68,15 +69,17 @@ class _Task(QRunnable):
 
     def run(self) -> None:
         if self.epoch != _EPOCH[0]:
+            self.fn = None
             return  # the app is quitting
         try:
             result = self.fn()
         except Exception as exc:  # noqa: BLE001
-            from ..safelog import brief
-
+            log.warning("Background request failed: %s", describe(exc))
             self.signals.failed.emit(brief(exc))
         else:
             self.signals.done.emit(result)
+        finally:
+            self.fn = None  # release captured passwords/codes as soon as the request ends
 
 
 class _Relay(QObject):
@@ -93,11 +96,18 @@ class _Relay(QObject):
 
     @Slot(object)
     def done(self, result: Any) -> None:
-        self._on_done(result)
+        try:
+            self._on_done(result)
+        except Exception as exc:  # a UI callback must release the busy state too
+            log.error("Background result callback failed: %s", describe(exc))
+            self.failed(brief(exc))
 
     @Slot(str)
     def failed(self, msg: str) -> None:
-        self._on_fail(msg)
+        try:
+            self._on_fail(msg)
+        except Exception as exc:
+            log.error("Background failure callback failed: %s", describe(exc))
 
 
 def run_async(fn: Callable[[], Any], on_done: Callable[[Any], None], on_fail: Callable[[str], None]) -> _Task:
@@ -106,7 +116,12 @@ def run_async(fn: Callable[[], Any], on_done: Callable[[Any], None], on_fail: Ca
     task.relay = _Relay(on_done, on_fail)
     task.signals.done.connect(task.relay.done, Qt.QueuedConnection)
     task.signals.failed.connect(task.relay.failed, Qt.QueuedConnection)
-    QThreadPool.globalInstance().start(task)
+    try:
+        QThreadPool.globalInstance().start(task)
+    except Exception as exc:
+        task.fn = None
+        log.error("Background request could not start: %s", describe(exc))
+        task.relay.failed(brief(exc))
     return task
 
 
@@ -333,8 +348,9 @@ class LoginDialog(_Dialog):
         self.api: Any = None
         self._task: Any = None
         self._cancelled = False
-        self.finished_ok = False
-        self._waiting = False  # Apple is answering the Apple ID and password
+        self._completed = False
+        self._completion_failed = False
+        self._waiting = False  # either credentials or code verification is in flight
         self._cancel_pressed = False
 
         frame = QVBoxLayout(self)  # a scrolling body: fits a small screen at high scaling
@@ -401,8 +417,8 @@ class LoginDialog(_Dialog):
         l2.addWidget(self.code)
         self.pages.addWidget(p2)
 
-        self.wait_note = _label(t("Waiting for Apple… this can take up to a minute. Keep this window open: "
-                                  "the code is asked for here."), "Hint", True)
+        self.wait_note = _label(t("Waiting for Apple… this may take a few minutes. You can close this window; "
+                                  "it will return when Apple answers. Cancel stops sign-in."), "Hint", True)
         self.wait_note.setAlignment(Qt.AlignCenter)
         self.wait_note.hide()
         outer.addWidget(self.wait_note)
@@ -450,6 +466,8 @@ class LoginDialog(_Dialog):
             self._submit_code()
 
     def _submit_credentials(self) -> None:
+        if self._waiting or self._cancelled or self._completed or getattr(self, "_page1", None) is not None:
+            return
         email, pw = self.email.text().strip(), self.password.text()
         if not email or not pw:
             self._show_error(t("Enter your Apple ID and password."))
@@ -459,16 +477,13 @@ class LoginDialog(_Dialog):
         self.wait_note.show()
         self._shrink()
         self._waiting = True
+        self.password.clear()
 
         def done(step: auth.LoginStep) -> None:
             self._waiting = False
             if self._cancelled:
-                # Apple has accepted the password (and may have sent a code to your iPhone already):
-                # that is never thrown away. The window comes back for the code (Cancel closes it).
-                log.info("Sign-in: Apple answered after the window was closed; shown again")
-                self._cancelled = False
-                self._cancel_pressed = False
-            self.finished_ok = False
+                log.info("Sign-in: cancelled before Apple answered; result not used")
+                return  # cancelled meanwhile: this sign-in is not used
             self.password.clear()
             self.api = step.api
             if step.needs_code:
@@ -488,33 +503,41 @@ class LoginDialog(_Dialog):
                 self._finish()
 
         def fail(msg: str) -> None:
-            self._waiting = False
-            if self._cancelled:
-                return
-            if not self.isVisible():
-                self._bring_forward()  # (closed while waiting: the reason is shown here)
-            self.wait_note.hide()
-            self._busy(False, t("Sign in"))
-            self._show_error(msg)
-            self.password.selectAll()
-            self.password.setFocus()
+            self._login_failed(msg)
 
         self._task = run_async(lambda: auth.start_login(email, pw), done, fail)
 
     def _submit_code(self) -> None:
         code = self.code.text().replace(" ", "")
-        if len(code) != 6 or not self.ok.isEnabled():
+        if len(code) != 6 or not self.ok.isEnabled() or self._waiting or self._cancelled or self._completed:
             return
         self._show_error("")
         self._busy(True, t("Checking…"))
+        self._waiting = True
+        self.wait_note.show()
+        self._shrink()
+        api = self.api  # the task belongs to this attempt, even if Cancel is clicked
 
         def fail(msg: str) -> None:
-            self._busy(False, t("Confirm"))
+            if self._cancelled:
+                self._waiting = False
+                return
             self.code.clear()
-            self.code.setFocus()
-            self._show_error(msg)
+            self._login_failed(msg)
 
-        self._task = run_async(lambda: auth.submit_code(self.api, code), lambda _r: self._finish(), fail)
+        self._task = run_async(lambda: auth.submit_code(api, code), lambda _r: self._finish(), fail)
+
+    def _login_failed(self, msg: str) -> None:
+        """msg has already passed through safelog.brief; never display raw server errors."""
+        self._waiting = False
+        if self._cancelled or self._completed:
+            return
+        self._completion_failed = True
+        log.warning("Sign-in failed: %s", msg)
+        self.wait_note.hide()
+        self._busy(False, t("Confirm") if getattr(self, "_page1", None) is not None else t("Sign in"))
+        self._show_error(msg)
+        self._bring_forward()
 
     def _bring_forward(self) -> None:
         """Shown, not minimised, in front, and its taskbar button flashing."""
@@ -523,6 +546,11 @@ class LoginDialog(_Dialog):
         self.show()
         self.raise_()
         self.activateWindow()
+        if self.windowHandle() is not None:
+            self.windowHandle().requestActivate()
+        field = self.code if getattr(self, "_page1", None) is not None else (self.password if self.email.text() else self.email)
+        if field.isEnabled():
+            field.setFocus(Qt.OtherFocusReason)
         QApplication.alert(self)
 
     def _cancel_sign_in(self) -> None:
@@ -530,20 +558,26 @@ class LoginDialog(_Dialog):
         self.reject()
 
     def reject(self) -> None:
-        if self._waiting and not self._cancel_pressed:
-            # The close button or Esc while Apple is still answering: the window only steps aside.
-            # Apple may be sending a code to your iPhone right now; it comes back for that code.
+        if not self._cancel_pressed:
+            # Preserve the entire attempt, including a code already sent by Apple.
             self.hide()
             return
-        self._cancelled = True  # Cancel (or closing it when nothing is running): this sign-in is not used
+        self._cancelled = True
+        self.password.clear()
+        self.code.clear()
+        log.info("Sign-in cancelled by user")
         super().reject()
 
     def _finish(self) -> None:
-        if self._cancelled:
-            return  # the dialog was cancelled while Apple was still checking the code
-        self.finished_ok = True
+        self._waiting = False
+        if self._cancelled or self._completed:
+            return  # the dialog was cancelled while Apple was still answering
+        self._completion_failed = False
         self.loggedIn.emit(self.api, self.email.text().strip())
-        self.accept()
+        if not self._completion_failed:
+            self._completed = True
+            self.code.clear()
+            self.accept()
 
     def reopen(self) -> None:
         """Clicking Sign in again: this same window (with the code step, if Apple sent one)."""

@@ -111,6 +111,11 @@ def main(report: str) -> int:
     else:
         lines.append("SKIP  sign-in round trip (run with --online to include it)")
 
+    if "--selftest-ui" in sys.argv:
+        from ._signin_selftest import run
+
+        check("offline sign-in GUI", lambda: run(report))
+
     lines.append("RESULT: " + ("ALL OK" if ok else "FAILURES"))
     Path(report).write_text("\n".join(lines), encoding="utf-8")
     return 0 if ok else 1

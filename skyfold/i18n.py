@@ -186,6 +186,9 @@ BS: dict[str, str] = {
         "Oznaka sinhronizacije u {path} se ne može provjeriti: {error}. Sinhronizacija je zaustavljena da se ništa ne promijeni greškom; pokušava se ponovo sljedeći put.",
     "it appeared while it was being checked": "pojavila se dok se provjeravala",
     "it isn't an ordinary file": "nije običan fajl",
+    "Could not open sign-in: {error}": "Nije moguće otvoriti prijavu: {error}",
+    "Waiting for Apple… this may take a few minutes. You can close this window; it will return when Apple answers. Cancel stops sign-in.":
+        "Čekanje na Apple… to može potrajati i nekoliko minuta. Možeš zatvoriti ovaj prozor; ponovo će se pojaviti kad Apple odgovori. Otkaži prekida prijavu.",
     "Apple didn't let the sign-in start right now (this happens after several attempts in a short time). Wait "
     "about 15 minutes, then try again.":
         "Apple trenutno nije dozvolio da prijava počne (to se dešava nakon više pokušaja u kratkom roku). "
