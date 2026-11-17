@@ -499,7 +499,6 @@ class LoginDialog(_Dialog):
                 self._busy(False, t("Confirm"))
                 self.code.setFocus()
             else:
-                self._bring_forward()
                 self._finish()
 
         def fail(msg: str) -> None:
@@ -578,12 +577,6 @@ class LoginDialog(_Dialog):
             self._completed = True
             self.code.clear()
             self.accept()
-
-    def reopen(self) -> None:
-        """Clicking Sign in again: this same window (with the code step, if Apple sent one)."""
-        self._cancelled = False
-        self._cancel_pressed = False
-        self._bring_forward()
 
 
 # settings -----------------------------------------------------------------------

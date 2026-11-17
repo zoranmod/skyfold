@@ -35,12 +35,12 @@ def test_the_code_step_comes_back_into_sight_when_the_window_was_hidden(monkeypa
     d.reject()
 
 
-def test_a_code_apple_sent_is_never_thrown_away_even_after_cancel(monkeypatch):
+def test_a_cancelled_sign_in_is_not_used(monkeypatch):
     app, d = _dialog(monkeypatch)
     d._submit_credentials()
-    d.cancel.click()  # given up while Apple was slow - but Apple sends the code to the iPhone anyway
-    _wait(app, lambda: d.isVisible())
-    assert d.isVisible() and d.ok.text() == dialogs.t("Confirm") and not d._cancelled
+    d.cancel.click()
+    _wait(app, lambda: False, 0.6)
+    assert not d.isVisible() and getattr(d, "_page1", None) is None
 
 
 def test_closing_the_window_while_apple_answers_only_steps_aside(monkeypatch):
