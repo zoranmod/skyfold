@@ -9,8 +9,8 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ### Changed
 - Notes: iPhone (HEIC) photos are shown at full size: the original is turned into a JPEG with Windows' own HEIF decoder (the "HEIF Image Extensions" most PCs have). Without it, or on any problem, the small preview stays as before.
-- Notes: pen drawings show the whole drawing: the full image (often narrow and tall) is used whenever it has more pixels than the square preview, which only showed a crop. Only formats a browser can show are used.
-- Notes: once after the update, only notes with iPhone photos or drawings are exported again to get the sharper images; other notes are left as they are.
+- Notes: pen drawings show the whole drawing: the full image (often narrow and tall, or wide and low) is used whenever its longer side is longer than the small square preview's. Only formats a browser can show are used.
+- Notes: once after the update, only notes whose photos or drawings are still shown as small previews are exported again; other notes are left as they are.
 
 ## [1.0.6] - 2026-11-16 (public beta)
 

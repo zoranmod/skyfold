@@ -93,9 +93,50 @@ def test_only_notes_with_photos_or_drawings_are_exported_again(notes_env):
     s.run()
     rows = s.state.all()
     sketch = root / rows["n2"][1]
-    sketch.write_text(sketch.read_text(encoding="utf-8") + '<img data-uti="com.apple.paper" src="x">',
-                      encoding="utf-8")
+    sketch.write_text(sketch.read_text(encoding="utf-8") + '<img data-uti="com.apple.paper" src="x.png">',
+                      encoding="utf-8")  # (a preview that can't even be read counts as small)
     s.state.set("quality", None)
     s._refresh_for_quality()
     rows = s.state.all()
     assert rows["n2"][4] is None and rows["n1"][4] is not None and s.state.get("quality") == ne.QUALITY
+
+
+def test_a_wide_low_drawing_replaces_the_square_preview(tmp_path):
+    from PySide6.QtGui import QColor, QImage
+
+    assets = tmp_path / ne.ASSETS / "n1"
+    assets.mkdir(parents=True)
+    preview = QImage(768, 768, QImage.Format_RGB32)
+    preview.fill(QColor("white"))
+    preview.save(str(assets / "prev"), "PNG")
+    page = tmp_path / "Note.html"
+    page.write_text('<img data-uti="com.apple.paper" data-id="D1" src="_assets/n1/prev">', encoding="utf-8")
+
+    def download(_url, folder):
+        out = folder / "full"
+        img = QImage(1536, 256, QImage.Format_RGB32)
+        img.fill(QColor("blue"))
+        img.save(str(out), "PNG")
+        return str(out)
+
+    assert ne.upgrade_sketches(page, {"D1": "u"}, download) == 1
+    assert "full.png" in page.read_text(encoding="utf-8")
+
+
+def test_a_full_drawing_smaller_than_the_preview_is_not_used(tmp_path):
+    from PySide6.QtGui import QColor, QImage
+
+    assets = tmp_path / ne.ASSETS / "n1"
+    assets.mkdir(parents=True)
+    QImage(768, 768, QImage.Format_RGB32).save(str(assets / "prev"), "PNG")
+    page = tmp_path / "Note.html"
+    page.write_text('<img data-uti="com.apple.paper" data-id="D1" src="_assets/n1/prev">', encoding="utf-8")
+
+    def download(_url, folder):
+        out = folder / "full"
+        img = QImage(600, 300, QImage.Format_RGB32)
+        img.fill(QColor("blue"))
+        img.save(str(out), "PNG")
+        return str(out)
+
+    assert ne.upgrade_sketches(page, {"D1": "u"}, download) == 0

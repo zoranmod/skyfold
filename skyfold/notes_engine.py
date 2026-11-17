@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 
 MARKER = ".skyfold-notes"
 FORMAT = "7"  # bump to re-export all notes when the page format improves
-QUALITY = "1"  # bump to re-export only notes with iPhone photos or drawings (sharper images)
+QUALITY = "2"  # bump to re-export notes whose photos or drawings are still shown as small previews
 ASSETS = "_assets"
 INDEX = "Notes.html"
 UNSAFE = re.compile(r'[\x00-\x1f<>:"/\\|?*]+')
@@ -647,9 +647,12 @@ def upgrade_sketches(page: Path, fallbacks: dict[str, str], download, made: set 
             del reader
             preview = QImageReader(str(current)).size()
             preview_w = preview.width()
-            # The preview is a square crop of the canvas; the full bitmap is the whole drawing, often
-            # narrower but much taller. More pixels in all wins; a browser must be able to show it.
-            more = size.width() * size.height() > max(preview.width(), 0) * max(preview.height(), 0)
+            # The preview is a small square of the canvas; the full bitmap is the whole drawing, often
+            # narrow and tall, or wide and low. It wins when its longer side is longer (or, as long,
+            # when it has more pixels); a browser must be able to show it.
+            full_side, prev_side = max(size.width(), size.height()), max(preview.width(), preview.height(), 0)
+            more = full_side > prev_side or (full_side == prev_side and size.width() * size.height()
+                                             > max(preview.width(), 0) * max(preview.height(), 0))
             if not ok or not more or fmt.lower() not in ("png", "jpeg", "jpg", "gif", "webp"):
                 log.info("Drawing in %s: full image not used (readable=%s, %sx%s, format=%s, %d bytes; "
                          "preview %s px)", page.name, ok, size.width(), size.height(), value(fmt, _IMAGE_FORMATS), new.stat().st_size,
@@ -901,17 +904,34 @@ class NotesSyncer:
             self.state.set(key, None)
 
     def _refresh_for_quality(self) -> None:
-        """Once per QUALITY: notes whose page shows an iPhone (HEIC) photo or a pen drawing are
-        exported again (sharper images); all others are left as they are."""
+        """Once per QUALITY: notes whose page still shows an iPhone (HEIC) photo or a pen drawing
+        as a small preview are exported again (sharper images); all others are left as they are."""
+        import urllib.parse
+
+        from PySide6.QtGui import QImageReader
+
+        def small(page: Path, tag: str) -> bool:
+            src = re.search(r'\ssrc="([^"]+)"', tag)
+            if not src or src.group(1).startswith(("http:", "https:", "data:")):
+                return False
+            f = page.parent / urllib.parse.unquote(src.group(1)).replace("\\", "/")
+            if 'data-uti="public.hei' in tag:
+                return f.suffix.lower() != ".jpg"  # not yet the full-size JPEG
+            size = QImageReader(str(f)).size()
+            return max(size.width(), size.height()) <= 768  # still the square preview
+
         for nid, row in self.state.all().items():
             rel = row[1]
             if not rel:
                 continue
+            page = self.root / rel
             try:
-                text = (self.root / rel).read_text(encoding="utf-8", errors="replace")
+                text = page.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            if 'data-uti="public.hei' in text or 'data-uti="com.apple.paper"' in text:
+            tags = [m.group(0) for m in IMG_TAG.finditer(text)
+                    if 'data-uti="public.hei' in m.group(0) or 'data-uti="com.apple.paper"' in m.group(0)]
+            if any(small(page, tag) for tag in tags):
                 self.state.put(nid, row[1], row[2], row[3], None, bool(row[5]))
         self.state.set("cursor", None)
         self.state.set("quality", QUALITY)
