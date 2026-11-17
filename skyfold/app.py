@@ -427,6 +427,9 @@ class Controller(QObject):
     def _show_dialog(self, key: str, dlg) -> None:
         old = self._dialogs.get(key)
         if old is not None and old.isVisible():
+            log.info("Window %s is already open: brought to the front", key)
+            if old.isMinimized():
+                old.showNormal()
             old.raise_()
             old.activateWindow()
             return
@@ -437,6 +440,13 @@ class Controller(QObject):
         dlg.activateWindow()
 
     def open_login(self) -> None:
+        try:
+            Controller._open_login(self)  # (works for test doubles of the controller too)
+        except Exception:  # noqa: BLE001 - never silently: the log says why no window came
+            log.exception("Sign-in window couldn't be opened")
+
+    def _open_login(self) -> None:
+        log.info("Sign-in window opened")
         dlg = LoginDialog(self.settings.apple_id)
 
         def logged_in(api, apple_id: str) -> None:

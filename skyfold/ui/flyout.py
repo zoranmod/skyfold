@@ -6,6 +6,8 @@ import os
 import sys
 import time
 
+import logging
+
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
@@ -26,6 +28,8 @@ from ..i18n import t
 from ..worker import fmt_time
 from .icons import STATE_COLORS, glyph
 from .theme import state_color
+
+log = logging.getLogger(__name__)
 
 STATE_TITLES = {
     "idle": t("Everything is in sync"),
@@ -578,8 +582,16 @@ class Flyout(QWidget):
         head.addWidget(self.gear, 0, Qt.AlignVCenter)
         root.addLayout(head)
 
-        # status card
-        card = QFrame()
+        # status card (when it says "Sign-in required", clicking it signs in)
+        flyout = self
+
+        class _Card(QFrame):
+            def mouseReleaseEvent(self, e) -> None:  # noqa: N802 - Qt naming
+                if flyout.state == "auth" and e.button() == Qt.LeftButton:
+                    flyout.login.emit()
+                super().mouseReleaseEvent(e)
+
+        card = _Card()
         card.setObjectName("Card")
         self.status_card = card
         cl = QVBoxLayout(card)
@@ -776,6 +788,7 @@ class Flyout(QWidget):
 
     # state updates -------------------------------------------------------------
     def _on_sync_clicked(self) -> None:
+        log.info("Panel: main button clicked (state %s)", self.state)
         if self.state == "syncing":
             self.cancelSync.emit()
         elif self.state == "auth":
