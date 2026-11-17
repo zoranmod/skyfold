@@ -791,6 +791,12 @@ class NotesSyncer:
                 self._remove_leftover_pages(res)
                 self.state.set("orphan_sweep", "1")
                 self.write_index()
+            elif self.state.get("legacy_index") != "1":
+                # once: a Notes.html from Skyfold 1.0.5 or earlier is brought up to date right away,
+                # not only after the next change in Notes
+                self.state.set("legacy_index", "1")
+                if not (self.state.get("index_owned") or self.state.get("index_digest")):
+                    self.write_index()
             self.state.set("last_sync", now_iso())  # checked, nothing changed: still a check
             return res
         res.full = full or not stored

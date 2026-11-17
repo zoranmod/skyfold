@@ -35,3 +35,16 @@ def test_an_old_style_index_of_other_notes_is_left_alone(notes_env):
     remote.put("n2", "B")
     s.run()
     assert "Someone else" in index.read_text(encoding="utf-8") and "Notes.html" not in trashed
+
+
+def test_an_earlier_index_is_brought_up_to_date_without_a_change_in_notes(notes_env):
+    s, remote, root, trashed = notes_env
+    remote.put("n1", "A")
+    s.run()
+    index = root / ne.INDEX
+    index.write_text(LEGACY % "Notes/A.html", encoding="utf-8")
+    s.state.set("index_owned", None)
+    s.state.set("index_digest", None)
+    s.state.set("legacy_index", None)
+    s.run()  # nothing changed in Notes
+    assert ne.INDEX_MARK in index.read_text(encoding="utf-8")
