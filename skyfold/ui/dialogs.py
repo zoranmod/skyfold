@@ -429,6 +429,10 @@ class LoginDialog(_Dialog):
         btns = QHBoxLayout()
         self.cancel = QPushButton(t("Cancel"))
         self.cancel.clicked.connect(self._cancel_sign_in)
+        # Enter must never reach Cancel: when the field with the focus is locked while Apple answers,
+        # Qt moves the focus to the next button and an "auto default" button takes over Enter.
+        self.cancel.setAutoDefault(False)
+        self.cancel.setFocusPolicy(Qt.ClickFocus)
         self.ok = QPushButton(t("Sign in"))
         self.ok.setObjectName("Primary")
         self.ok.setDefault(True)
@@ -441,6 +445,8 @@ class LoginDialog(_Dialog):
         self._shrink()
 
     def _busy(self, busy: bool, text: str | None = None) -> None:
+        if busy:
+            self.setFocus(Qt.OtherFocusReason)  # keep the focus off the buttons while fields are locked
         self.ok.setEnabled(not busy)
         self.email.setEnabled(not busy)
         self.password.setEnabled(not busy)
