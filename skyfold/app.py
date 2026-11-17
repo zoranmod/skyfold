@@ -446,6 +446,15 @@ class Controller(QObject):
             log.exception("Sign-in window couldn't be opened")
 
     def _open_login(self) -> None:
+        old = self._dialogs.get("login")
+        try:
+            reuse = old is not None and not getattr(old, "finished_ok", True)
+        except RuntimeError:  # already destroyed
+            reuse = False
+        if reuse:  # one sign-in window only: a code Apple sent is entered in the window that asked for it
+            log.info("Sign-in window shown again")
+            old.reopen()
+            return
         log.info("Sign-in window opened")
         dlg = LoginDialog(self.settings.apple_id)
 

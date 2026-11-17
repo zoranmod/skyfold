@@ -35,12 +35,12 @@ def test_the_code_step_comes_back_into_sight_when_the_window_was_hidden(monkeypa
     d.reject()
 
 
-def test_a_cancelled_sign_in_is_not_used(monkeypatch):
+def test_a_code_apple_sent_is_never_thrown_away_even_after_cancel(monkeypatch):
     app, d = _dialog(monkeypatch)
     d._submit_credentials()
-    d.cancel.click()
-    _wait(app, lambda: False, 0.6)
-    assert not d.isVisible() and getattr(d, "_page1", None) is None
+    d.cancel.click()  # given up while Apple was slow - but Apple sends the code to the iPhone anyway
+    _wait(app, lambda: d.isVisible())
+    assert d.isVisible() and d.ok.text() == dialogs.t("Confirm") and not d._cancelled
 
 
 def test_closing_the_window_while_apple_answers_only_steps_aside(monkeypatch):
@@ -54,13 +54,25 @@ def test_closing_the_window_while_apple_answers_only_steps_aside(monkeypatch):
     assert d._cancelled and not d.isVisible()
 
 
-def test_the_cancel_button_stops_a_sign_in_that_is_still_running(monkeypatch):
-    app, d = _dialog(monkeypatch)
-    d._submit_credentials()
-    d.cancel.setEnabled(True)
-    d.cancel.click()
-    _wait(app, lambda: False, 0.6)
-    assert d._cancelled and not d.isVisible() and getattr(d, "_page1", None) is None
+def test_signing_in_again_shows_the_same_window_with_its_code_step(monkeypatch):
+    from types import SimpleNamespace
+    from skyfold import app as A
+    from skyfold.config import Settings
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(auth, "start_login", lambda email, pw: auth.LoginStep(object(), True, "Code"))
+    ctl = SimpleNamespace(settings=Settings(apple_id="someone@example.invalid"), _dialogs={},
+                          flyout=SimpleNamespace(hide=lambda: None))
+    ctl._show_dialog = lambda k, d: A.Controller._show_dialog(ctl, k, d)
+    A.Controller.open_login(ctl)
+    first = ctl._dialogs["login"]
+    first.password.setText("x")
+    first._submit_credentials()
+    _wait(app, lambda: first.ok.text() == dialogs.t("Confirm"))
+    first.hide()  # lost behind other windows, or closed
+    A.Controller.open_login(ctl)  # Sign in clicked again
+    assert ctl._dialogs["login"] is first and first.isVisible() and first.ok.text() == dialogs.t("Confirm")
+    first.cancel.click()
 
 
 def test_apple_refusing_to_start_is_not_called_a_wrong_password(monkeypatch):

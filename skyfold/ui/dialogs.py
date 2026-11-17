@@ -333,6 +333,7 @@ class LoginDialog(_Dialog):
         self.api: Any = None
         self._task: Any = None
         self._cancelled = False
+        self.finished_ok = False
         self._waiting = False  # Apple is answering the Apple ID and password
         self._cancel_pressed = False
 
@@ -462,8 +463,12 @@ class LoginDialog(_Dialog):
         def done(step: auth.LoginStep) -> None:
             self._waiting = False
             if self._cancelled:
-                log.info("Sign-in: the window was closed before Apple answered; not used")
-                return  # cancelled meanwhile: this sign-in is not used
+                # Apple has accepted the password (and may have sent a code to your iPhone already):
+                # that is never thrown away. The window comes back for the code (Cancel closes it).
+                log.info("Sign-in: Apple answered after the window was closed; shown again")
+                self._cancelled = False
+                self._cancel_pressed = False
+            self.finished_ok = False
             self.password.clear()
             self.api = step.api
             if step.needs_code:
@@ -479,6 +484,7 @@ class LoginDialog(_Dialog):
                 self._busy(False, t("Confirm"))
                 self.code.setFocus()
             else:
+                self._bring_forward()
                 self._finish()
 
         def fail(msg: str) -> None:
@@ -534,9 +540,16 @@ class LoginDialog(_Dialog):
 
     def _finish(self) -> None:
         if self._cancelled:
-            return  # the dialog was cancelled while Apple was still answering
+            return  # the dialog was cancelled while Apple was still checking the code
+        self.finished_ok = True
         self.loggedIn.emit(self.api, self.email.text().strip())
         self.accept()
+
+    def reopen(self) -> None:
+        """Clicking Sign in again: this same window (with the code step, if Apple sent one)."""
+        self._cancelled = False
+        self._cancel_pressed = False
+        self._bring_forward()
 
 
 # settings -----------------------------------------------------------------------

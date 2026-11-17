@@ -154,6 +154,7 @@ QWidget#NavPane {{ background: {c['group']}; border-right: 1px solid {c['border'
 QDialog QFrame#Card {{ border: 1px solid {c['border']}; border-radius: 10px; }}
 QDialog QLabel#Section {{ font-size: 7.5pt; letter-spacing: 1.2px; }}
 QFrame#Card, QFrame#Tile {{ background: {c['group']}; border: none; border-radius: 11px; }}
+QFrame#Card[hot="true"] {{ background: {c['hover']}; }}
 QFrame#Row {{ background: transparent; border: none; border-radius: 9px; }}
 QFrame#Row:hover {{ background: {c['tile']}; }}
 QFrame#Row:focus {{ border: 2px solid {c['focus_ring']}; }}
