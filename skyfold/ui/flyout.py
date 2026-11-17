@@ -591,6 +591,20 @@ class Flyout(QWidget):
                     flyout.login.emit()
                 super().mouseReleaseEvent(e)
 
+            def enterEvent(self, e) -> None:  # noqa: N802 - Qt naming
+                if flyout.state == "auth":  # it can be clicked: it shows it, like the other rows
+                    self.setProperty("hot", True)
+                    self.style().unpolish(self)
+                    self.style().polish(self)
+                super().enterEvent(e)
+
+            def leaveEvent(self, e) -> None:  # noqa: N802 - Qt naming
+                if self.property("hot"):
+                    self.setProperty("hot", False)
+                    self.style().unpolish(self)
+                    self.style().polish(self)
+                super().leaveEvent(e)
+
         card = _Card()
         card.setObjectName("Card")
         self.status_card = card
@@ -827,6 +841,7 @@ class Flyout(QWidget):
         self.status_text.setVisible(bool(self.status_text.text()))
         self._dot_tip()
         self.status_card.setVisible(state != "idle")  # all in sync: the green badge says it
+        self.status_card.setCursor(Qt.PointingHandCursor if state == "auth" else Qt.ArrowCursor)
         syncing = state == "syncing"
         if not syncing:
             self.bar.hide()
