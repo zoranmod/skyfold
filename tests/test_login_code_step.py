@@ -61,3 +61,18 @@ def test_the_cancel_button_stops_a_sign_in_that_is_still_running(monkeypatch):
     d.cancel.click()
     _wait(app, lambda: False, 0.6)
     assert d._cancelled and not d.isVisible() and getattr(d, "_page1", None) is None
+
+
+def test_apple_refusing_to_start_is_not_called_a_wrong_password(monkeypatch):
+    import pytest
+    from pyicloud import exceptions as ex
+
+    class Refusing:
+        def __init__(self, *a, **k):
+            raise ex.PyiCloudFailedLoginException("Failed to initiate srp authentication.",
+                                                  ex.PyiCloudAPIResponseException("Bad Request", 400))
+
+    monkeypatch.setattr("pyicloud.PyiCloudService", Refusing)
+    with pytest.raises(auth.LoginError) as err:
+        auth.start_login("someone@example.invalid", "not a real password")
+    assert "15" in str(err.value) and "password" not in str(err.value).lower()
