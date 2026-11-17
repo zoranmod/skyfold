@@ -6,6 +6,7 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ### Fixed
 - Sign-in: when Apple took long to answer and the sign-in window was hidden or behind other windows meanwhile, the two-factor code step never appeared (Apple had already sent the code). The window now comes back to the front, with its taskbar button flashing; only Cancel or closing it stops the sign-in. While waiting it says that this can take up to a minute.
+- Sign-in: when Apple's check whether the session may read iCloud data fails with a server error (seen after a sign-in that stopped at the two-factor code), Skyfold no longer keeps retrying as if signed in: it renews the session quietly, and if that doesn't help it asks you to sign in again.
 
 ## [1.0.7] - 2026-11-17
 

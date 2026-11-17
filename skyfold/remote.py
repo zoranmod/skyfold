@@ -59,6 +59,29 @@ class Remote(Protocol):
     def download(self, resource: RemoteResource, dest: Path, on_bytes: Callable[[int], None]) -> None: ...
 
 
+_WEB_ACCESS_CHECKS = ("requestWebAccessState", "requestPCS", "enableDeviceConsentForPCS")
+
+
+def _web_access_check_failed(exc: Exception) -> bool:
+    """A server error (5xx) answered to Apple's web-access (PCS) check of the session."""
+    code = getattr(exc, "code", None)
+    try:
+        server_error = int(code) >= 500
+    except (TypeError, ValueError):
+        server_error = False
+    if not server_error:
+        return False
+    url = str(getattr(getattr(exc, "response", None), "url", "") or "")
+    if any(name in url for name in _WEB_ACCESS_CHECKS):
+        return True
+    tb = exc.__traceback__
+    while tb is not None:  # (no response kept: which call failed is seen from where it was raised)
+        if tb.tb_frame.f_code.co_name in ("_check_pcs_consent", "_send_pcs_request", "_request_pcs_for_service"):
+            return True
+        tb = tb.tb_next
+    return False
+
+
 def _translate(exc: Exception) -> Exception:
     """Map pyicloud errors onto the two conditions the UI cares about."""
     from pyicloud import exceptions as ex
@@ -79,6 +102,11 @@ def _translate(exc: Exception) -> Exception:
         ))
     code = getattr(exc, "code", None)
     if code in (401, 421, 450):
+        return AuthRequired(str(exc))
+    if _web_access_check_failed(exc):
+        # Apple's "may this session read the iCloud data?" check itself fails (seen as HTTP 500 after
+        # a sign-in that stopped at the two-factor code). The session looks valid but reads nothing:
+        # treated like an expired sign-in - renewed quietly first, then you are asked to sign in.
         return AuthRequired(str(exc))
     text = str(exc)
     if "ZONE_NOT_FOUND" in text or "PRIVATE_DB_DISABLED" in text or "ACCESS_DENIED" in text:
