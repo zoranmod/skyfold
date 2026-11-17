@@ -4,6 +4,9 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Fixed
+- Notes: Notes.html written by Skyfold 1.0.5 or earlier was never updated again after the upgrade to 1.0.6 (those versions kept no record that it was theirs), so notes moved to another folder kept showing in their old place. An index in that older format that lists this setup's own notes is taken back; the old page goes to the Recycle Bin.
+
 ## [1.0.6] - 2026-11-16 (public beta)
 
 ### Changed

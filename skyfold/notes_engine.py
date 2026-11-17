@@ -639,6 +639,19 @@ class NotesResult:
     held: bool = False  # a note failed again (reported before): the cursor waits so it is tried again
 
 
+def _legacy_index_of(p: Path, rows: list) -> bool:
+    """An index written by Skyfold 1.0.5 or earlier (its older format, without the owner mark that
+    1.0.6 writes) that lists at least one note page of this setup: those versions kept no record."""
+    try:
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    if INDEX_MARK in text[:4096] or not ("const KEY='skyfold-collapsed'" in text and "skyfold-theme" in text):
+        return False
+    return any(r[1] and json.dumps(r[1], ensure_ascii=False) in text for r in rows)
+
+
 def _is_our_index(p: Path) -> bool:
     """Ours = the owner mark near the top (since 1.0.7), or an index from an earlier Skyfold (its exact
     script line and style block, anywhere in the file)."""
@@ -1071,6 +1084,13 @@ class NotesSyncer:
             else:
                 self.state.set("index_owned", None)  # it never got there: no claim on that name
         was_owned = bool(self.state.get("index_owned") or self.state.get("index_digest"))
+        if present and not was_owned and _legacy_index_of(target, rows):
+            # Written by Skyfold 1.0.5 or earlier, which kept no record of it: an index in that older
+            # format that lists this setup's own note pages. Taken back; the old page goes to the
+            # Recycle Bin when the new one is put in place (nothing is lost).
+            log.info("Notes: taking back the Notes.html written by an earlier Skyfold")
+            self.state.set("index_owned", "1")
+            was_owned = True
         if present and not was_owned:
             # It looks like a Skyfold index, but this setup has no record of writing one here (a copy
             # brought into the folder, or the database is new). Looking like one isn't owning it.
