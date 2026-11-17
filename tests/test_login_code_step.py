@@ -38,6 +38,26 @@ def test_the_code_step_comes_back_into_sight_when_the_window_was_hidden(monkeypa
 def test_a_cancelled_sign_in_is_not_used(monkeypatch):
     app, d = _dialog(monkeypatch)
     d._submit_credentials()
-    d.reject()
+    d.cancel.click()
     _wait(app, lambda: False, 0.6)
     assert not d.isVisible() and getattr(d, "_page1", None) is None
+
+
+def test_closing_the_window_while_apple_answers_only_steps_aside(monkeypatch):
+    app, d = _dialog(monkeypatch)
+    d._submit_credentials()
+    d.close()  # the close button (or Esc) while waiting
+    assert not d.isVisible() and not d._cancelled
+    _wait(app, lambda: d.isVisible())
+    assert d.isVisible() and d.ok.text() == dialogs.t("Confirm")  # back, for the code
+    d.cancel.click()
+    assert d._cancelled and not d.isVisible()
+
+
+def test_the_cancel_button_stops_a_sign_in_that_is_still_running(monkeypatch):
+    app, d = _dialog(monkeypatch)
+    d._submit_credentials()
+    d.cancel.setEnabled(True)
+    d.cancel.click()
+    _wait(app, lambda: False, 0.6)
+    assert d._cancelled and not d.isVisible() and getattr(d, "_page1", None) is None

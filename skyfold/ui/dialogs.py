@@ -333,6 +333,8 @@ class LoginDialog(_Dialog):
         self.api: Any = None
         self._task: Any = None
         self._cancelled = False
+        self._waiting = False  # Apple is answering the Apple ID and password
+        self._cancel_pressed = False
 
         frame = QVBoxLayout(self)  # a scrolling body: fits a small screen at high scaling
         frame.setContentsMargins(0, 0, 0, 0)
@@ -409,7 +411,7 @@ class LoginDialog(_Dialog):
 
         btns = QHBoxLayout()
         self.cancel = QPushButton(t("Cancel"))
-        self.cancel.clicked.connect(self.reject)
+        self.cancel.clicked.connect(self._cancel_sign_in)
         self.ok = QPushButton(t("Sign in"))
         self.ok.setObjectName("Primary")
         self.ok.setDefault(True)
@@ -455,8 +457,10 @@ class LoginDialog(_Dialog):
         self._busy(True, t("Signing in…"))
         self.wait_note.show()
         self._shrink()
+        self._waiting = True
 
         def done(step: auth.LoginStep) -> None:
+            self._waiting = False
             if self._cancelled:
                 log.info("Sign-in: the window was closed before Apple answered; not used")
                 return  # cancelled meanwhile: this sign-in is not used
@@ -478,8 +482,11 @@ class LoginDialog(_Dialog):
                 self._finish()
 
         def fail(msg: str) -> None:
+            self._waiting = False
             if self._cancelled:
                 return
+            if not self.isVisible():
+                self._bring_forward()  # (closed while waiting: the reason is shown here)
             self.wait_note.hide()
             self._busy(False, t("Sign in"))
             self._show_error(msg)
@@ -512,8 +519,17 @@ class LoginDialog(_Dialog):
         self.activateWindow()
         QApplication.alert(self)
 
+    def _cancel_sign_in(self) -> None:
+        self._cancel_pressed = True
+        self.reject()
+
     def reject(self) -> None:
-        self._cancelled = True  # Cancel, the close button or Esc: a sign-in still running is not used
+        if self._waiting and not self._cancel_pressed:
+            # The close button or Esc while Apple is still answering: the window only steps aside.
+            # Apple may be sending a code to your iPhone right now; it comes back for that code.
+            self.hide()
+            return
+        self._cancelled = True  # Cancel (or closing it when nothing is running): this sign-in is not used
         super().reject()
 
     def _finish(self) -> None:
