@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 
 MARKER = ".skyfold-notes"
 FORMAT = "7"  # bump to re-export all notes when the page format improves
+QUALITY = "1"  # bump to re-export only notes with iPhone photos or drawings (sharper images)
 ASSETS = "_assets"
 INDEX = "Notes.html"
 UNSAFE = re.compile(r'[\x00-\x1f<>:"/\\|?*]+')
@@ -141,16 +142,18 @@ class ICloudNotes:
             exporter = NoteExporter(Recording(), config=ExportConfig(assets_dir=str(assets_dir), full_page=True))
             _SKETCH_FALLBACKS.clear()
             _SKETCH_INFO.clear()
+            _HEIC_FULL.clear()
+            _ATTACHMENT_KEYS.clear()
             if not filename.startswith(STAGE_PREFIX):
                 _CURRENT_NOTE[0] = str(out_dir.name + "/" + filename)
             if not exporter.export(record, output_dir=str(out_dir), filename=filename):
                 raise SyncError(t("Note has no content"))
-            if _SKETCH_FALLBACKS:
-                page = out_dir / (filename if filename.lower().endswith(".html") else filename + ".html")
-                if page.exists():
-                    fallbacks = dict(_SKETCH_FALLBACKS)
-                    upgrade_sketches(page, fallbacks, lambda url, folder: raw.download_asset_to(url, str(folder)),
-                                     made=made, dirs=dirs)
+            page = out_dir / (filename if filename.lower().endswith(".html") else filename + ".html")
+            fetch = lambda url, folder: raw.download_asset_to(url, str(folder))  # noqa: E731
+            if _SKETCH_FALLBACKS and page.exists():
+                upgrade_sketches(page, dict(_SKETCH_FALLBACKS), fetch, made=made, dirs=dirs)
+            if page.exists() and "public.hei" in page.read_text(encoding="utf-8", errors="replace"):
+                upgrade_heic(page, dict(_HEIC_FULL), fetch, made=made, dirs=dirs)
         self._call(run)
 
 
@@ -196,7 +199,8 @@ def _prefer_sharpest_previews() -> None:
 
 
 # Photos the browser can show as they are; for these the full image beats any preview.
-FULL_IMAGE_UTIS = {"public.jpeg", "public.png", "public.gif", "public.webp", "public.bmp"}
+FULL_IMAGE_UTIS = {"public.jpeg", "public.jpg", "public.png", "public.gif", "public.webp", "public.bmp"}
+HEIC_UTIS = {"public.heic", "public.heif"}  # iPhone photos: shown as a JPEG made from the original
 
 
 def _prefer_full_images() -> None:
@@ -217,6 +221,9 @@ def _prefer_full_images() -> None:
                 uti = ""
             if parent and url and uti in FULL_IMAGE_UTIS:
                 ds.set_primary_asset_url(parent, url)
+            elif parent and url and uti in HEIC_UTIS:  # a browser can't show it: converted after the export
+                for key in _ATTACHMENT_KEYS.get(parent, [parent]):
+                    _HEIC_FULL[key] = url
 
         ex._wire_media_to_parent = wire
     except Exception as exc:  # noqa: BLE001
@@ -260,6 +267,8 @@ class _PerThread(MutableMapping):
 
 
 _SKETCH_FALLBACKS: MutableMapping = _PerThread()
+_HEIC_FULL: MutableMapping = _PerThread()  # attachment id -> download URL of the full HEIC original
+_ATTACHMENT_KEYS: MutableMapping = _PerThread()  # attachment record name -> every id the page may use
 _SKETCH_INFO: MutableMapping = _PerThread()
 _CURRENT_NOTE = [""]  # file name of the note being exported (for the log)
 
@@ -282,6 +291,11 @@ def _prefer_vector_sketches() -> None:
                 if not uti:
                     enc = fields.get_value("UTIEncrypted")
                     uti = enc.decode("utf-8", "replace") if isinstance(enc, (bytes, bytearray)) else ""
+                if str(uti).lower() in HEIC_UTIS:  # the names the page may use for this photo
+                    _ATTACHMENT_KEYS[rec.recordName] = [rec.recordName] + [
+                        k for k in (getattr(fields.get_field(n) or (), "value", None)
+                                    for n in ("AttachmentIdentifier", "attachmentIdentifier", "Identifier"))
+                        if isinstance(k, str) and k]
                 if str(uti).lower() != "com.apple.paper":
                     return
                 try:  # for the log when a drawing stays small: which images does Apple keep for it?
@@ -488,6 +502,117 @@ def _file_identity(p: Path) -> tuple[int, int] | None:
     return (st.st_dev, st.st_ino) if stat.S_ISREG(st.st_mode) and st.st_ino else None
 
 
+_HEIC_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName PresentationCore
+$in = [IO.File]::OpenRead($env:SKYFOLD_HEIC_IN)
+try {
+  $dec = [Windows.Media.Imaging.BitmapDecoder]::Create($in, [Windows.Media.Imaging.BitmapCreateOptions]::None, [Windows.Media.Imaging.BitmapCacheOption]::OnLoad)
+} finally { $in.Close() }
+$rgb = New-Object Windows.Media.Imaging.FormatConvertedBitmap($dec.Frames[0], [Windows.Media.PixelFormats]::Bgr24, $null, 0)
+$enc = New-Object Windows.Media.Imaging.JpegBitmapEncoder
+$enc.QualityLevel = 92
+$enc.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($rgb))
+$out = [IO.File]::Open($env:SKYFOLD_HEIC_OUT, [IO.FileMode]::Truncate, [IO.FileAccess]::Write)
+try { $enc.Save($out) } finally { $out.Close() }
+"""
+
+
+def heic_to_jpeg(src: Path, folder: Path) -> Path | None:
+    """A full-size JPEG of a HEIC photo, made by Windows' own HEIF decoder (the "HEIF Image
+    Extensions" most PCs have). Written only as a new file in `folder`. None when it can't be made
+    (no decoder, damaged photo, not Windows): then the small preview simply stays."""
+    import subprocess
+
+    if os.name != "nt":
+        return None
+    fd, tmp = tempfile.mkstemp(prefix=STAGE_PREFIX, suffix=".jpg", dir=folder)
+    os.close(fd)
+    tmp_path = Path(tmp)
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                            "-Command", _HEIC_SCRIPT],
+                           env={**os.environ, "SKYFOLD_HEIC_IN": str(src), "SKYFOLD_HEIC_OUT": str(tmp_path)},
+                           capture_output=True, timeout=180, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        from PySide6.QtGui import QImageReader
+
+        reader = QImageReader(str(tmp_path))
+        ok = r.returncode == 0 and reader.canRead() and reader.size().width() > 0
+        reader.setFileName("")
+        if not ok:
+            log.info("HEIC photo not converted (exit %s)", r.returncode)
+            tmp_path.unlink(missing_ok=True)
+            return None
+        return _place_new_name(tmp_path, folder / (src.stem + ".jpg")) or None
+    except Exception as exc:  # noqa: BLE001 - the preview stays
+        log.info("HEIC photo not converted: %s", exc)
+        tmp_path.unlink(missing_ok=True)
+        return None
+
+
+def upgrade_heic(page: Path, fulls: dict[str, str], download, made: set | None = None,
+                 dirs: set | None = None, convert=None) -> int:
+    """Show iPhone (HEIC) photos at full size: the original is downloaded and turned into a JPEG,
+    which replaces the small preview in the page. On any problem the preview stays. Files are only
+    ever written as new ones; the downloaded original and a preview this export made are removed."""
+    import urllib.parse
+
+    convert = convert or heic_to_jpeg
+    note_dir = page.parent
+    text = page.read_text(encoding="utf-8", errors="replace")
+    count = 0
+    owned_dirs = {Path(d).resolve() for d in (dirs or ())}
+
+    def ours(p: Path) -> bool:
+        try:
+            return bool(made) and p.parent.resolve() in owned_dirs and _file_identity(p) in made
+        except OSError:
+            return False
+
+    def swap(m: re.Match) -> str:
+        nonlocal count
+        tag, src = m.group(0), m.group(1)
+        uti = re.search(r'\sdata-uti="([^"]+)"', tag)
+        if not uti or uti.group(1).lower() not in HEIC_UTIS or src.startswith(("http:", "https:", "data:")):
+            return tag
+        current = (note_dir / urllib.parse.unquote(src).replace("\\", "/")).resolve()
+        if ASSETS not in current.parts:
+            return tag
+        original: Path | None = None
+        fetched = False
+        try:
+            if current.suffix.lower() in (".heic", ".heif"):
+                original = current  # the original itself is in the page (a browser can't show it)
+            else:
+                ident = re.search(r'\sdata-id="([^"]+)"', tag)
+                url = fulls.get(ident.group(1)) if ident else None
+                if not url:
+                    return tag
+                original = Path(download(url, current.parent))
+                fetched = True
+            jpg = convert(original, current.parent)
+        except Exception as exc:  # noqa: BLE001 - keep the preview
+            log.info("Full photo not used: %s", exc)
+            jpg = None
+        if fetched and original is not None:
+            original.unlink(missing_ok=True)  # downloaded just now, only to be converted
+        if jpg is None:
+            return tag
+        count += 1
+        if current.suffix.lower() not in (".heic", ".heif") and ours(current):
+            try:
+                current.unlink()  # the small preview this export downloaded for this page
+            except OSError:
+                pass
+        rel = urllib.parse.quote(os.path.relpath(jpg, note_dir).replace("\\", "/"))
+        return tag.replace(f'src="{src}"', f'src="{rel}"', 1)
+
+    text = IMG_TAG.sub(swap, text)
+    if count:
+        page.write_text(text, encoding="utf-8")
+    return count
+
+
 def upgrade_sketches(page: Path, fallbacks: dict[str, str], download, made: set | None = None,
                      dirs: set | None = None) -> int:
     """Swap each pen drawing's small preview for its full-size bitmap, when that one is bigger and a
@@ -520,8 +645,12 @@ def upgrade_sketches(page: Path, fallbacks: dict[str, str], download, made: set 
             size, fmt, ok = reader.size(), bytes(reader.format().data()).decode() or "png", reader.canRead()
             reader.setFileName("")  # release the file (Windows keeps it locked otherwise)
             del reader
-            preview_w = QImageReader(str(current)).size().width()
-            if not ok or size.width() <= preview_w:
+            preview = QImageReader(str(current)).size()
+            preview_w = preview.width()
+            # The preview is a square crop of the canvas; the full bitmap is the whole drawing, often
+            # narrower but much taller. More pixels in all wins; a browser must be able to show it.
+            more = size.width() * size.height() > max(preview.width(), 0) * max(preview.height(), 0)
+            if not ok or not more or fmt.lower() not in ("png", "jpeg", "jpg", "gif", "webp"):
                 log.info("Drawing in %s: full image not used (readable=%s, %sx%s, format=%s, %d bytes; "
                          "preview %s px)", page.name, ok, size.width(), size.height(), value(fmt, _IMAGE_FORMATS), new.stat().st_size,
                          preview_w)
@@ -771,6 +900,22 @@ class NotesSyncer:
                 continue  # stays written down: tried again next time
             self.state.set(key, None)
 
+    def _refresh_for_quality(self) -> None:
+        """Once per QUALITY: notes whose page shows an iPhone (HEIC) photo or a pen drawing are
+        exported again (sharper images); all others are left as they are."""
+        for nid, row in self.state.all().items():
+            rel = row[1]
+            if not rel:
+                continue
+            try:
+                text = (self.root / rel).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if 'data-uti="public.hei' in text or 'data-uti="com.apple.paper"' in text:
+                self.state.put(nid, row[1], row[2], row[3], None, bool(row[5]))
+        self.state.set("cursor", None)
+        self.state.set("quality", QUALITY)
+
     def run(self, full: bool = False) -> NotesResult:
         self.cancel_flag.clear()
         if self.closing.is_set():
@@ -791,6 +936,9 @@ class NotesSyncer:
                 self._remove_leftover_pages(res)
                 self.state.set("orphan_sweep", "1")
                 self.write_index()
+            elif self.state.get("quality") != QUALITY:
+                self._refresh_for_quality()
+                return self.run(full=True)
             elif self.state.get("legacy_index") != "1":
                 # once: a Notes.html from Skyfold 1.0.5 or earlier is brought up to date right away,
                 # not only after the next change in Notes
