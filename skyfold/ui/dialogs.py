@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+import logging
 from typing import Any
 
 from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QRunnable, QSize, Qt, QThreadPool, Signal, Slot
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QAbstractSpinBox,
     QListView,
     QListWidgetItem,
@@ -39,6 +41,8 @@ from .. import auth
 from ..config import APP_IN_CLOUD, APP_NAME, FOLDER_STRUCTURES, PRIVATE_DIR, VERSION, Settings, check_photos_dir, default_photos_dir
 from ..i18n import LANGUAGES, language, t
 from .icons import app_icon, draw_logo, glyph
+
+log = logging.getLogger(__name__)
 
 
 # async helper ------------------------------------------------------------------
@@ -328,6 +332,7 @@ class LoginDialog(_Dialog):
         self.setFixedWidth(_fit_screen(420, 0)[0])
         self.api: Any = None
         self._task: Any = None
+        self._cancelled = False
 
         frame = QVBoxLayout(self)  # a scrolling body: fits a small screen at high scaling
         frame.setContentsMargins(0, 0, 0, 0)
@@ -393,6 +398,11 @@ class LoginDialog(_Dialog):
         l2.addWidget(self.code)
         self.pages.addWidget(p2)
 
+        self.wait_note = _label(t("Waiting for Apple… this can take up to a minute. Keep this window open: "
+                                  "the code is asked for here."), "Hint", True)
+        self.wait_note.setAlignment(Qt.AlignCenter)
+        self.wait_note.hide()
+        outer.addWidget(self.wait_note)
         self.error = _label("", "ErrorText", True)
         self.error.hide()
         outer.addWidget(self.error)
@@ -443,19 +453,24 @@ class LoginDialog(_Dialog):
             return
         self._show_error("")
         self._busy(True, t("Signing in…"))
+        self.wait_note.show()
+        self._shrink()
 
         def done(step: auth.LoginStep) -> None:
-            if not self.isVisible():
+            if self._cancelled:
+                log.info("Sign-in: the window was closed before Apple answered; not used")
                 return  # cancelled meanwhile: this sign-in is not used
             self.password.clear()
             self.api = step.api
             if step.needs_code:
+                self._bring_forward()  # Apple has just sent the code: this window must be in sight
                 self.code_info.setText(step.notice)
                 # the stack keeps the tallest page's height: take the sign-in page out
                 self._page1 = self.pages.widget(0)
                 self.pages.removeWidget(self._page1)
                 self._page1.hide()
                 self.pages.setCurrentIndex(0)
+                self.wait_note.hide()
                 self._shrink()
                 self._busy(False, t("Confirm"))
                 self.code.setFocus()
@@ -463,6 +478,9 @@ class LoginDialog(_Dialog):
                 self._finish()
 
         def fail(msg: str) -> None:
+            if self._cancelled:
+                return
+            self.wait_note.hide()
             self._busy(False, t("Sign in"))
             self._show_error(msg)
             self.password.selectAll()
@@ -485,8 +503,21 @@ class LoginDialog(_Dialog):
 
         self._task = run_async(lambda: auth.submit_code(self.api, code), lambda _r: self._finish(), fail)
 
+    def _bring_forward(self) -> None:
+        """Shown, not minimised, in front, and its taskbar button flashing."""
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        QApplication.alert(self)
+
+    def reject(self) -> None:
+        self._cancelled = True  # Cancel, the close button or Esc: a sign-in still running is not used
+        super().reject()
+
     def _finish(self) -> None:
-        if not self.isVisible():
+        if self._cancelled:
             return  # the dialog was cancelled while Apple was still answering
         self.loggedIn.emit(self.api, self.email.text().strip())
         self.accept()
