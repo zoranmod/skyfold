@@ -186,6 +186,9 @@ BS: dict[str, str] = {
         "Oznaka sinhronizacije u {path} se ne može provjeriti: {error}. Sinhronizacija je zaustavljena da se ništa ne promijeni greškom; pokušava se ponovo sljedeći put.",
     "it appeared while it was being checked": "pojavila se dok se provjeravala",
     "it isn't an ordinary file": "nije običan fajl",
+    "Could not open sign-in: {error}": "Nije moguće otvoriti prijavu: {error}",
+    "Waiting for Apple… this may take a few minutes. You can close this window; it will return when Apple answers. Cancel stops sign-in.":
+        "Čekanje na Apple… ovo može potrajati nekoliko minuta. Možete zatvoriti prozor; ponovo će se prikazati kada Apple odgovori. Odustani prekida prijavu.",
     "Waiting for Apple… this can take up to a minute. Keep this window open: the code is asked for here.":
         "Čeka se Apple… to može potrajati do jedne minute. Ne zatvaraj ovaj prozor: ovdje se upisuje kod.",
     "Skyfold found a database journal without its database and couldn't keep a copy of it:\n{details}"
