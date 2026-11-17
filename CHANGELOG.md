@@ -7,6 +7,11 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 ### Fixed
 - Notes: Notes.html written by Skyfold 1.0.5 or earlier was never updated again after the upgrade to 1.0.6 (those versions kept no record that it was theirs), so notes moved to another folder kept showing in their old place. An index in that older format that lists this setup's own notes is taken back; the old page goes to the Recycle Bin.
 
+### Changed
+- Notes: iPhone (HEIC) photos are shown at full size: the original is turned into a JPEG with Windows' own HEIF decoder (the "HEIF Image Extensions" most PCs have). Without it, or on any problem, the small preview stays as before.
+- Notes: pen drawings show the whole drawing: the full image (often narrow and tall) is used whenever it has more pixels than the square preview, which only showed a crop. Only formats a browser can show are used.
+- Notes: once after the update, only notes with iPhone photos or drawings are exported again to get the sharper images; other notes are left as they are.
+
 ## [1.0.6] - 2026-11-16 (public beta)
 
 ### Changed
