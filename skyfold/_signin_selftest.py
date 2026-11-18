@@ -29,6 +29,7 @@ def run(report: str) -> str:
                         photos_dir_confirmed=True, notifications=False)
     api = object()
     gate = threading.Event()
+    code_gate = threading.Event()
     entered = threading.Event()
     calls = []
     accepted = []
@@ -43,6 +44,7 @@ def run(report: str) -> str:
     def submit(actual_api, code):
         assert actual_api is api and code == "123456"
         calls.append("code")
+        assert code_gate.wait(10), "test did not release the fake code response"
 
     def pump(condition):
         end = time.monotonic() + 5
@@ -60,6 +62,7 @@ def run(report: str) -> str:
             (appmod.SyncWorker, "start", lambda self: None),
             (auth, "start_login", login),
             (auth, "submit_code", submit),
+            (auth, "restore", lambda email: None),
             (auth, "commit_login", lambda current: None),
         ):
             stack.enter_context(patch.object(target, name, replacement))
@@ -77,9 +80,10 @@ def run(report: str) -> str:
             assert d.isWindow() and not d.isMinimized()
             pump(lambda: d.isActiveWindow() and d.password.hasFocus())
             assert d.grab().save(str(Path(report).with_suffix(".login.png")))
-            d.password.setText("synthetic-password")
-            QTest.mouseClick(d.ok, Qt.LeftButton)
+            QTest.keyClicks(app.focusWidget(), "synthetic-password")
+            QTest.keyClick(app.focusWidget(), Qt.Key_Return)
             assert entered.wait(2)
+            assert not d._cancelled, "Enter after password activated Cancel"
             d.close()
             assert not d._cancelled
             c.flyout.show_at(c.tray.geometry())
@@ -94,12 +98,18 @@ def run(report: str) -> str:
             QTest.keyClick(d, Qt.Key_Escape)
             c.open_login()
             assert c._dialogs["login"] is d and d.code.isVisible()
-            d.code.setText("123456")
+            QTest.keyClicks(app.focusWidget(), "123456")
+            pump(lambda: "code" in calls)
+            QTest.keyClick(app.focusWidget() or d, Qt.Key_Return)
+            QTest.keyClick(app.focusWidget() or d, Qt.Key_Enter, Qt.KeypadModifier)
+            assert not d._cancelled, "Enter after code activated Cancel"
+            code_gate.set()
             pump(lambda: accepted == [api])
             assert calls == ["credentials", "code"] and not d.isVisible()
-            return "native Qt panel click -> focused login -> preserved attempt -> focused code -> setApi signal; no network or profile writes"
+            return "real password typing+Enter -> preserved attempt -> six typed digits+Return+numpad Enter -> setApi; focused native windows, no network or profile writes"
         finally:
             gate.set()
+            code_gate.set()
             QThreadPool.globalInstance().waitForDone(10000)
             app.processEvents()
             c.clock.stop()

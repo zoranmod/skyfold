@@ -19,7 +19,7 @@ from .i18n import set_language, t
 
 APP_NAME = "Skyfold"
 APP_ID = "Skyfold"
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 
 
 def app_dir() -> Path:

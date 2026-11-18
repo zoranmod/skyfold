@@ -432,7 +432,7 @@ class LoginDialog(_Dialog):
         # Enter must never reach Cancel: when the field with the focus is locked while Apple answers,
         # Qt moves the focus to the next button and an "auto default" button takes over Enter.
         self.cancel.setAutoDefault(False)
-        self.cancel.setFocusPolicy(Qt.ClickFocus)
+        self.cancel.setFocusPolicy(Qt.StrongFocus)  # keyboard users can deliberately Tab here, then Space
         self.ok = QPushButton(t("Sign in"))
         self.ok.setObjectName("Primary")
         self.ok.setDefault(True)
@@ -441,6 +441,8 @@ class LoginDialog(_Dialog):
         btns.addStretch(1)
         btns.addWidget(self.ok)
         outer.addLayout(btns)
+        self.setTabOrder(self.password, self.ok)
+        self.setTabOrder(self.ok, self.cancel)
         (self.password if apple_id else self.email).setFocus()
         self._shrink()
 
@@ -561,6 +563,14 @@ class LoginDialog(_Dialog):
     def _cancel_sign_in(self) -> None:
         self._cancel_pressed = True
         self.reject()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.cancel.hasFocus():
+            # Cancel is never an Enter action, even when deliberately focused. Do not
+            # let the event bubble into QDialog and activate its default Sign in button.
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def reject(self) -> None:
         if not self._cancel_pressed:

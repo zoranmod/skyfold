@@ -4,14 +4,16 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
-### Fixed
-- Sign-in (with Codex): one sign-in attempt per window. Clicking Sign in again shows the same window, with its code step if Apple already sent a code; Close or Esc only hide it at every step, Cancel discards the attempt. Submitting twice is ignored, a failure while opening or finishing sign-in is shown in the window and logged, and a packaged self-test (--selftest-ui) clicks the real button with a fake Apple.
-- Sign-in: when Apple refuses to even start a sign-in (after several attempts in a short time), the window says so and to wait about 15 minutes, instead of "wrong Apple ID or password". The "Sign-in required" card in the panel can be clicked and highlights like the other rows.
-- Sign-in: pressing Enter after the password (or after typing the code) cancelled the sign-in. Locking the fields while Apple answers moved the keyboard focus to Cancel, which then took the same Enter. Cancel now only reacts to a click.
+## [1.0.8] - 2026-11-18
 
 ### Fixed
-- Sign-in: when Apple took long to answer and the sign-in window was hidden or behind other windows meanwhile, the two-factor code step never appeared (Apple had already sent the code). The window now comes back to the front, with its taskbar button flashing; only the Cancel button stops a sign-in that is still running (the close button or Esc only move the window aside until Apple answers). While waiting it says that this can take up to a minute.
-- Sign-in: when Apple's check whether the session may read iCloud data fails with a server error (seen after a sign-in that stopped at the two-factor code), Skyfold no longer keeps retrying as if signed in: it renews the session quietly, and if that doesn't help it asks you to sign in again.
+- Sign-in: pressing Enter after the password (or after typing the code) cancelled the sign-in, so Apple sent a code to the phone but the window for it never came. Locking the fields while Apple answers moved the keyboard focus to Cancel, which then took the same Enter. Enter now never presses Cancel; Cancel works with a click, or with Tab and Space for keyboard users.
+- Sign-in (with Codex): one sign-in attempt per window. Clicking Sign in again shows the same window, with its code step if Apple already sent a code; Close or Esc only hide it at every step, Cancel discards the attempt. When Apple answers, the window comes back to the front with its taskbar button flashing. Submitting twice is ignored, and a failure while opening or finishing sign-in is shown in the window and logged.
+- Sign-in: when Apple refuses to even start a sign-in (after several attempts in a short time), the window says so and to wait about 15 minutes, instead of "wrong Apple ID or password". The "Sign-in required" card in the panel can be clicked and highlights like the other rows.
+- Sign-in: when Apple's check whether the session may read iCloud data fails with a server error, Skyfold no longer keeps retrying as if signed in: it renews the session quietly, and if that doesn't help it asks you to sign in again.
+
+### Added
+- A packaged self-test (`--selftest-ui`) that signs in against a pretend Apple with real key presses, and `tools_signin_demo.py` to try the sign-in window by hand without contacting Apple.
 
 ## [1.0.7] - 2026-11-17
 
