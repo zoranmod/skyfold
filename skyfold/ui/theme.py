@@ -182,6 +182,10 @@ QLabel#StatusLine {{ font-size: 8.25pt; color: {c['muted']}; }}
 QFrame#Sep {{ background: {c['border']}; border: none; max-height: 1px; min-height: 1px; }}
 QFrame#Warn {{ background: {c['warn_bg']}; border: none; border-radius: 10px; }}
 QFrame#Err  {{ background: {c['err_bg']};  border: none;  border-radius: 10px; }}
+QFrame#Info {{ background: {c['accent_soft']}; border: none; border-radius: 10px; }}
+QFrame#Info QLabel {{ color: {c['accent_fg']}; }}
+QFrame#Info QPushButton {{ background: transparent; border: 1px solid {c['accent_fg']}; color: {c['accent_fg']}; }}
+QFrame#Info QPushButton:hover {{ background: {c['surface']}; }}
 QFrame#Warn QLabel {{ color: {c['warn_text']}; }}
 QFrame#Err QLabel {{ color: {c['err_text']}; }}
 QFrame#Warn QPushButton {{ background: transparent; border: 1px solid {c['warn_text']}; color: {c['warn_text']}; }}

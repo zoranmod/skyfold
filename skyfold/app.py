@@ -18,7 +18,8 @@ from .config import APP_ID, APP_NAME, VERSION, LOG_FILE, Settings, migrate_priva
 from .i18n import set_language, t
 from .ui import theme
 from .ui.dialogs import ask, inform, warn
-from .ui.dialogs import FindMyDialog, FolderSetupDialog, LoginDialog, PendingDialog, SettingsDialog, make_popup_round
+from .ui.dialogs import (FindMyDialog, FolderSetupDialog, LoginDialog, PendingDialog, SettingsDialog, UpdateDialog,
+                         make_popup_round)
 from .ui.flyout import STATE_TITLES, Flyout
 from .ui.icons import app_icon, tray_icon
 from .worker import SyncWorker
@@ -308,6 +309,16 @@ class Controller(QObject):
         f.setup.connect(self.open_setup)
         f.serviceClicked.connect(self._on_service)
         f.findMy.connect(self.open_find_my)
+        f.openUpdate.connect(self.open_update)
+
+        # New versions: asked a minute after start, then once a day (Settings can turn it off).
+        self._release = None
+        self._last_msg: str | None = None  # what the last tray message was about (its click opens that)
+        QTimer.singleShot(60_000, lambda: self.check_updates(False))
+        self.update_clock = QTimer()
+        self.update_clock.setInterval(24 * 3600 * 1000)
+        self.update_clock.timeout.connect(lambda: self.check_updates(False))
+        self.update_clock.start()
 
         self.thread.start()
 
@@ -342,7 +353,9 @@ class Controller(QObject):
             self.flyout.toggle(self.tray.geometry())
 
     def _on_message_clicked(self) -> None:
-        if self.state == "setup":
+        if self._last_msg == "update" and self._release is not None:
+            self.open_update()
+        elif self.state == "setup":
             self.open_setup()
         elif self.state == "auth":
             self.open_login()
@@ -391,7 +404,64 @@ class Controller(QObject):
     def _notify(self, title: str, text: str) -> None:
         important = title in (t("Sign-in required"), t("Confirmation needed"))
         if self.settings.notifications or important:
+            self._last_msg = None
             self.tray.showMessage(title, text, app_icon(), 6000)
+
+    # updates ------------------------------------------------------------------
+    def check_updates(self, manual: bool = False) -> None:
+        """Ask GitHub for the latest release (only "Skyfold/<version>" is sent). manual: the user asked."""
+        if not manual and not self.settings.check_updates:
+            return
+        from . import updater
+        from .ui.dialogs import run_async
+
+        def done(rel) -> None:
+            if rel is None or not updater.is_newer(rel.version):
+                self._release = None
+                self.flyout.set_update(None)
+                if manual:
+                    inform(None, APP_NAME, t("You have the latest version of Skyfold ({version}).", version=VERSION))
+                return
+            self._release = rel
+            self.flyout.set_update(rel.version)
+            log.info("Update: Skyfold %s is available", rel.version)
+            if manual:
+                self.open_update()
+            elif self.settings.update_told != rel.version:  # told once per version
+                self.settings.update_told = rel.version
+                self.settings.save()
+                self._last_msg = "update"
+                self.tray.showMessage(t("Update available"),
+                                      t("Skyfold {version} is available. Click to see what's new.", version=rel.version),
+                                      app_icon(), 8000)
+
+        def fail(msg: str) -> None:
+            log.info("Update check failed: %s", msg)
+            if manual:
+                warn(None, APP_NAME, t("Couldn't check for updates: {error}", error=msg))
+
+        self._update_task = run_async(updater.latest_release, done, fail)
+
+    def open_update(self) -> None:
+        if self._release is None:
+            return
+        from . import updater
+
+        dlg = UpdateDialog(self._release, updater.can_install())
+
+        def ready(new) -> None:
+            try:
+                updater.start_install(new)
+            except Exception as exc:  # noqa: BLE001
+                from .safelog import brief, describe
+
+                log.error("Update couldn't be started: %s", describe(exc))
+                warn(dlg, APP_NAME, t("The update couldn't be done: {error}", error=brief(exc)))
+                return
+            self.quit()
+
+        dlg.ready.connect(ready)
+        self._show_dialog("update", dlg)
 
     # actions --------------------------------------------------------------------
     def open_folder(self, which: str = "photos") -> None:
@@ -516,6 +586,7 @@ class Controller(QObject):
         dlg = SettingsDialog(self.settings, self.c, storage=getattr(self.worker, "_storage", None),
                              get_api=lambda: self.worker.api)
         dlg.nav.setCurrentRow(page)
+        dlg.checkUpdates.connect(lambda: self.check_updates(True))
         opened_for = (self.settings.apple_id or "").lower()
 
         def saved() -> None:

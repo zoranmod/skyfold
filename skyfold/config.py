@@ -423,6 +423,8 @@ class Settings:
     instant_local_deletes: bool = True
     notifications: bool = True
     start_with_windows: bool = False
+    check_updates: bool = True  # ask GitHub once a day whether a newer Skyfold is out
+    update_told: str = ""  # the newest version already announced (told once per version)
     paused: bool = False
 
     @classmethod

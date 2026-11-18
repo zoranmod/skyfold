@@ -480,7 +480,7 @@ class Banner(QFrame):
 
     def __init__(self, kind: str, button: str) -> None:
         super().__init__()
-        self.setObjectName("Warn" if kind == "warn" else "Err")
+        self.setObjectName({"warn": "Warn", "info": "Info"}.get(kind, "Err"))
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 10, 10, 10)
         self.text = QLabel()
@@ -505,6 +505,7 @@ class Flyout(QWidget):
     findMy = Signal()
     serviceClicked = Signal(str)  # "photos" | "drive" | "notes"
     quitApp = Signal()
+    openUpdate = Signal()
 
     WIDTH = 376
 
@@ -643,6 +644,10 @@ class Flyout(QWidget):
         self.auth_banner.clicked.connect(self.login)
         self.auth_banner.hide()
         root.addWidget(self.auth_banner)
+        self.update_banner = Banner("info", t("Update"))
+        self.update_banner.clicked.connect(self.openUpdate)
+        self.update_banner.hide()
+        root.addWidget(self.update_banner)
 
         # services
         services = QFrame()
@@ -888,6 +893,14 @@ class Flyout(QWidget):
         if self.bar.isHidden():
             self.bar.show()
             self._size_list()  # the same sizing as everywhere: the buttons stay on screen
+
+    def set_update(self, version: str | None) -> None:
+        """A newer Skyfold is out (None: not, or already installed)."""
+        if version:
+            self.update_banner.text.setText(t("Skyfold {version} is available.", version=version))
+        self.update_banner.setVisible(bool(version))
+        if self.isVisible():
+            self._size_list()
 
     def set_stats(self, stats: dict) -> None:
         self._stats = stats

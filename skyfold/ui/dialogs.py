@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
+    QTextBrowser,
     QTreeWidget,
     QTreeWidgetItem,
     QHeaderView,
@@ -604,6 +605,7 @@ class SettingsDialog(_Dialog):
 
     signOut = Signal()
     restoreExcluded = Signal()
+    checkUpdates = Signal()
 
     def __init__(self, settings: Settings, palette: dict[str, str], storage: dict | None = None,
                  get_api=None) -> None:
@@ -802,6 +804,7 @@ class SettingsDialog(_Dialog):
         sysc = self._card(lay, t("SYSTEM"))
         self.autostart = self._toggle(sysc, t("Start with Windows"), self.s.start_with_windows)
         self.notif = self._toggle(sysc, t("Show notifications"), self.s.notifications)
+        self.updates = self._toggle(sysc, t("Check for new versions of Skyfold"), self.s.check_updates)
         self.lang = Combo()
         for code, name in LANGUAGES.items():
             self.lang.addItem(name, code)
@@ -1062,6 +1065,9 @@ class SettingsDialog(_Dialog):
         col.addWidget(_label(APP_NAME, "Title"))
         col.addWidget(_label(t("Version {version}", version=VERSION), "Muted"))
         row.addLayout(col, 1)
+        check = QPushButton(t("Check for updates"))
+        check.clicked.connect(self.checkUpdates)
+        row.addWidget(check, 0, Qt.AlignVCenter)
         lay.addLayout(row)
         where = self._card(lay, t("WHERE YOUR DATA IS"))
         where.addWidget(_label(t("Settings: the 'data' folder next to the app."), None, True))
@@ -1169,6 +1175,7 @@ class SettingsDialog(_Dialog):
         s.delete_threshold = self.threshold.value()
         s.start_with_windows = self.autostart.isChecked()
         s.notifications = self.notif.isChecked()
+        s.check_updates = self.updates.isChecked()
         s.language = self.lang.currentData()
         s.theme = self.theme.currentData()
         s.drive_enabled = self.drive_on.isChecked()
@@ -1716,6 +1723,98 @@ class DeviceRow(QFrame):
             warn(self, t("Find My"), msg)
 
         self._task = run_async(lambda: extras.play_sound(api, self.dev.id), done, fail)
+
+
+class _Progress(QObject):
+    moved = Signal(int, int)  # bytes so far, total (emitted from the download thread)
+
+
+class UpdateDialog(_Dialog):
+    """A newer Skyfold: what's new (the release notes) and Update now / Later."""
+
+    ready = Signal(object)  # the unpacked new version: the controller installs it and quits
+
+    def __init__(self, rel, can_install: bool) -> None:
+        super().__init__(t("Update – {app}", app=APP_NAME))
+        self.rel = rel
+        self.can_install = can_install
+        self._task: Any = None
+        self._cancel = False
+        self.resize(*_fit_screen(560, 560))
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 22, 24, 18)
+        lay.setSpacing(10)
+        head = QHBoxLayout()
+        head.setSpacing(14)
+        head.addWidget(_logo(40))
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        col.addWidget(_label(t("Skyfold {version} is available", version=rel.version), "Title"))
+        col.addWidget(_label(t("You have version {version}.", version=VERSION), "Muted"))
+        head.addLayout(col, 1)
+        lay.addLayout(head)
+        lay.addWidget(_label(t("What's new"), "Muted"))
+        self.notes = QTextBrowser()
+        self.notes.setOpenExternalLinks(True)
+        from ..updater import whats_new
+
+        self.notes.setMarkdown(whats_new(rel.notes) or t("No description for this version."))
+        lay.addWidget(self.notes, 1)
+        self.status = _label(
+            t("Skyfold downloads the new version, checks it, closes and starts again. Your settings and "
+              "synced files stay as they are.") if can_install else
+            t("Download the new version from GitHub and replace your Skyfold folder with it (settings are kept)."),
+            "Hint", True)
+        lay.addWidget(self.status)
+        btns = QHBoxLayout()
+        self.later = QPushButton(t("Later"))
+        self.later.setAutoDefault(False)
+        self.later.clicked.connect(self.reject)
+        self.go = QPushButton(t("Update now") if can_install else t("Open download page"))
+        self.go.setObjectName("Primary")
+        self.go.setDefault(True)
+        self.go.clicked.connect(self._go)
+        btns.addStretch(1)
+        btns.addWidget(self.later)
+        btns.addWidget(self.go)
+        lay.addLayout(btns)
+
+    def _go(self) -> None:
+        from .. import updater
+
+        if not self.can_install:
+            _open_url(self.rel.page)
+            self.accept()
+            return
+        self.go.setEnabled(False)
+        self.status.setText(t("Downloading…"))
+        progress = _Progress()
+        progress.moved.connect(self._moved, Qt.QueuedConnection)
+        self._progress = progress
+
+        def done(new) -> None:
+            if self._cancel:
+                return
+            self.status.setText(t("Installing… Skyfold closes and starts again."))
+            self.ready.emit(new)
+
+        def fail(msg: str) -> None:
+            if self._cancel:
+                return
+            log.warning("Update failed: %s", msg)
+            self.status.setText(t("The update couldn't be done: {error}", error=msg))
+            self.go.setEnabled(True)
+
+        self._task = run_async(lambda: updater.download(self.rel, progress=progress.moved.emit,
+                                                        cancelled=lambda: self._cancel), done, fail)
+
+    def _moved(self, done: int, total: int) -> None:
+        if total:
+            self.status.setText(t("Downloading… {pct}%", pct=round(100 * done / total)))
+
+    def reject(self) -> None:
+        self._cancel = True
+        super().reject()
 
 
 class FindMyDialog(_Dialog):
