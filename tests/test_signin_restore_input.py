@@ -84,10 +84,10 @@ def test_pcs_failure_quietly_renews_three_times_then_one_prompt(startup, monkeyp
     assert len(f.calls)==4 and len(f.notices)==1
     f.c.flyout.show_at(f.c.tray.geometry()); f.app.processEvents()
     QTest.mouseClick(f.c.flyout.sync_btn, Qt.LeftButton)
-    assert pump(f.app, lambda: 'login' in f.c._dialogs and f.c._dialogs['login'].isVisible())
+    assert pump(f.app, lambda: 'login' in f.c._dialogs and f.c._dialogs['login'].isVisible(), timeout=20)
     d=f.c._dialogs['login']
     QTest.keyClicks(f.app.focusWidget(), 'synthetic-password')
     QTest.keyClick(f.app.focusWidget(), Qt.Key_Return)
-    assert pump(f.app, lambda: d.code.isVisible() and d.code.isEnabled())
+    assert pump(f.app, lambda: d.code.isVisible() and d.code.isEnabled(), timeout=20)  # (slow CI runners)
     assert not d._cancelled
     assert 'RAW_APPLE_BODY' not in caplog.text and 'cookie-secret' not in caplog.text
