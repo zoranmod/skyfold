@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Skyfold – Safari Bookmarks",
-  "short_name": "Safari Bookmarks",
+  "short_name": "Skyfold",
   "version": "1.0.0",
   "description": "Your Safari bookmarks from iCloud, kept up to date in a \"Safari Bookmarks\" folder. Needs the free Skyfold app for Windows.",
   "homepage_url": "https://github.com/zoranmod/skyfold",
