@@ -5,7 +5,7 @@
 <h1 align="center">Skyfold</h1>
 
 <p align="center">
-  <b>iCloud Photos, iCloud Drive and Apple Notes on Windows, without iCloud for Windows.</b><br>
+  <b>iCloud Photos, iCloud Drive, Apple Notes and Safari bookmarks on Windows, without iCloud for Windows.</b><br>
   A free, open-source tray app. Real files in real folders, synced in both directions.
 </p>
 
@@ -30,6 +30,7 @@
 - **Albums as folders.** Every album you made in Photos also appears under `Albums\`, as hard links that take **no extra disk space**.
 - **iCloud Drive, two-way.** A full local copy of your Drive, or only the folders you pick. New, changed, deleted, **renamed and moved** files and folders are synced in both directions. If a file changed on both sides, both versions are kept.
 - **Apple Notes export.** Every note becomes a web page with its full-size pictures, scans and attachments, in the same folders as in Notes, plus a searchable `Notes.html` library with your folders, light and dark theme. One-way (iCloud → PC).
+- **Safari bookmarks for Firefox and Chrome.** Your Safari bookmarks from iPhone, iPad or Mac as a bookmarks file that Firefox, Chrome and Edge import, kept up to date, with your folders in Safari's order. Read-only: nothing changes in iCloud.
 - **Find My.** Your devices with battery and last-seen time, a map link, and **Play sound**. (Apple asks for your password again after each PC restart before it shows them.)
 - **iCloud storage** at a glance in the tray panel.
 - **Built to be safe.** Nothing is deleted permanently, big deletions wait for your OK, and a missing or unplugged folder is never read as "delete everything".
@@ -59,6 +60,17 @@
   <img src="docs/screenshots/update.png" width="430" alt="A new version: what's new, and Update now">
 </p>
 
+## Safari bookmarks in Firefox or Chrome
+
+1. In Skyfold: **Settings → Notes → Safari bookmarks**, turn on *Save my Safari bookmarks for Firefox and Chrome* (the file goes to your Documents folder unless you choose another), **Save**, then **Sync now**.
+2. Skyfold writes **`Safari Bookmarks.html`** and refreshes it every 6 hours and on **Sync now**.
+3. Import it once:
+   - **Firefox:** Ctrl+Shift+O → *Import and Backup* → *Import Bookmarks from HTML…*
+   - **Chrome / Edge:** Bookmarks → *Import bookmarks and settings* → *Bookmarks HTML file*.
+4. Your bookmarks appear in a **Safari Bookmarks** folder, with the same folders and order as in Safari. Deleted bookmarks, tab groups and the Reading List are left out.
+
+Skyfold only *reads* your bookmarks from iCloud. It's one-way (Safari → browser): bookmarks you add in Firefox don't go to Safari, and importing the file again adds a second copy of the folder, so delete the old one first. It needs *Access iCloud Data on the Web* (see Requirements), like the rest of Skyfold.
+
 ## Why not iCloud for Windows?
 
 Apple's app works for many people. Skyfold is for when it doesn't suit you:
@@ -68,10 +80,11 @@ Apple's app works for many people. Skyfold is for when it doesn't suit you:
 | Files | Real files on disk, always available offline | Mostly online-only placeholders in Explorer |
 | Photos layout | One folder, by year, or by year/month; albums as hard-linked folders | Apple's layout |
 | Apple Notes | Exported as browsable, searchable HTML | Not available |
+| Safari bookmarks | One-way export file for Firefox / Chrome / Edge | Two-way, through Apple's browser extension |
 | Install | Portable zip, no installer, no Microsoft Store | Microsoft Store app |
 | Source | Open source (GPLv3) | Closed source |
 
-Apple's app does things Skyfold doesn't: passwords/keychain, bookmarks, mail/contacts/calendar, uploading new photos, and online-only files. If you need those, keep using it.
+Apple's app does things Skyfold doesn't: passwords/keychain, two-way bookmark sync, mail/contacts/calendar, uploading new photos, and online-only files. If you need those, keep using it.
 
 ## Install
 
@@ -128,6 +141,7 @@ To uninstall, quit Skyfold, turn off *Start with Windows* first, then delete the
 - **No online-only placeholders, by design.** iCloud Drive files are real downloads, so you need enough disk space for the folders you choose.
 - **Mac packages** (folders that a Mac shows as one file, such as `.app` or `.xcodeproj`) are left in iCloud and skipped.
 - **Notes are one-way** (iCloud → PC). Locked notes can't be read; they are only listed.
+- **Safari bookmarks are one-way** (Safari → a file your browser imports). Bookmarks made in Firefox or Chrome don't go back to Safari.
 - **Advanced Data Protection:** Skyfold needs *Access iCloud Data on the Web* to be on. Without it, Apple doesn't let Skyfold read your data.
 - **Messages, calls, contacts, calendars, passwords and Lost Mode** aren't included. For lost devices, use iCloud.com.
 - Skyfold uses the same web services as iCloud.com. If Apple changes them, something may stop working until Skyfold is updated.
@@ -209,6 +223,7 @@ Skyfold is not affiliated with, endorsed by or sponsored by Apple Inc. Apple, iC
 
 - **Brisanje slika ide u oba smjera, a Drive se sinhronizuje u oba smjera** (i preimenovanja i premještanja). Obrisani fajlovi idu u Recycle Bin ili u "Nedavno obrisano", pa se mogu vratiti.
 - **Skyfold je javna beta.** Dvosmjerna Drive sinhronizacija je nova: Skyfold uvijek pita prije većeg brisanja, ali čuvaj rezervnu kopiju važnih stvari.
+- **Safari oznake za Firefox i Chrome:** Postavke → Bilješke → Safari oznake. Skyfold drži ažuran fajl `Safari Bookmarks.html` koji uvezeš u Firefox (Ctrl+Shift+O → Uvoz i rezervna kopija → Uvezi oznake iz HTML-a) ili Chrome. Samo čita iz iClouda; jednosmjerno.
 - **Bilješke se čuvaju kao web stranice** s fotografijama u punoj veličini i bibliotekom s pretragom (Notes.html).
 - **Skyfold se sam ažurira:** javi kad izađe nova verzija, pokaže šta je novo i ažurira se jednim klikom (od verzije 1.0.10).
 - **Program je besplatan i prenosiv.** Raspakuj ga, pokreni `Skyfold.exe` i prijavi se Apple ID-jem.
