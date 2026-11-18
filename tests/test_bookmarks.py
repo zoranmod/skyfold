@@ -35,7 +35,7 @@ def folder(name, title, parent, order, **extra):
 ROOT = "com.apple.Safari.TopBookmark"
 RECORDS = [
     {"recordName": "x", "recordType": "EncryptionInfo", "fields": {}},
-    folder("bar", "Favorites", ROOT, 1),
+    folder("bar", "BookmarksBar", ROOT, 1),  # Safari's internal name for Favorites
     folder("work", "Work", "bar", 2),
     leaf("b2", "Second", "https://example.com/2", "bar", 3),
     leaf("b1", "First", "https://example.com/1", "bar", 1),
@@ -43,7 +43,9 @@ RECORDS = [
     leaf("gone", "Deleted one", "https://example.com/x", "bar", 4, Deleted={"type": "INT64", "value": 1}),
     {"recordName": "tomb", "deleted": True},
     leaf("evil", "Script", "javascript:alert(1)", "bar", 5),
-    folder("rl", "Reading List", ROOT, 9),
+    folder("rl", "com.apple.ReadingList", ROOT, 9),  # (its real title)
+    folder("menu", "BookmarksMenu", ROOT, 2),
+    leaf("m1", "In the menu", "https://example.com/m", "menu", 1),
     leaf("r1", "Read later", "https://example.com/rl", "rl", 1),
     folder("tabs", "Trip tabs", ROOT, 8, IsTabGroup={"type": "INT64", "value": 1}),
     leaf("t1", "Tab", "https://example.com/tab", "tabs", 1),
@@ -52,10 +54,10 @@ RECORDS = [
 
 def test_the_tree_keeps_folders_order_and_leaves_out_what_isnt_a_bookmark():
     nodes = bm.build(RECORDS)
-    assert [n.title for n in nodes] == ["Favorites"]
+    assert [n.title for n in nodes] == ["Favorites", "Bookmarks Menu"]  # Safari's names, not internal ones
     fav = nodes[0]
     assert [c.title for c in fav.children] == ["First", "Work", "Second"]  # by Safari's position
-    assert bm.count(nodes) == 3  # no deleted, script, Reading List or tab group entries
+    assert bm.count(nodes) == 4  # no deleted, script, Reading List or tab group entries
 
 
 def test_the_file_is_the_standard_format_and_escaped():
@@ -92,7 +94,7 @@ def test_all_pages_are_read_with_the_sync_token():
 def test_export_writes_its_own_file_and_never_someone_elses(tmp_path):
     api = FakeApi([{"records": RECORDS, "moreComing": False}] * 3)
     path, n, changed = bm.export(api, tmp_path)
-    assert path.name == bm.FILE_NAME and n == 3 and changed
+    assert path.name == bm.FILE_NAME and n == 4 and changed
     assert bm.export(api, tmp_path)[2] is False  # nothing new: not written again
     path.write_text("<html>my own bookmarks</html>", encoding="utf-8")
     with pytest.raises(SyncError):

@@ -30,6 +30,7 @@ FILE_NAME = "Safari Bookmarks.html"
 MARK = "<!-- Skyfold: Safari bookmarks from iCloud -->"
 MAX_PAGES = 50
 SAFE_SCHEMES = ("http://", "https://", "ftp://", "mailto:", "file:")
+SAFARI_FOLDERS = {"BookmarksBar": "Favorites", "BookmarksMenu": "Bookmarks Menu"}  # internal name -> shown
 
 
 class BookmarksUnavailable(SyncError):
@@ -139,9 +140,12 @@ def build(records: list[dict]) -> list[Item]:
         item = Item(name, kind == "BookmarkList", title, _text(f.get("URL")).strip(), parent,
                     _order(f.get("Position"), added if isinstance(added, int) else 0, title),
                     added if isinstance(added, int) else 0)
+        plain = title.lower().replace(" ", "")
         if item.is_folder and ((f.get("IsTabGroup") or {}).get("value") or "readinglist" in name.lower()
-                               or title.lower() == "reading list"):
-            skip.add(name)
+                               or "readinglist" in plain):
+            skip.add(name)  # Safari's Reading List (titled "com.apple.ReadingList") and tab groups
+        if item.is_folder and title in SAFARI_FOLDERS:  # Safari's own folders, by the names Safari shows
+            item.title = t(SAFARI_FOLDERS[title])
         items[name] = item
     top: list[Item] = []
     for item in items.values():
