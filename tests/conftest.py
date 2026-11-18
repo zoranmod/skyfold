@@ -21,3 +21,16 @@ def pytest_sessionfinish(session, exitstatus):
     app.processEvents()
     if hasattr(app, "shutdown"):  # PySide6: deletes the application object and its children now
         app.shutdown()
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _bookmarks_cache_in_tmp(tmp_path, monkeypatch):
+    """No test ever writes the real Safari bookmarks cache (it lives in the user's private folder)."""
+    from skyfold import native_host
+
+    path = tmp_path / "safari-bookmarks-cache.json"
+    monkeypatch.setattr(native_host, "cache_file", lambda: path)
+    return path

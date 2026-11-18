@@ -198,9 +198,28 @@ def render(nodes: list[Item], folder_title: str) -> str:
     return "\n".join(lines)
 
 
+def as_json(nodes: list[Item]) -> list[dict]:
+    """The tree for the browser extension: folders {"t", "c"}, bookmarks {"t", "u"}."""
+    return [{"t": n.title or t("Untitled"), "c": as_json(n.children)} if n.is_folder
+            else {"t": n.title or n.url, "u": n.url} for n in nodes]
+
+
+def save_cache(nodes: list[Item]) -> None:
+    """What the extension gets (see native_host): written after every complete read."""
+    from datetime import datetime, timezone
+
+    from .native_host import cache_file
+
+    path = cache_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_text(path, json.dumps({"updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                "tree": as_json(nodes)}, ensure_ascii=False))
+
+
 def export(api, folder: Path) -> tuple[Path, int, bool]:
     """Read the bookmarks and write the file. Returns (file, number of bookmarks, changed?)."""
     nodes = build(fetch(api))
+    save_cache(nodes)
     page = render(nodes, t("Safari Bookmarks"))
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / FILE_NAME

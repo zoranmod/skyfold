@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Skyfold – Safari Bookmarks",
+  "short_name": "Safari Bookmarks",
+  "version": "1.0.0",
+  "description": "Your Safari bookmarks from iCloud, kept up to date in a \"Safari Bookmarks\" folder. Needs the free Skyfold app for Windows.",
+  "homepage_url": "https://github.com/zoranmod/skyfold",
+  "permissions": ["bookmarks", "nativeMessaging", "storage", "alarms"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Safari Bookmarks", "default_icon": { "16": "icons/16.png", "32": "icons/32.png" } },
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuUpSCG3k8yP+o9Hg/RjJvVaYkfYWC9vY4p/b96VVzeDsRcrhIGrhqQW/CVs9wWfARrBRho5OUh7rMaKdoL6XZL/y3oq7PcwctrtmMPWS4bYw0j0OPTylDbwusuBhR284jkHQqA6YhsNA5Ma6swMHxaVIRgbiHV1ZacbecLpP3wmtHyog7Dx8VeK1P+jzv68hR3MlFXHewaCYJw94bUiF5+stsvwmAE0uhXqxn1OEojyQM/IoDp+K7jiVICJ0gcarLAgLUoG0Ob9e46IL+xbiUmW+DLWs0uYuPUIJX9urF031KA06+csUiUp3lij7My0BRCdx6p8Qi5Pj/wCcQbAjyQIDAQAB"
+}

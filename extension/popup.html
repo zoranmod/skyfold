@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Safari Bookmarks</title>
+<style>
+  :root { color-scheme: light dark; --accent: #075bcd; --muted: #59636f; --bg: #fff; --group: #f3f5f8; }
+  @media (prefers-color-scheme: dark) { :root { --accent: #99c2ff; --muted: #b0bac7; --bg: #191e25; --group: #222932; } }
+  body { margin: 0; width: 300px; padding: 14px 16px; background: var(--bg);
+         font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+  h1 { font-size: 15px; margin: 0 0 2px; }
+  .sub { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  .box { background: var(--group); border-radius: 9px; padding: 10px 12px; margin-bottom: 12px; }
+  .err { color: #c0392b; }
+  @media (prefers-color-scheme: dark) { .err { color: #ff9a8b; } }
+  button { width: 100%; padding: 9px; border: 0; border-radius: 8px; background: var(--accent); color: #fff;
+           font: inherit; font-weight: 600; cursor: pointer; }
+  @media (prefers-color-scheme: dark) { button { color: #10223b; } }
+  button:disabled { opacity: .6; cursor: default; }
+  .note { color: var(--muted); font-size: 11px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<h1>Safari Bookmarks</h1>
+<p class="sub">From iCloud, through the Skyfold app</p>
+<div class="box" id="status">…</div>
+<button id="sync" type="button">Update now</button>
+<p class="note">Your Safari bookmarks are kept in the “Safari Bookmarks” folder (under Other Bookmarks). It is replaced
+when Safari's bookmarks change, so add your own bookmarks elsewhere.</p>
+<script src="popup.js"></script>
+</body>
+</html>
