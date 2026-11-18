@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
+PackageIdentifier: zoranmod.Skyfold
+PackageVersion: 1.0.12
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+- RelativeFilePath: Skyfold\Skyfold.exe
+  PortableCommandAlias: skyfold
+ReleaseDate: 2026-11-18
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/zoranmod/skyfold/releases/download/v1.0.12/Skyfold-windows.zip
+  InstallerSha256: 3E6F29F2AE3A31EA0941ED539C9D5CE2D27CF2F4EFBA3CB5A9FA0056242E3BA3
+ManifestType: installer
+ManifestVersion: 1.28.0
