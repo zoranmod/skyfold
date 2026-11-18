@@ -138,3 +138,50 @@ def test_whats_new_leaves_out_the_download_instructions():
     notes = "**1.0.9**\n\n### What's new\n- a\n\n### Download\n`zip` below.\n\n---\n**Na bosanskom:** b"
     text = up.whats_new(notes)
     assert "What's new" in text and "- a" in text and "Na bosanskom" in text and "zip" not in text
+
+
+def test_githubs_rate_limit_says_how_long_to_wait():
+    import time
+
+    r = SimpleNamespace(status_code=403, reason="rate limit exceeded",
+                        headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(time.time() + 23 * 60)})
+    err = up._rate_limited(r)
+    assert isinstance(err, up.RateLimited) and "23 min" in str(err)
+    assert up._rate_limited(SimpleNamespace(status_code=403, reason="Forbidden", headers={})) is None  # a real refusal
+    assert "1 min" in str(up._rate_limited(SimpleNamespace(status_code=429, reason="", headers={"Retry-After": "5"})))
+
+
+def test_when_the_api_is_limited_the_releases_page_tells_the_latest_version():
+    def get(url, follow=True, **kw):
+        if url == up.API:
+            raise up.RateLimited("limited")
+        if url == up.PAGE:
+            assert follow is False
+            return SimpleNamespace(status_code=302, headers={
+                "Location": "https://github.com/zoranmod/skyfold/releases/tag/v9.9.9"})
+        assert url == "https://raw.githubusercontent.com/zoranmod/skyfold/v9.9.9/docs/release-notes-9.9.9.md"
+        return SimpleNamespace(text="**What's new**")
+
+    rel = up.latest_release(get)
+    assert rel.version == "9.9.9" and rel.notes == "**What's new**"
+    assert rel.zip_url == DL + up.ZIP_NAME and rel.sha_url == DL + up.ZIP_NAME + ".sha256"
+
+
+def test_if_the_page_doesnt_help_either_the_wait_is_reported():
+    def get(url, follow=True, **kw):
+        if url == up.API:
+            raise up.RateLimited("try again in 5 min")
+        return SimpleNamespace(status_code=302, headers={"Location": "https://evil.example/x"})
+
+    with pytest.raises(up.RateLimited):
+        up.latest_release(get)
+
+
+def test_provenance_passes_the_rate_limit_through():
+    from skyfold import provenance
+
+    def get(url, **kw):
+        raise up.RateLimited("try again in 7 min")
+
+    with pytest.raises(up.RateLimited):
+        provenance.verify("a" * 64, "9.9.9", get)

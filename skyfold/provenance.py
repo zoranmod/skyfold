@@ -190,9 +190,13 @@ def verify(digest: str, version: str, get: Callable) -> None:
     workflow_uri = f"https://github.com/{REPO}/{WORKFLOW}@{tag}"
     repo_uri = f"https://github.com/{REPO}"
     reasons = []
+    from .updater import RateLimited
+
     try:
         r = get(ATTESTATIONS + digest.lower())
         items = (r.json() or {}).get("attestations") or []
+    except RateLimited:
+        raise  # GitHub's limit: "try again in N min", not "can't be confirmed"
     except Exception as exc:  # noqa: BLE001 - no attestation = not proven
         raise UpdateError(t("the update's build origin can't be confirmed")) from exc
     for item in items[:10]:

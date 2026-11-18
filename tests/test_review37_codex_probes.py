@@ -79,12 +79,13 @@ def test_network_client_requires_an_explicit_redirect_policy(monkeypatch):
     import requests
 
     calls = []
-    def get(url, **kwargs):
+    def get(*args, **kwargs):  # (the updater uses a Session; never the real network in tests)
         calls.append(kwargs)
-        return SimpleNamespace(status_code=200, raise_for_status=lambda: None)
+        return SimpleNamespace(status_code=200, raise_for_status=lambda: None, headers={})
     monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(requests.Session, "get", lambda self, url, **kw: get(url, **kw))
     up._get(up.API)
-    assert not calls or calls[0]["allow_redirects"] is False
+    assert calls and calls[0]["allow_redirects"] is False
 
 
 @pytest.mark.xfail(strict=True, reason="by design: the app passes verify=provenance.verify (see "

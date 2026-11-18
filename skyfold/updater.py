@@ -60,7 +60,8 @@ def is_newer(candidate: str, current: str = VERSION) -> bool:
 
 ALLOWED_HOSTS = {"api.github.com", "github.com", "objects.githubusercontent.com",
                  "release-assets.githubusercontent.com",  # where GitHub serves releases from
-                 "tmaproduction.blob.core.windows.net"}  # and the build attestations
+                 "tmaproduction.blob.core.windows.net",  # the build attestations
+                 "raw.githubusercontent.com"}  # release notes, when the API is limited
 
 
 class _NoAuth:
@@ -70,9 +71,37 @@ class _NoAuth:
         return r
 
 
-def _get(url: str, *, stream: bool = False, timeout: float = 20):
+class RateLimited(UpdateError):
+    """GitHub limits how often one internet address may ask (60 an hour without signing in)."""
+
+
+def _rate_limited(r) -> RateLimited | None:
+    """A 403/429 that is GitHub's limit (not a real refusal), with how long until it lifts."""
+    import math
+    import time as _time
+
+    if getattr(r, "status_code", 200) not in (403, 429):
+        return None
+    h = getattr(r, "headers", None) or {}
+    wait = None
+    try:
+        if h.get("Retry-After"):
+            wait = float(h["Retry-After"])
+        elif str(h.get("X-RateLimit-Remaining", "")) == "0" and h.get("X-RateLimit-Reset"):
+            wait = float(h["X-RateLimit-Reset"]) - _time.time()
+    except (TypeError, ValueError):
+        wait = None
+    if wait is None and "rate limit" not in str(getattr(r, "reason", "") or "").lower():
+        return None
+    minutes = max(1, math.ceil((wait or 60) / 60))
+    return RateLimited(t("GitHub is limiting update checks from your internet connection right now; try again "
+                         "in {n} min.", n=minutes))
+
+
+def _get(url: str, *, stream: bool = False, timeout: float = 20, follow: bool = True):
     """GET over HTTPS from GitHub only. Redirects are followed one by one (at most 5), each one
-    checked; nothing of the user's (no stored logins) is sent - only "Skyfold/<version>"."""
+    checked; nothing of the user's (no stored logins) is sent - only "Skyfold/<version>".
+    follow=False: a redirect is returned as it is (to read where it points)."""
     from urllib.parse import urljoin, urlsplit
 
     import requests
@@ -85,12 +114,18 @@ def _get(url: str, *, stream: bool = False, timeout: float = 20):
         r = session.get(url, timeout=timeout, stream=stream, allow_redirects=False, auth=_NoAuth(),
                         headers={"User-Agent": f"Skyfold/{VERSION}", "Accept": "application/vnd.github+json"})
         if getattr(r, "status_code", 200) in (301, 302, 303, 307, 308):
+            if not follow:
+                return r
             target = (getattr(r, "headers", None) or {}).get("Location", "")
             _close(r)
             if not target:
                 raise UpdateError(t("the update address isn't one of GitHub's"))
             url = urljoin(url, target)
             continue
+        limited = _rate_limited(r)
+        if limited is not None:
+            _close(r)
+            raise limited
         r.raise_for_status()
         return r
     raise UpdateError(t("the update address isn't one of GitHub's"))
@@ -107,7 +142,47 @@ def _close(r) -> None:
 
 def latest_release(get=_get) -> Release | None:
     """The latest published release, or None when it isn't a complete Skyfold release: its zip and
-    checksum must be exactly this release's own files (same tag), anything else is refused."""
+    checksum must be exactly this release's own files (same tag), anything else is refused. When
+    GitHub's API is limiting this connection, the releases page tells the latest version instead."""
+    try:
+        return _latest_from_api(get)
+    except RateLimited as limited:
+        try:
+            rel = _latest_from_page(get)
+        except Exception:  # noqa: BLE001 - the page didn't help either: say why
+            rel = None
+        if rel is None:
+            raise limited from None
+        return rel
+
+
+def _latest_from_page(get) -> Release | None:
+    """github.com/<repo>/releases/latest points to the latest release's tag (not rate limited like
+    the API); its files have fixed names, and its notes are in docs/release-notes-<version>.md."""
+    r = get(PAGE, follow=False)
+    try:
+        target = (getattr(r, "headers", None) or {}).get("Location", "")
+    finally:
+        _close(r)
+    m = re.fullmatch(rf"https://github\.com/{re.escape(REPO)}/releases/tag/(v(\d+(?:\.\d+){{1,3}}))", target or "")
+    if not m:
+        return None
+    tag, version = m.group(1), m.group(2)
+    base = f"{DOWNLOADS}{tag}/"
+    notes = ""
+    try:
+        n = get(f"https://raw.githubusercontent.com/{REPO}/{tag}/docs/release-notes-{version}.md")
+        try:
+            notes = str(n.text)
+        finally:
+            _close(n)
+    except Exception:  # noqa: BLE001 - notes are nice to have
+        notes = ""
+    return Release(version, notes, f"https://github.com/{REPO}/releases/tag/{tag}", base + ZIP_NAME,
+                   base + ZIP_NAME + ".sha256")
+
+
+def _latest_from_api(get) -> Release | None:
     try:
         data = get(API).json()
         if not isinstance(data, dict):

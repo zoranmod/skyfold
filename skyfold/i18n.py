@@ -586,6 +586,8 @@ BS: dict[str, str] = {
     "Light / dark": "Svijetlo / tamno",
     "Collapse all": "Skupi sve",
     "Expand all": "Raširi sve",
+    "GitHub is limiting update checks from your internet connection right now; try again in {n} min.":
+        "GitHub trenutno ograničava provjere ažuriranja s tvoje internet veze; pokušaj ponovo za {n} min.",
     "was {old}": "ranije {old}",
     "Favorites": "Favoriti",
     "Bookmarks Menu": "Meni oznaka",

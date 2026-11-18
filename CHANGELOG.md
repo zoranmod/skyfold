@@ -4,6 +4,9 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Changed
+- Update checks: when GitHub limits checks from your internet connection (60 an hour, shared by everyone on the same connection), Skyfold says how many minutes to wait instead of "HTTPError (403)", and finds the latest version through the releases page instead, which isn't limited that way.
+
 ## [1.0.14] - 2026-11-18
 
 ### Changed
