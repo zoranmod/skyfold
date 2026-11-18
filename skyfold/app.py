@@ -311,14 +311,17 @@ class Controller(QObject):
         f.findMy.connect(self.open_find_my)
         f.openUpdate.connect(self.open_update)
 
-        # New versions: asked a minute after start, then once a day (Settings can turn it off).
+        # New versions: asked a minute after start, then once a day (Settings can turn it off). Only
+        # the installed app asks by itself (not when run from source, e.g. by the tests). The timers
+        # belong to the panel: they end with it.
         self._release = None
         self._last_msg: str | None = None  # what the last tray message was about (its click opens that)
-        QTimer.singleShot(60_000, lambda: self.check_updates(False))
-        self.update_clock = QTimer()
+        self.update_clock = QTimer(f)
         self.update_clock.setInterval(24 * 3600 * 1000)
         self.update_clock.timeout.connect(lambda: self.check_updates(False))
-        self.update_clock.start()
+        if getattr(sys, "frozen", False) and "--selftest" not in sys.argv:
+            QTimer.singleShot(60_000, f, lambda: self.check_updates(False))
+            self.update_clock.start()
 
         self.thread.start()
 
