@@ -586,6 +586,11 @@ BS: dict[str, str] = {
     "Light / dark": "Svijetlo / tamno",
     "Collapse all": "Skupi sve",
     "Expand all": "Raširi sve",
+    "The attachment folder {name} leads outside the Notes folder; nothing is written there.":
+        "Folder s prilozima {name} vodi izvan foldera s bilješkama; tamo se ništa ne upisuje.",
+    "the update's build origin can't be confirmed": "porijeklo ažuriranja se ne može potvrditi",
+    "the update address isn't one of GitHub's": "adresa ažuriranja nije GitHubova",
+    "there isn't enough free disk space for the update": "nema dovoljno slobodnog prostora na disku za ažuriranje",
     "the published checksum can't be read": "objavljeni kontrolni zbir se ne može pročitati",
     "cancelled": "otkazano",
     "the download doesn't match its published checksum": "preuzeti fajl se ne slaže s objavljenim kontrolnim zbirom",

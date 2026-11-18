@@ -58,29 +58,80 @@ def is_newer(candidate: str, current: str = VERSION) -> bool:
     return a is not None and b is not None and a > b
 
 
+ALLOWED_HOSTS = {"api.github.com", "github.com", "objects.githubusercontent.com",
+                 "release-assets.githubusercontent.com",  # where GitHub serves releases from
+                 "tmaproduction.blob.core.windows.net"}  # and the build attestations
+
+
+class _NoAuth:
+    """An explicit "no credentials": Requests then never adds a .netrc login to update requests."""
+
+    def __call__(self, r):
+        return r
+
+
 def _get(url: str, *, stream: bool = False, timeout: float = 20):
+    """GET over HTTPS from GitHub only. Redirects are followed one by one (at most 5), each one
+    checked; nothing of the user's (no stored logins) is sent - only "Skyfold/<version>"."""
+    from urllib.parse import urljoin, urlsplit
+
     import requests
 
-    r = requests.get(url, timeout=timeout, stream=stream, allow_redirects=True,
-                     headers={"User-Agent": f"Skyfold/{VERSION}", "Accept": "application/vnd.github+json"})
-    r.raise_for_status()
-    return r
+    session = requests.Session()
+    for _ in range(6):
+        parts = urlsplit(url)
+        if parts.scheme != "https" or (parts.hostname or "").lower() not in ALLOWED_HOSTS:
+            raise UpdateError(t("the update address isn't one of GitHub's"))
+        r = session.get(url, timeout=timeout, stream=stream, allow_redirects=False, auth=_NoAuth(),
+                        headers={"User-Agent": f"Skyfold/{VERSION}", "Accept": "application/vnd.github+json"})
+        if getattr(r, "status_code", 200) in (301, 302, 303, 307, 308):
+            target = (getattr(r, "headers", None) or {}).get("Location", "")
+            _close(r)
+            if not target:
+                raise UpdateError(t("the update address isn't one of GitHub's"))
+            url = urljoin(url, target)
+            continue
+        r.raise_for_status()
+        return r
+    raise UpdateError(t("the update address isn't one of GitHub's"))
+
+
+def _close(r) -> None:
+    close = getattr(r, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def latest_release(get=_get) -> Release | None:
-    """The latest published release, or None when it has no Windows zip with its checksum."""
-    data = get(API).json()
-    version = str(data.get("tag_name") or "").lstrip("v")
-    if parse_version(version) is None or data.get("draft") or data.get("prerelease"):
+    """The latest published release, or None when it isn't a complete Skyfold release: its zip and
+    checksum must be exactly this release's own files (same tag), anything else is refused."""
+    try:
+        data = get(API).json()
+        if not isinstance(data, dict):
+            return None
+        tag = str(data.get("tag_name") or "")
+        version = tag[1:] if tag.startswith("v") else ""
+        if parse_version(version) is None or data.get("draft") or data.get("prerelease"):
+            return None
+        assets = {}
+        for item in data.get("assets") or []:
+            if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+                return None
+            assets[item["name"]] = item.get("browser_download_url")
+        base = f"{DOWNLOADS}{tag}/"
+        zip_url, sha_url = assets.get(ZIP_NAME), assets.get(ZIP_NAME + ".sha256")
+        if zip_url != base + ZIP_NAME or sha_url != base + ZIP_NAME + ".sha256":
+            return None  # only this release's own files
+        page = data.get("html_url")
+        if not isinstance(page, str) or not page.startswith(f"https://github.com/{REPO}/releases/"):
+            page = PAGE
+        body = data.get("body")
+        return Release(version, body if isinstance(body, str) else "", page, zip_url, sha_url)
+    except (AttributeError, TypeError, ValueError):
         return None
-    assets = {a.get("name"): a.get("browser_download_url") or "" for a in data.get("assets") or []}
-    zip_url, sha_url = assets.get(ZIP_NAME, ""), assets.get(ZIP_NAME + ".sha256", "")
-    if not (zip_url.startswith(DOWNLOADS) and sha_url.startswith(DOWNLOADS)):
-        return None  # only files published with Skyfold's own releases
-    page = data.get("html_url") or PAGE
-    if not str(page).startswith(f"https://github.com/{REPO}/"):
-        page = PAGE
-    return Release(version, str(data.get("body") or ""), page, zip_url, sha_url)
 
 
 def whats_new(notes: str) -> str:
@@ -101,44 +152,83 @@ def can_install(app_dir: Path = APP_DIR) -> bool:
         return False
 
 
+MAX_ZIP = 600 * 1024 * 1024  # a Skyfold zip is ~50 MB; anything far bigger isn't one
+MAX_UNPACKED = 2 * 1024 * 1024 * 1024
+
+
 def download(rel: Release, app_dir: Path = APP_DIR, progress: Callable[[int, int], None] | None = None,
-             get=_get, cancelled: Callable[[], bool] = lambda: False) -> Path:
-    """The release unpacked beside the app, after its checksum matched. Returns the new Skyfold folder."""
-    words = get(rel.sha_url).text.split()
-    expected = words[0].strip().lower() if words else ""
-    if not re.fullmatch(r"[0-9a-f]{64}", expected):
-        raise UpdateError(t("the published checksum can't be read"))
-    stage = app_dir / STAGE
-    shutil.rmtree(stage, ignore_errors=True)
-    stage.mkdir()
-    archive = stage / ZIP_NAME
-    h = hashlib.sha256()
-    r = get(rel.zip_url, stream=True, timeout=60)
-    total = int(r.headers.get("Content-Length") or 0)
-    done = 0
-    with open(archive, "wb") as fh:
-        for chunk in r.iter_content(1 << 16):
-            if cancelled():
-                raise UpdateError(t("cancelled"))
-            fh.write(chunk)
-            h.update(chunk)
-            done += len(chunk)
-            if progress:
-                progress(done, total)
-    if h.hexdigest() != expected:
-        raise UpdateError(t("the download doesn't match its published checksum"))
-    out = stage / "unpacked"
-    with zipfile.ZipFile(archive) as z:
-        for info in z.infolist():
-            name = info.filename.replace("\\", "/")
-            if name.startswith("/") or re.match(r"^[A-Za-z]:", name) or ".." in name.split("/"):
-                raise UpdateError(t("the download contains an unsafe path"))
-        z.extractall(out)
-    archive.unlink()
-    new = out / "Skyfold"
-    if not (new / "Skyfold.exe").is_file() or not (new / "_internal").is_dir():
-        raise UpdateError(t("the download isn't a Skyfold build"))
-    return new
+             get=_get, cancelled: Callable[[], bool] = lambda: False,
+             verify: Callable[[str, str, Callable], None] | None = None) -> Path:
+    """The release unpacked beside the app, after its checksum matched. Returns the new Skyfold folder.
+    Each attempt gets a folder of its own (nothing already there is ever touched); on any failure or
+    cancel it is removed again."""
+    stage: Path | None = None
+    try:
+        r = get(rel.sha_url)
+        try:
+            words = str(r.text).split()
+        finally:
+            _close(r)
+        expected = words[0].strip().lower() if words else ""
+        if not re.fullmatch(r"[0-9a-f]{64}", expected):
+            raise UpdateError(t("the published checksum can't be read"))
+        if verify is not None:  # built by Skyfold's own release workflow? (before anything is fetched)
+            verify(expected, rel.version, get)
+        stage = Path(tempfile.mkdtemp(prefix=STAGE + "-", dir=app_dir))
+        archive = stage / ZIP_NAME
+        h = hashlib.sha256()
+        r = get(rel.zip_url, stream=True, timeout=60)
+        try:
+            total = int((getattr(r, "headers", None) or {}).get("Content-Length") or 0)
+            if total > MAX_ZIP:
+                raise UpdateError(t("the download isn't a Skyfold build"))
+            if total and shutil.disk_usage(app_dir).free < total * 4:
+                raise UpdateError(t("there isn't enough free disk space for the update"))
+            done = 0
+            with open(archive, "xb") as fh:
+                for chunk in r.iter_content(1 << 16):
+                    if cancelled():
+                        raise UpdateError(t("cancelled"))
+                    fh.write(chunk)
+                    h.update(chunk)
+                    done += len(chunk)
+                    if done > MAX_ZIP:
+                        raise UpdateError(t("the download isn't a Skyfold build"))
+                    if progress:
+                        progress(done, total)
+        finally:
+            _close(r)
+        if cancelled():
+            raise UpdateError(t("cancelled"))
+        if h.hexdigest() != expected:
+            raise UpdateError(t("the download doesn't match its published checksum"))
+        out = stage / "unpacked"
+        with zipfile.ZipFile(archive) as z:
+            seen, size = set(), 0
+            for info in z.infolist():
+                name = info.filename.replace("\\", "/")
+                low = name.lower()
+                mode = (info.external_attr >> 16) & 0o170000
+                if name.startswith("/") or re.match(r"^[A-Za-z]:", name) or ".." in name.split("/") \
+                        or low in seen or mode == 0o120000:
+                    raise UpdateError(t("the download contains an unsafe path"))
+                seen.add(low)
+                size += info.file_size
+            if size > MAX_UNPACKED:
+                raise UpdateError(t("the download isn't a Skyfold build"))
+            for info in z.infolist():
+                if cancelled():
+                    raise UpdateError(t("cancelled"))
+                z.extract(info, out)
+        archive.unlink()
+        new = out / "Skyfold"
+        if not (new / "Skyfold.exe").is_file() or not (new / "_internal").is_dir():
+            raise UpdateError(t("the download isn't a Skyfold build"))
+        return new
+    except BaseException:
+        if stage is not None:
+            shutil.rmtree(stage, ignore_errors=True)  # this attempt's own folder only
+        raise
 
 
 # Runs after Skyfold has quit. Only Skyfold.exe and _internal are swapped; on any failure the old ones
@@ -146,31 +236,51 @@ def download(rel: Release, app_dir: Path = APP_DIR, progress: Callable[[int, int
 _SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 $app = $args[0]; $new = $args[1]; $pid0 = [int]$args[2]; $tag = $args[3]; $log = $args[4]
-function Note($m) { try { Add-Content -LiteralPath $log -Value ("{0} INFO skyfold.update: {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss,fff'), $m) } catch {} }
+$stage = Split-Path (Split-Path $new -Parent) -Parent
+function Note($m) { try { Add-Content -LiteralPath $log -Encoding UTF8 -Value ("{0} INFO skyfold.update: {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss,fff'), $m) } catch {} }
+# 1) Skyfold must really have closed; if it hasn't, nothing is changed.
 try { Wait-Process -Id $pid0 -Timeout 120 -ErrorAction SilentlyContinue } catch {}
+if (Get-Process -Id $pid0 -ErrorAction SilentlyContinue) { Note 'Update not installed: Skyfold did not close'; exit 0 }
 Start-Sleep -Milliseconds 500
 $exe = Join-Path $app 'Skyfold.exe'; $int = Join-Path $app '_internal'
 $oldExe = "$exe.old-$tag"; $oldInt = "$int.old-$tag"
 $moved = @()
+function Restore() {
+  # Put the previous version back. Whatever can't be put back is kept as .old-*, never deleted.
+  try { if ($moved -contains 'exe') { if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force }; Rename-Item -LiteralPath $oldExe -NewName 'Skyfold.exe' } } catch { Note ('Could not put the previous Skyfold.exe back: ' + $_.Exception.Message) }
+  try { if ($moved -contains 'int') { if (Test-Path -LiteralPath $int) { Remove-Item -LiteralPath $int -Recurse -Force }; Rename-Item -LiteralPath $oldInt -NewName '_internal' } } catch { Note ('Could not put the previous _internal back: ' + $_.Exception.Message) }
+}
+$ok = $false
 try {
   for ($i = 0; $i -lt 20; $i++) { try { Rename-Item -LiteralPath $exe -NewName (Split-Path $oldExe -Leaf); break } catch { Start-Sleep -Milliseconds 500; if ($i -eq 19) { throw } } }
   $moved += 'exe'
   Rename-Item -LiteralPath $int -NewName (Split-Path $oldInt -Leaf); $moved += 'int'
   Move-Item -LiteralPath (Join-Path $new 'Skyfold.exe') -Destination $exe
   Move-Item -LiteralPath (Join-Path $new '_internal') -Destination $int
+  $ok = $true
   Note 'Update installed'
 } catch {
   Note ("Update failed, the previous version is kept: " + $_.Exception.Message)
-  if (Test-Path -LiteralPath $exe) { if ($moved -contains 'exe') { Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue } }
-  if (Test-Path -LiteralPath $int) { if ($moved -contains 'int') { Remove-Item -LiteralPath $int -Recurse -Force -ErrorAction SilentlyContinue } }
-  if ($moved -contains 'exe') { Rename-Item -LiteralPath $oldExe -NewName 'Skyfold.exe' }
-  if ($moved -contains 'int') { Rename-Item -LiteralPath $oldInt -NewName '_internal' }
+  Restore
 }
-try { Start-Process -FilePath $exe -ArgumentList '--tray' } catch { Note ('Could not start Skyfold again: ' + $_.Exception.Message) }
-Start-Sleep -Seconds 3
-Remove-Item -LiteralPath $oldExe -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $oldInt -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath (Join-Path $app '.skyfold-update') -Recurse -Force -ErrorAction SilentlyContinue
+# 2) Start Skyfold; a new version that doesn't stay running is replaced by the previous one again.
+$started = $false
+try {
+  $p = Start-Process -FilePath $exe -ArgumentList '--tray' -WorkingDirectory $app -PassThru
+  Start-Sleep -Seconds 5
+  $started = -not $p.HasExited
+  if (-not $started) { throw ('it closed right away (exit code ' + $p.ExitCode + ')') }
+} catch { Note ('Could not start Skyfold again: ' + $_.Exception.Message) }
+if ($ok -and -not $started) {
+  Note 'The previous version is put back'
+  Restore
+  try { Start-Process -FilePath $exe -ArgumentList '--tray' -WorkingDirectory $app } catch { Note ('Could not start the previous version either: ' + $_.Exception.Message) }
+} elseif ($ok) {
+  Remove-Item -LiteralPath $oldExe -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $oldInt -Recurse -Force -ErrorAction SilentlyContinue
+}
+if ((Split-Path $stage -Leaf) -like '.skyfold-update-*') { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
+exit 0
 """
 
 

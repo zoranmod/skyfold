@@ -12,6 +12,10 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write  # releases only: sign the build attestation (Sigstore)
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -72,6 +76,12 @@ jobs:
           # LF line ending, so `sha256sum -c` works on Linux and macOS too
           [IO.File]::WriteAllText("$PWD\Skyfold-windows.zip.sha256", (Get-FileHash Skyfold-windows.zip -Algorithm SHA256).Hash.ToLower() + "  Skyfold-windows.zip`n")
           Get-Content Skyfold-windows.zip.sha256
+
+      - name: Attest the release zip (in-app updates check it)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: Skyfold-windows.zip
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:

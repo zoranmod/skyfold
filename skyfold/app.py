@@ -459,6 +459,7 @@ class Controller(QObject):
                 from .safelog import brief, describe
 
                 log.error("Update couldn't be started: %s", describe(exc))
+                dlg.install_failed(t("The update couldn't be done: {error}", error=brief(exc)))
                 warn(dlg, APP_NAME, t("The update couldn't be done: {error}", error=brief(exc)))
                 return
             self.quit()

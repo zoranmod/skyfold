@@ -1805,8 +1805,16 @@ class UpdateDialog(_Dialog):
             self.status.setText(t("The update couldn't be done: {error}", error=msg))
             self.go.setEnabled(True)
 
+        from .. import provenance
+
         self._task = run_async(lambda: updater.download(self.rel, progress=progress.moved.emit,
-                                                        cancelled=lambda: self._cancel), done, fail)
+                                                        cancelled=lambda: self._cancel,
+                                                        verify=provenance.verify), done, fail)
+
+    def install_failed(self, msg: str) -> None:
+        """The new version couldn't be handed over: the window can try again."""
+        self.status.setText(msg)
+        self.go.setEnabled(True)
 
     def _moved(self, done: int, total: int) -> None:
         if total:

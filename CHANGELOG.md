@@ -4,6 +4,20 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Fixed
+- iCloud Drive: a file moved out of the Drive folder (so Skyfold asked about deleting it) and then put back under another name no longer ends up twice in iCloud when the next check was a quick one; a full read now recognises the move.
+- Notes: an older drawing whose full image is a TIFF is converted to PNG, so the browser shows it; a scanned document whose full PDF can't be downloaded shows its preview instead of nothing; when two attachments share one full image that can't be fetched, each keeps its own preview; an attachment's identifiers are read the way pyicloud reads them, so no image is ever filed under another attachment.
+- Notes: nothing is written when a note's attachment folder leads outside the Notes folder (a link or junction).
+- iCloud Drive: a PC deletion is only confirmed for files Windows can identify; without a file identity it waits.
+
+### Security
+- Updates (Codex review of 1.0.10/1.0.11):
+  - an update is installed only when GitHub's build attestation proves the zip was built by Skyfold's own release workflow for that very version (Sigstore-signed; release builds now create it);
+  - only the release's own files are used, every redirect is checked (GitHub hosts only, at most 5), and no stored login (.netrc) is ever sent;
+  - each download gets its own folder, nothing already there is touched, and a cancelled or failed download leaves nothing behind;
+  - the installer waits until Skyfold has really closed, and if the new version doesn't start it puts the previous one back (the old files are never deleted before the new version runs);
+  - the update window can try again when the installer couldn't be started.
+
 ## [1.0.11] - 2026-11-18
 
 ### Fixed

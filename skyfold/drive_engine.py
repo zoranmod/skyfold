@@ -912,7 +912,8 @@ class DriveSyncer:
 
         if scope is None and not partial:
             self._scrub(remote, local, base, uploads)
-        if scope is not None and (to_cloud or to_pc) and self._only_waiting(to_cloud, to_pc):
+        if (scope is not None and (to_cloud or to_pc) and self._only_waiting(to_cloud, to_pc)
+                and not self._could_be_moved(to_cloud, to_pc, uploads, downloads, local, base)):
             # Only deletions that already wait for your answer (asked, not OK'd yet): nothing new to
             # decide, so no full read for them; they keep waiting and the rest of the pass goes on.
             to_cloud.clear()
@@ -1892,7 +1893,37 @@ class DriveSyncer:
                     return False
                 q = q.rsplit("/", 1)[0]
 
-        return all(waiting(p, self._asked_cloud) for p in to_cloud) and             all(waiting(p, self._asked_pc) for p in to_pc)
+        return (all(waiting(p, self._asked_cloud) for p in to_cloud)
+                and all(waiting(p, self._asked_pc) for p in to_pc))
+
+    def _could_be_moved(self, to_cloud: list[str], to_pc: list[str], uploads: list[str],
+                        downloads: list, local: dict, base: dict[str, Base]) -> bool:
+        """Could something new in this pass be one of the waiting items, moved or renamed? (Same size,
+        or a whole folder is waiting.) Then a full read decides: it recognises a move, which a quick
+        one can't - otherwise the item would end up twice in iCloud."""
+        known = self.state.all() if (to_cloud or to_pc) else {}
+
+        def sizes(paths: list[str], attr: str) -> tuple[set, bool]:
+            out, folder = set(), False
+            for p in paths:
+                b = base.get(p) or known.get(p)
+                if b is None or b.is_dir:
+                    folder = True
+                    continue
+                out.add(getattr(b, attr))
+            return out, folder
+
+        if to_cloud:  # gone from this PC: is it back under another name here?
+            held, folder = sizes(to_cloud, "lsize")
+            new_here = [p for p in uploads if p not in base and p not in known and p in local]
+            if new_here and (folder or any(local[p].size in held for p in new_here)):
+                return True
+        if to_pc:  # gone from iCloud: is it there under another name?
+            held, folder = sizes(to_pc, "size")
+            new_there = [d for d in downloads if d.path not in base and d.path not in known]
+            if new_there and (folder or any(d.size in held for d in new_there)):
+                return True
+        return False
 
     def _pc_shape(self, p: str) -> dict | None:
         """Which items are at p and below on this PC, by Windows' own file identity (a copy put back
@@ -1903,6 +1934,8 @@ class DriveSyncer:
 
         def ident(rel: str, st: os.stat_result) -> None:
             kind = "dir" if stat.S_ISDIR(st.st_mode) else "file"
+            if not st.st_ino:  # the file system can't tell which file this is: nothing to compare
+                raise OSError("no file identity")
             out[rel] = (kind, st.st_dev, st.st_ino)
 
         try:

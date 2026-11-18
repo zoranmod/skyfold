@@ -66,7 +66,7 @@ def test_download_is_checked_and_unpacked_beside_the_app(tmp_path):
     seen = []
     new = up.download(rel(), tmp_path, lambda d, t: seen.append((d, t)), get=fake_get(z, hashlib.sha256(z).hexdigest()))
     assert (new / "Skyfold.exe").read_bytes() == b"NEW EXE" and seen[-1] == (len(z), len(z))
-    assert new.is_relative_to(tmp_path / up.STAGE)
+    assert new.parent.parent.name.startswith(up.STAGE + "-") and new.is_relative_to(tmp_path)
 
 
 def test_a_download_that_doesnt_match_its_checksum_is_refused(tmp_path):
@@ -90,18 +90,26 @@ def test_the_swap_replaces_only_the_program_and_keeps_data(tmp_path, monkeypatch
     (app / "data" / "settings.json").write_text("{}")
     (app / "Skyfold.exe").write_bytes(b"OLD")
     (app / "_internal" / "old.dll").write_bytes(b"OLD")
-    new = app / up.STAGE / "unpacked" / "Skyfold"
+    new = app / (up.STAGE + "-test") / "unpacked" / "Skyfold"
     (new / "_internal").mkdir(parents=True)
-    (new / "Skyfold.exe").write_bytes(b"NEW (not runnable)")
+    import shutil as _sh
+
+    _sh.copy(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe"),
+             new / "Skyfold.exe")  # a program that starts and stays running, like Skyfold
     (new / "_internal" / "new.dll").write_bytes(b"NEW")
     monkeypatch.setattr("skyfold.config.LOG_FILE", tmp_path / "log.txt")
     started = []
     up.start_install(new, app, pid=999999, popen=lambda *a, **k: started.append(subprocess.Popen(*a, **k)))
-    started[0].wait(60)
-    assert (app / "Skyfold.exe").read_bytes() == b"NEW (not runnable)"
+    try:
+        started[0].wait(60)
+    finally:  # close the stand-in that was started as "Skyfold"
+        subprocess.run(["powershell", "-NoProfile", "-Command",
+                        f"Get-Process | Where-Object {{ $_.Path -eq '{app / 'Skyfold.exe'}' }} | Stop-Process -Force"],
+                       capture_output=True)
+    assert (app / "Skyfold.exe").read_bytes()[:2] == b"MZ" and not list(app.glob("*.old-*"))
     assert (app / "_internal" / "new.dll").exists() and not (app / "_internal" / "old.dll").exists()
     assert (app / "data" / "settings.json").read_text() == "{}"
-    assert not list(app.glob("*.old-*")) and not (app / up.STAGE).exists()
+    assert not (app / (up.STAGE + "-test")).exists()  # its own download folder is removed
     assert "Update installed" in (tmp_path / "log.txt").read_text()
 
 

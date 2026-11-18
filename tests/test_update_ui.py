@@ -24,7 +24,7 @@ def _wait(app, cond, secs=3.0):
 
 def test_the_window_shows_whats_new_and_installs_on_update_now(monkeypatch, tmp_path):
     app = _app()
-    monkeypatch.setattr(updater, "download", lambda rel, progress=None, cancelled=None: (progress(5, 10), tmp_path)[1])
+    monkeypatch.setattr(updater, "download", lambda rel, progress=None, cancelled=None, **kw: (progress(5, 10), tmp_path)[1])
     d = dialogs.UpdateDialog(REL, can_install=True)
     d.show()
     assert "Faster sync" in d.notes.toPlainText()
@@ -39,7 +39,7 @@ def test_the_window_shows_whats_new_and_installs_on_update_now(monkeypatch, tmp_
 def test_a_failed_download_is_shown_and_can_be_tried_again(monkeypatch):
     app = _app()
 
-    def broken(rel, progress=None, cancelled=None):
+    def broken(rel, progress=None, cancelled=None, **kw):
         raise updater.UpdateError(updater.t("the download doesn't match its published checksum"))
 
     monkeypatch.setattr(updater, "download", broken)

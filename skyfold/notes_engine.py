@@ -117,9 +117,11 @@ class ICloudNotes:
             from pyicloud.services.notes.rendering.options import ExportConfig
 
             record = self.svc._lookup_note_record(note_id)
+            _check_assets_dir(Path(assets_dir) / str(getattr(record, "recordName", "") or note_id))
             raw = self.svc._raw
             made: set[tuple[int, int]] = set()  # the files this export downloaded, by file identity
             dirs: set[Path] = set()  # and the folders it downloaded them into (the note's own)
+            calls: dict[str, int] = {}
 
             class Recording:
                 """This export's own view of the client: downloads are written down; the shared
@@ -129,10 +131,12 @@ class ICloudNotes:
                     return getattr(raw, name)
 
                 def download_asset_to(self, url, directory):
+                    turn = calls[url] = calls.get(url, -1) + 1  # the n-th attachment fetching this file
                     try:
                         path = raw.download_asset_to(url, directory)
                     except Exception as exc:  # noqa: BLE001
-                        preview = _PREVIEW_FOR.get(url)
+                        previews = _PREVIEW_FOR.get(url) or []
+                        preview = previews[min(turn, len(previews) - 1)] if previews else None
                         if not preview:
                             raise
                         log.info("Note image: the full size couldn't be fetched (%s); its preview is used",
@@ -164,6 +168,8 @@ class ICloudNotes:
                 upgrade_sketches(page, dict(_SKETCH_FALLBACKS), fetch, made=made, dirs=dirs)
             if page.exists() and "public.hei" in page.read_text(encoding="utf-8", errors="replace"):
                 upgrade_heic(page, dict(_HEIC_FULL), fetch, made=made, dirs=dirs)
+            if page.exists():
+                browser_images(page, made=made, dirs=dirs)
         self._call(run)
 
 
@@ -235,7 +241,7 @@ def _prefer_full_images() -> None:
                     uti = ""
                 if url and uti in FULL_IMAGE_UTIS:
                     if before and before != url:
-                        _PREVIEW_FOR[url] = before  # if the full image can't be fetched, the preview is
+                        _PREVIEW_FOR.setdefault(url, []).append(before)  # if the full image can't be fetched
                     ds.set_primary_asset_url(parent, url)
                 elif url and uti in HEIC_UTIS:  # a browser can't show it: converted after the export
                     if before:
@@ -323,7 +329,7 @@ def _better_attachment_choices() -> None:
                 fields = rec.fields
                 keys = [k for k in (getattr(fields.get_field(n) or (), "value", None)
                                     for n in ("AttachmentIdentifier", "attachmentIdentifier", "Identifier"))
-                        if isinstance(k, str) and k]
+                        if isinstance(k, str) and k][:1]  # the first one only, as pyicloud does
                 keys = list(dict.fromkeys(keys + ([rec.recordName] if rec.recordName else [])))
                 if not keys:
                     return
@@ -347,14 +353,19 @@ def _better_attachment_choices() -> None:
                 from_preview = primary is None or primary in preview_urls
                 image_like = uti.startswith("public.image") or uti in FULL_IMAGE_UTIS | HEIC_UTIS | \
                     {"public.tiff", "com.apple.paper"}
+                best_preview = next((u for u in reversed(preview_urls) if u), None)
                 if uti in SCAN_UTIS:  # a scan: its full PDF, shown and kept like any PDF in a note
                     pdf = url_of(value("FallbackPDF"))
                     if pdf:
+                        if best_preview:
+                            _PREVIEW_FOR.setdefault(pdf, []).append(best_preview)
                         choose(pdf, "com.apple.paper.doc.pdf")
                     return
                 if uti in LEGACY_DRAWING_UTIS:  # an older drawing: its full bitmap
                     full = url_of(value("FallbackImage"))
                     if full:
+                        if best_preview:
+                            _PREVIEW_FOR.setdefault(full, []).append(best_preview)
                         choose(full, "public.image")
                     return
                 if not image_like or not from_preview:
@@ -369,7 +380,7 @@ def _better_attachment_choices() -> None:
                             _HEIC_FULL[k] = full
                         break
                     if primary:
-                        _PREVIEW_FOR[full] = primary  # if the full image can't be fetched
+                        _PREVIEW_FOR.setdefault(full, []).append(primary)  # if the full image can't be fetched
                     choose(full)
                     return
                 # previews: the largest in pixels of the chosen appearance (bytes only break ties)
@@ -446,7 +457,7 @@ _SKETCH_FALLBACKS: MutableMapping = _PerThread()
 _HEIC_FULL: MutableMapping = _PerThread()  # attachment id -> download URL of the full HEIC original
 _ATTACHMENT_KEYS: MutableMapping = _PerThread()  # attachment record name -> every id the page may use
 _ALIASES: MutableMapping = _PerThread()  # any name of an attachment -> all its names
-_PREVIEW_FOR: MutableMapping = _PerThread()  # full image URL -> the preview it replaced (used if it fails)
+_PREVIEW_FOR: MutableMapping = _PerThread()  # full image URL -> each attachment's own preview, in order
 _SKETCH_INFO: MutableMapping = _PerThread()
 _CURRENT_NOTE = [""]  # file name of the note being exported (for the log)
 
@@ -876,6 +887,90 @@ def upgrade_sketches(page: Path, fallbacks: dict[str, str], download, made: set 
     return count
 
 
+def _check_assets_dir(assets: Path) -> None:
+    """The note's attachment folder (and _assets above it) must be what it says: no link or
+    junction leading somewhere else, so nothing is ever written outside the Notes folder."""
+    for d in (assets.parent, assets):
+        if not os.path.lexists(d):
+            continue
+        real = os.path.normcase(os.path.realpath(d))
+        if real != os.path.normcase(os.path.abspath(d)) or os.path.islink(d) or _is_junction(d):
+            raise SyncError(t("The attachment folder {name} leads outside the Notes folder; nothing is written "
+                              "there.", name=str(d)))
+
+
+def _is_junction(p: Path) -> bool:
+    try:
+        return bool(os.lstat(p).st_file_attributes & 0x400)  # FILE_ATTRIBUTE_REPARSE_POINT
+    except (OSError, AttributeError):
+        return False
+
+
+BROWSER_IMAGES = ("png", "jpeg", "jpg", "gif", "webp", "bmp", "svg")
+
+
+def browser_images(page: Path, made: set | None = None, dirs: set | None = None) -> int:
+    """An attachment image a browser can't show (TIFF) is converted to PNG, losslessly; the page then
+    shows the PNG. The original is removed only when this export downloaded it (as for drawings).
+    When it can't be converted, the page stays as it is."""
+    import urllib.parse
+
+    from PySide6.QtGui import QImage, QImageReader
+
+    note_dir = page.parent
+    text = page.read_text(encoding="utf-8", errors="replace")
+    count = 0
+
+    def swap(m: re.Match) -> str:
+        nonlocal count
+        tag, src = m.group(0), m.group(1)
+        if src.startswith(("http:", "https:", "data:")):
+            return tag
+        f = (note_dir / urllib.parse.unquote(src).replace("\\", "/")).resolve()
+        if ASSETS not in f.parts or not f.is_file():
+            return tag
+        reader = QImageReader(str(f))
+        fmt = bytes(reader.format().data()).decode().lower()
+        reader.setFileName("")
+        if not fmt or fmt in BROWSER_IMAGES:
+            return tag
+        img = QImage(str(f))
+        new = _save_image_new(img, f.with_name(f.name + ".png")) if not img.isNull() else None
+        if new is None:
+            log.info("Note image in %s: format %s can't be shown by a browser and couldn't be converted",
+                     page.name, value(fmt, _IMAGE_FORMATS))
+            return tag
+        count += 1
+        try:
+            if made and dirs and f.parent in {Path(d).resolve() for d in dirs} and _file_identity(f) in made:
+                f.unlink()
+        except OSError:
+            pass
+        rel = urllib.parse.quote(os.path.relpath(new, note_dir).replace("\\", "/"))
+        return tag.replace(f'src="{src}"', f'src="{rel}"', 1)
+
+    def unembed(m: re.Match) -> str:
+        """An embedded "PDF" that is an image (a scan whose full PDF wasn't available: its preview)."""
+        nonlocal count
+        src = m.group(1)
+        if src.lower().endswith(".pdf") or src.startswith(("http:", "https:", "data:")):
+            return m.group(0)
+        f = (note_dir / urllib.parse.unquote(src).replace(chr(92), "/")).resolve()
+        if ASSETS not in f.parts or not f.is_file() or not QImageReader(str(f)).canRead():
+            return m.group(0)
+        count += 1
+        return f'<img src="{src}" alt="">'
+
+    text = OBJECT_TAG.sub(unembed, text)
+    text = IMG_TAG.sub(swap, text)
+    if count:
+        page.write_text(text, encoding="utf-8")
+    return count
+
+
+OBJECT_TAG = re.compile(r'<object\b[^>]*?\sdata="([^"#]+)"[^>]*>.*?</object>', re.IGNORECASE | re.DOTALL)
+
+
 def pdfs_to_images(page: str, note_dir: Path, open_text: str) -> str:
     """Replace embedded PDF viewers with the pages as images (plain, sharp, nothing to click),
     plus a small link to the original PDF."""
@@ -888,6 +983,10 @@ def pdfs_to_images(page: str, note_dir: Path, open_text: str) -> str:
             return m.group(0)
         images = render_pdf_pages(pdf)
         if not images:
+            from PySide6.QtGui import QImageReader
+
+            if QImageReader(str(pdf)).canRead():  # e.g. a scan's preview, its full PDF wasn't available
+                return f'<img src="{src}" alt="">'
             return m.group(0)
         rel = lambda p: urllib.parse.quote(os.path.relpath(p, note_dir).replace("\\", "/"))  # noqa: E731
         pages = "".join(f'<img class="sf-page" src="{rel(p)}" alt="">' for p in images)
