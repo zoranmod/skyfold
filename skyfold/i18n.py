@@ -591,6 +591,8 @@ BS: dict[str, str] = {
     "Upload failed ({name}): {error}": "Slanje nije uspjelo ({name}): {error}",
     "Already in iCloud Photos: {name}": "Već je u iCloud slikama: {name}",
     "Uploaded to iCloud Photos: {name}": "Poslano u iCloud slike: {name}",
+    "Kept on this PC only (the video part of a Live Photo): {name}":
+        "Ostaje samo na ovom računaru (video dio Live fotografije): {name}",
     "GitHub is limiting update checks from your internet connection right now; try again in {n} min.":
         "GitHub trenutno ograničava provjere ažuriranja s tvoje internet veze; pokušaj ponovo za {n} min.",
     "was {old}": "ranije {old}",

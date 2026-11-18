@@ -5,7 +5,7 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 ## [Unreleased]
 
 ### Added
-- Photos: new setting "Upload photos and videos I add to this folder to iCloud Photos" (off by default). Photos and videos you put into the photos folder go up to iCloud Photos and are then synced like any other (deleting one later deletes it in iCloud too). A file is sent only when it has been unchanged for two minutes, and never while a photo is missing from the folder (it could be a moved or renamed one); one that iCloud already has with the same bytes isn't added twice. Album folders and Skyfold's own files are never sent.
+- Photos: new setting "Upload photos and videos I add to this folder to iCloud Photos" (off by default). Photos and videos you put into the photos folder go up to iCloud Photos and are then synced like any other (deleting one later deletes it in iCloud too). A file is sent only when it has been unchanged for two minutes, and never while a photo is missing from the folder (it could be a moved or renamed one); one that iCloud already has with the same bytes isn't added twice. Album folders and Skyfold's own files are never sent. A Live Photo copied from an iPhone (IMG_1234.HEIC + IMG_1234.MOV) sends its photo; the video part stays on this PC instead of becoming a separate video in iCloud. A photo iCloud takes a while to make ready is matched with your file when it appears, not downloaded a second time. An upload that keeps failing is retried every time but shown in the panel once.
 
 ### Changed
 - Note pages have the same look and colors as Notes.html (light and dark). Pages already exported are restyled in place once, without downloading anything again; a page you changed yourself is left as it is.

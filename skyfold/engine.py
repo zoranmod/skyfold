@@ -6,6 +6,7 @@ land in "Recently Deleted" for 30 days.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -529,6 +530,7 @@ class Syncer:
 
     UPLOAD_EXT = {".heic", ".heif", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff", ".webp", ".dng",
                   ".mov", ".mp4", ".m4v"}
+    LIVE_STILL_EXT = {".heic", ".heif", ".jpg", ".jpeg"}
     UPLOAD_MAX = 100  # per pass; the rest follows next time
     UPLOAD_SETTLE = 120  # seconds a file must stay unchanged first (still being copied otherwise)
 
@@ -546,13 +548,17 @@ class Syncer:
         known_ids = self.state.asset_ids()
         now = time.time()
         found: list[tuple[str, Path, os.stat_result]] = []
+        live_kept: list[tuple[str, Path, os.stat_result]] = []
         for dirpath, dirs, files in os.walk(self.root):
             dirs[:] = [d for d in dirs if not _is_link(Path(dirpath) / d) and not d.startswith(".")]
+            stills = {PurePosixPath(f).stem.lower() for f in files
+                      if PurePosixPath(f).suffix.lower() in self.LIVE_STILL_EXT}
             for fn in files:
                 if fn.startswith((TMP_PREFIX, ".")) or fn == MARKER:
                     continue
                 if PurePosixPath(fn).suffix.lower() not in self.UPLOAD_EXT:
                     continue
+                pair_video = PurePosixPath(fn).suffix.lower() == ".mov" and PurePosixPath(fn).stem.lower() in stills
                 full = Path(dirpath) / fn
                 rel = full.relative_to(self.root).as_posix()
                 if rel.lower() in tracked or rel.lower() in album_entries:
@@ -565,7 +571,12 @@ class Syncer:
                     continue  # still being copied (or empty): next time
                 if self.state.get(f"upload_done:{rel.lower()}") == f"{st.st_size}:{int(st.st_mtime)}":
                     continue  # this very file was handled before (e.g. iCloud already had it)
-                found.append((rel, full, st))
+                (live_kept if pair_video else found).append((rel, full, st))
+        for rel, full, st in live_kept:
+            # The motion part of a Live Photo (IMG_1234.MOV next to IMG_1234.HEIC): iCloud can't take the
+            # pair from here, and on its own it would show up as a separate video. Its photo goes up.
+            self.state.set(f"upload_done:{rel.lower()}", f"{st.st_size}:{int(st.st_mtime)}")
+            self.cb.activity("info", t("Kept on this PC only (the video part of a Live Photo): {name}", name=full.name))
         sent = 0
         for rel, full, st in sorted(found)[: self.UPLOAD_MAX]:
             self._check_cancel()
@@ -576,11 +587,21 @@ class Syncer:
             except (Cancelled, _Auth, _Unavail):
                 raise
             except Exception as exc:  # noqa: BLE001 - tried again next pass
-                self.cb.activity("error", t("Upload failed ({name}): {error}", name=full.name, error=brief(exc)))
+                mark = f"{st.st_size}:{int(st.st_mtime)}"
+                if self.state.get(f"upload_fail:{rel.lower()}") != mark:  # said once, not every pass
+                    self.state.set(f"upload_fail:{rel.lower()}", mark)
+                    self.cb.activity("error", t("Upload failed ({name}): {error}", name=full.name, error=brief(exc)))
+                log.info("Photos: upload of %s failed: %s", full.name, brief(exc))
                 continue
+            self.state.set(f"upload_fail:{rel.lower()}", None)
             mark = f"{st.st_size}:{int(st.st_mtime)}"
             if asset is None or not asset.resources:
-                self.state.set(f"upload_done:{rel.lower()}", mark)  # accepted, not indexed yet: not sent again
+                # accepted, not ready in iCloud yet: not sent again, and when it shows up among the new
+                # photos it is matched with this file (not downloaded a second time)
+                self.state.set(f"upload_done:{rel.lower()}", mark)
+                self.state.set(f"upload_wait:{rel.lower()}", json.dumps([rel, full.name, st.st_size, digest]))
+                self.cb.activity("upload", t("Uploaded to iCloud Photos: {name}", name=rel), str(full))
+                sent += 1
                 continue
             if asset.id in known_ids:  # iCloud already had this photo (it's elsewhere in the folder)
                 self.state.set(f"upload_done:{rel.lower()}", mark)
@@ -593,6 +614,39 @@ class Syncer:
             sent += 1
             self.cb.activity("upload", t("Uploaded to iCloud Photos: {name}", name=rel), str(full))
         return sent
+
+    def _uploads_waiting(self) -> dict[tuple[str, int], tuple[str, str, str]]:
+        """Files sent to iCloud that weren't ready there yet: (name, size) -> (meta key, path, fingerprint)."""
+        out: dict[tuple[str, int], tuple[str, str, str]] = {}
+        for key, value in self.state.items("upload_wait:"):
+            try:
+                rel, name, size, digest = json.loads(value)
+                out[(str(name).lower(), int(size))] = (key, str(rel), str(digest))
+            except (ValueError, TypeError):
+                self.state.set(key, None)
+        return out
+
+    def _match_upload(self, a: RemoteAsset, waiting: dict) -> bool:
+        """A new iCloud photo that is a file sent from this PC: recorded with that file, not downloaded."""
+        res = next((r for r in a.resources if r.key == "original"), None)
+        if res is None or res.size is None:
+            return False
+        hit = waiting.get((res.filename.lower(), res.size)) or waiting.get((a.filename.lower(), res.size))
+        if hit is None:
+            return False
+        key, rel, digest = hit
+        for k in [k for k, v in waiting.items() if v is hit]:
+            del waiting[k]
+        self.state.set(key, None)
+        p = self._abs(rel)
+        try:
+            same = os.stat(p).st_size == res.size and _file_hash(p) == digest
+        except OSError:
+            same = False
+        if not same:  # moved, changed or gone meanwhile: synced like any other new photo
+            return False
+        self.state.add_file(FileRow(a.id, res.key, rel, res.size, res.is_video, a.date.isoformat(), digest), now_iso())
+        return True
 
     def _confirm_moves(self, maybe: dict[tuple[str, str], list[str]]) -> tuple[dict[tuple[str, str], str], set]:
         """Which of the look-alike files really are the missing photos? iCloud's copy of each missing
@@ -823,9 +877,12 @@ class Syncer:
         retry_failed = force_full or stale  # parked failures are tried again on a scheduled or asked-for full read
         parked = 0
         todo: list[tuple[RemoteAsset, RemoteResource]] = []
+        waiting = self._uploads_waiting()
         for a in remote_assets.values():
             if a.id in excluded or a.id in held or a.id in local_deleted_set:
                 continue
+            if waiting and self._match_upload(a, waiting):
+                tracked_keys.update((a.id, r.key) for r in a.resources if r.key == "original")
             if a.is_video and not self.settings.include_videos:
                 continue
             for res in a.resources:

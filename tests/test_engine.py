@@ -506,3 +506,64 @@ def test_no_upload_while_a_photo_is_missing(env):
     _old(root / "renamed.jpg")
     s.run()
     assert getattr(r, "uploads", []) == []
+
+
+def test_live_photo_pair_sends_only_the_photo(env):
+    s, r, root, _ = env
+    s.settings.photos_upload = True
+    s.run()
+    for name, data in (("IMG_9000.HEIC", b"still"), ("IMG_9000.MOV", b"motion"), ("clip.mov", b"video")):
+        (root / name).write_bytes(data)
+        _old(root / name)
+    s.run()
+    assert sorted(r.uploads) == ["IMG_9000.HEIC", "clip.mov"]
+    s.run()
+    assert sorted(r.uploads) == ["IMG_9000.HEIC", "clip.mov"]  # the pair's video isn't tried again
+    assert (root / "IMG_9000.MOV").exists()
+
+
+def test_upload_indexed_later_is_matched_not_downloaded(env):
+    s, r, root, trashed = env
+    s.settings.photos_upload = True
+    s.run()
+    sent = []
+
+    def slow_upload(path):  # iCloud took it but hasn't indexed it yet
+        sent.append(path.name)
+        return None
+
+    r.upload = slow_upload
+    (root / "late.jpg").write_bytes(b"late bytes")
+    _old(root / "late.jpg")
+    s.run()
+    assert sent == ["late.jpg"]
+    s.run()
+    assert sent == ["late.jpg"]  # not sent twice
+    r.add("LATE1", "late.jpg", b"late bytes")  # now it shows up in iCloud
+    res = s.run()
+    assert res.downloaded == 0
+    assert [p.name for p in root.rglob("*.jpg")] == ["late.jpg"]
+    assert "LATE1" in s.state.asset_ids()
+    assert trashed == []
+
+
+def test_failing_upload_is_retried_but_reported_once(env):
+    s, r, root, _ = env
+    s.settings.photos_upload = True
+    s.run()
+    calls = []
+    errors = []
+
+    def broken(path):
+        calls.append(path.name)
+        raise ValueError("server said no")
+
+    r.upload = broken
+    orig = s.cb.activity
+    s.cb.activity = lambda kind, text, target="": (errors.append(text) if kind == "error" else None, orig(kind, text, target))
+    (root / "x.jpg").write_bytes(b"x")
+    _old(root / "x.jpg")
+    s.run()
+    s.run()
+    assert calls == ["x.jpg", "x.jpg"]
+    assert len(errors) == 1
