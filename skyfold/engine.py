@@ -527,6 +527,73 @@ class Syncer:
             self.state.exclude(f"{r.asset_id}#{r.resource_key}", "video deleted on PC")
         return sorted(set(deleted_assets)), moved
 
+    UPLOAD_EXT = {".heic", ".heif", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff", ".webp", ".dng",
+                  ".mov", ".mp4", ".m4v"}
+    UPLOAD_MAX = 100  # per pass; the rest follows next time
+    UPLOAD_SETTLE = 120  # seconds a file must stay unchanged first (still being copied otherwise)
+
+    def upload_new(self) -> int:
+        """Photos and videos put into the photos folder go up to iCloud Photos (when turned on). A file
+        is recorded like a downloaded one, so it is never downloaded again; one that iCloud already
+        has (the same bytes) is left as it is. Album folders and Skyfold's own files are never sent."""
+        from .remote import AuthRequired as _Auth, RemoteUnavailable as _Unavail
+
+        upload = getattr(self.remote, "upload", None)
+        if upload is None:
+            return 0
+        tracked = {r.rel_path.lower() for r in self.state.files()}
+        album_entries = {rel.lower() for rel in self.state.album_links()}
+        known_ids = self.state.asset_ids()
+        now = time.time()
+        found: list[tuple[str, Path, os.stat_result]] = []
+        for dirpath, dirs, files in os.walk(self.root):
+            dirs[:] = [d for d in dirs if not _is_link(Path(dirpath) / d) and not d.startswith(".")]
+            for fn in files:
+                if fn.startswith((TMP_PREFIX, ".")) or fn == MARKER:
+                    continue
+                if PurePosixPath(fn).suffix.lower() not in self.UPLOAD_EXT:
+                    continue
+                full = Path(dirpath) / fn
+                rel = full.relative_to(self.root).as_posix()
+                if rel.lower() in tracked or rel.lower() in album_entries:
+                    continue
+                try:
+                    st = full.stat()
+                except OSError:
+                    continue
+                if now - st.st_mtime < self.UPLOAD_SETTLE or st.st_size == 0:
+                    continue  # still being copied (or empty): next time
+                if self.state.get(f"upload_done:{rel.lower()}") == f"{st.st_size}:{int(st.st_mtime)}":
+                    continue  # this very file was handled before (e.g. iCloud already had it)
+                found.append((rel, full, st))
+        sent = 0
+        for rel, full, st in sorted(found)[: self.UPLOAD_MAX]:
+            self._check_cancel()
+            self.cb.status(t("Uploading {name}…", name=full.name))
+            try:
+                digest = _file_hash(full)
+                asset = upload(full)
+            except (Cancelled, _Auth, _Unavail):
+                raise
+            except Exception as exc:  # noqa: BLE001 - tried again next pass
+                self.cb.activity("error", t("Upload failed ({name}): {error}", name=full.name, error=brief(exc)))
+                continue
+            mark = f"{st.st_size}:{int(st.st_mtime)}"
+            if asset is None or not asset.resources:
+                self.state.set(f"upload_done:{rel.lower()}", mark)  # accepted, not indexed yet: not sent again
+                continue
+            if asset.id in known_ids:  # iCloud already had this photo (it's elsewhere in the folder)
+                self.state.set(f"upload_done:{rel.lower()}", mark)
+                self.cb.activity("info", t("Already in iCloud Photos: {name}", name=full.name))
+                continue
+            res = asset.resources[0]
+            self.state.add_file(FileRow(asset.id, res.key, rel, st.st_size, asset.is_video,
+                                        asset.date.isoformat(), digest), now_iso())
+            known_ids.add(asset.id)
+            sent += 1
+            self.cb.activity("upload", t("Uploaded to iCloud Photos: {name}", name=rel), str(full))
+        return sent
+
     def _confirm_moves(self, maybe: dict[tuple[str, str], list[str]]) -> tuple[dict[tuple[str, str], str], set]:
         """Which of the look-alike files really are the missing photos? iCloud's copy of each missing
         photo is downloaded once and compared with every look-alike not claimed yet. Returns (confirmed
@@ -589,6 +656,9 @@ class Syncer:
         local_deleted, moved = self.scan_local()
         if moved:
             self.cb.activity("info", t("Followed {n} files moved inside the folder", n=moved))
+        if getattr(self.settings, "photos_upload", False) and not local_deleted and not self.held:
+            # (only when nothing is missing: a new-looking file might be a photo moved or renamed)
+            self.upload_new()
 
         cursor = self.remote.cursor()
         stored = self.state.get("cursor")

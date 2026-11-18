@@ -834,6 +834,8 @@ class SettingsDialog(_Dialog):
         self.videos = self._toggle(media, t("Download videos"), self.s.include_videos)
         self.live = self._toggle(media, t("Download the video part of Live Photos (.MOV)"), self.s.include_live_video)
         self.albums = self._toggle(media, t("Show albums as folders (Albums\\…)"), self.s.albums_as_folders)
+        self.upload = self._toggle(media, t("Upload photos and videos I add to this folder to iCloud Photos"),
+                                   self.s.photos_upload)
         self._hint(media, t("Album folders use no extra disk space. They mirror iCloud; deleting there doesn't delete photos."))
 
         dele = self._card(lay, t("DELETING"))
@@ -1179,6 +1181,7 @@ class SettingsDialog(_Dialog):
         s.include_videos = self.videos.isChecked()
         s.include_live_video = self.live.isChecked()
         s.albums_as_folders = self.albums.isChecked()
+        s.photos_upload = self.upload.isChecked()
         s.delete_cloud_to_pc = self.del_pc.isChecked()
         s.delete_pc_to_cloud = self.del_cloud.isChecked()
         s.instant_local_deletes = self.instant.isChecked()

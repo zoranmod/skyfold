@@ -4,7 +4,11 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Added
+- Photos: new setting "Upload photos and videos I add to this folder to iCloud Photos" (off by default). Photos and videos you put into the photos folder go up to iCloud Photos and are then synced like any other (deleting one later deletes it in iCloud too). A file is sent only when it has been unchanged for two minutes, and never while a photo is missing from the folder (it could be a moved or renamed one); one that iCloud already has with the same bytes isn't added twice. Album folders and Skyfold's own files are never sent.
+
 ### Changed
+- Note pages have the same look and colors as Notes.html (light and dark). Pages already exported are restyled in place once, without downloading anything again; a page you changed yourself is left as it is.
 - Update checks: when GitHub limits checks from your internet connection (60 an hour, shared by everyone on the same connection), Skyfold says how many minutes to wait instead of "HTTPError (403)", and finds the latest version through the releases page instead, which isn't limited that way.
 
 ## [1.0.14] - 2026-11-18

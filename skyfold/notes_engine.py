@@ -542,40 +542,60 @@ THEME_BUTTON = ('<button class="sf-theme" type="button" onclick="sfToggleTheme()
                 '<path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/></svg></button>')
 
 THEME_VARS = """
-:root{--bg:#f5f7fa;--card:#fff;--text:#0f172a;--muted:#64748b;--border:#e2e8f0;--accent:#2563eb;--hover:#eff6ff}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#000;--card:#0b0b0d;--text:#f3f4f6;
---muted:#9ca3af;--border:#232327;--accent:#60a5fa;--hover:#0d1a30}}
-:root[data-theme=dark]{--bg:#000;--card:#0b0b0d;--text:#f3f4f6;--muted:#9ca3af;--border:#232327;--accent:#60a5fa;
---hover:#0d1a30}
-.sf-theme{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;
-border:1px solid var(--border);border-radius:9px;background:var(--card);color:var(--text);cursor:pointer}
-.sf-theme:hover{border-color:var(--accent);color:var(--accent)}
+:root{color-scheme:light;--bg:#fff;--card:#f3f5f8;--hover:#e7ebf0;--text:#20252b;--muted:#59636f;--border:#dce2e9;
+--accent:#075bcd;--accent-soft:#e7f0ff}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;--bg:#191e25;--card:#222932;
+--hover:#303944;--text:#f0f3f7;--muted:#b0bac7;--border:#36404d;--accent:#99c2ff;--accent-soft:#243b59}}
+:root[data-theme=dark]{color-scheme:dark;--bg:#191e25;--card:#222932;--hover:#303944;--text:#f0f3f7;--muted:#b0bac7;
+--border:#36404d;--accent:#99c2ff;--accent-soft:#243b59}
+.sf-theme{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;
+border:0;border-radius:8px;background:var(--card);color:var(--muted);cursor:pointer}
+.sf-theme:hover{background:var(--hover);color:var(--text)}
+.sf-theme:focus-visible,.sf-nav a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 """
 
+NOTE_STYLE = "2"  # raised when note pages look different: pages Skyfold wrote get the new style in place
 NOTE_CSS = """
-<style id="skyfold">""" + THEME_VARS + """
+<style id="skyfold" data-style=\"""" + NOTE_STYLE + """\">""" + THEME_VARS + """
 html{background:var(--bg)}
-body{max-width:760px;margin:0 auto!important;padding:20px 20px 60px!important;background:var(--bg)!important;
-color:var(--text)!important;font:17px/1.6 "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif!important}
-.sf-nav{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;padding:10px 0 12px;
-margin-bottom:8px;background:var(--bg);border-bottom:1px solid var(--border)}
-.sf-nav a{color:var(--accent);text-decoration:none;font-weight:600}
-.sf-nav a:hover{text-decoration:underline}
-.sf-nav span{color:var(--muted);font-size:14px;margin-left:auto}
-@media print{.sf-theme{display:none}}
-h1{font-size:28px;line-height:1.25;margin:12px 0 16px}
-img{max-width:100%;height:auto;border-radius:10px}
+body{max-width:760px;margin:0 auto!important;padding:16px 24px 64px!important;background:var(--bg)!important;
+color:var(--text)!important;font:16px/1.65 "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif!important}
+.sf-nav{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;padding:12px 0;margin-bottom:12px;
+background:var(--bg);border-bottom:1px solid var(--border)}
+.sf-nav a{display:inline-flex;align-items:center;min-height:36px;padding:0 12px;border-radius:8px;
+background:var(--card);color:var(--text);text-decoration:none;font-size:14px;font-weight:600}
+.sf-nav a:hover{background:var(--accent-soft);color:var(--accent)}
+.sf-nav span{color:var(--muted);font-size:13px;margin-left:auto}
+h1{font-size:26px;line-height:1.25;letter-spacing:-.4px;font-weight:650;margin:12px 0 16px}
+h2,h3{letter-spacing:-.2px}
+img{max-width:100%;height:auto;border-radius:11px}
 img[src*="_assets"]{background:#fff}
 .sf-pdf{margin:12px 0 20px}
-.sf-page{display:block;width:100%;margin:0 0 10px;border:1px solid var(--border);border-radius:10px;background:#fff}
-.sf-sketch{display:block;width:100%;height:auto;margin:8px 0;border-radius:10px;background:#fff}
+.sf-page{display:block;width:100%;margin:0 0 10px;border:1px solid var(--border);border-radius:11px;background:#fff}
+.sf-sketch{display:block;width:100%;height:auto;margin:8px 0;border-radius:11px;background:#fff}
 .sf-open{font-size:14px}
-object,embed,iframe{width:100%!important;height:85vh!important;border:1px solid var(--border);border-radius:10px;background:#fff}
+object,embed,iframe{width:100%!important;height:85vh!important;border:1px solid var(--border);border-radius:11px;background:#fff}
 table{border-collapse:collapse;max-width:100%} td,th{border:1px solid var(--border);padding:6px 10px}
+th{background:var(--card)}
+blockquote{margin:12px 0;padding:4px 16px;border-left:3px solid var(--border);color:var(--muted)}
+pre,code{background:var(--card);border-radius:6px}pre{padding:12px;overflow:auto}
+hr{border:0;border-top:1px solid var(--border)}
 a{color:var(--accent)}
-@media print{.sf-nav{display:none}}
+::selection{background:var(--accent);color:var(--bg)}
+@media(max-width:700px){body{padding:8px 16px 48px!important}.sf-nav span{display:none}}
+@media print{.sf-nav,.sf-theme{display:none}}
 </style>
 """
+
+_STYLE_BLOCK = re.compile(r'\n?<style id="skyfold"[^>]*>.*?</style>\n?', re.DOTALL)
+
+
+def restyle_note_html(page: str) -> str | None:
+    """The page with Skyfold's current style block in place of an older one (None: nothing to do)."""
+    m = _STYLE_BLOCK.search(page)
+    if not m or f'data-style="{NOTE_STYLE}"' in m.group(0):
+        return None
+    return page[:m.start()] + NOTE_CSS + page[m.end():]
 
 
 def polish_note_html(page: str, back_href: str, back_text: str, updated: str,
@@ -1223,6 +1243,41 @@ class NotesSyncer:
         self.state.set("cursor", None)
         self.state.set("quality", QUALITY)
 
+    def _restyle_pages(self) -> int:
+        """Once per NOTE_STYLE: pages exactly as Skyfold wrote them get the new look in place (nothing is
+        downloaded again). A page someone changed since is left as it is."""
+        done = 0
+        for nid, row in self.state.all().items():
+            if self.cancel_flag.is_set() or self.closing.is_set():
+                raise Cancelled()
+            rel, recorded = row[1], self.state.get(f"page:{nid}")
+            if not rel or not recorded:
+                continue
+            page = self.root / rel
+            try:
+                if _is_link(page) or not inside_root(self.root, page) or _digest(page) != recorded:
+                    continue
+                text = restyle_note_html(page.read_bytes().decode("utf-8", errors="replace"))
+                if text is None:
+                    continue
+                tmp = page.with_name(f"{STAGE_PREFIX}style-{uuid.uuid4().hex}.html")
+                self._own(tmp, "new")
+                try:
+                    tmp.write_bytes(text.encode("utf-8"))
+                    if _digest(page) != recorded:  # saved by someone meanwhile: theirs
+                        tmp.unlink()
+                        continue
+                    os.replace(tmp, page)
+                finally:
+                    if not tmp.exists():
+                        self._disown(tmp)
+                self.state.set(f"page:{nid}", _digest(page))
+                done += 1
+            except OSError as exc:
+                log.info("Notes: couldn't restyle %s: %s", rel, exc)
+        self.state.set("note_style", NOTE_STYLE)
+        return done
+
     def run(self, full: bool = False) -> NotesResult:
         self.cancel_flag.clear()
         if self.closing.is_set():
@@ -1236,6 +1291,9 @@ class NotesSyncer:
                 self.state.put(nid, row[1], row[2], row[3], None, bool(row[5]))
             self.state.set("cursor", None)
             self.state.set("format", FORMAT)
+            self.state.set("note_style", NOTE_STYLE)  # every page is written anew in the current style
+        elif self.state.get("note_style") != NOTE_STYLE:
+            self._restyle_pages()
         stored = self.state.get("cursor")
         cursor = self.remote.cursor()
         if stored == cursor and not full:

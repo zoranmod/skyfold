@@ -57,6 +57,7 @@ class Remote(Protocol):
     def delete(self, asset_id: str) -> None: ...
     def albums(self) -> list[tuple[str, list[str]]]: ...  # (album path like "Trips/Rome", asset ids)
     def download(self, resource: RemoteResource, dest: Path, on_bytes: Callable[[int], None]) -> None: ...
+    def upload(self, path: Path) -> RemoteAsset | None: ...  # the new (or already present) asset
 
 
 _WEB_ACCESS_CHECKS = ("requestWebAccessState", "requestPCS", "enableDeviceConsentForPCS")
@@ -171,6 +172,15 @@ class ICloudRemote:
             if live is not None and live.url:
                 resources.append(RemoteResource("original_video", live.filename, live.size, live.url, True))
         return RemoteAsset(asset.id, asset.filename, date, is_video, resources)
+
+    def upload(self, path: Path) -> RemoteAsset | None:
+        """Put a photo or video into the iCloud Photos library. iCloud answers with the asset it
+        created - or the one it already had with these exact bytes (a duplicate is not added twice)."""
+        try:
+            asset = self.photos.libraries["root"].upload_file(str(path))
+        except Exception as exc:  # noqa: BLE001
+            raise _translate(exc) from exc
+        return self._convert(asset) if asset is not None else None
 
     def albums(self) -> list[tuple[str, list[str]]]:
         """User-made albums (not smart albums like Favorites, not album folders) and their photos."""

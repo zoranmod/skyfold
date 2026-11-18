@@ -298,3 +298,38 @@ def test_a_new_index_look_reaches_an_existing_notes_html_once(env):
     s.state.set("index_layout", "1")  # written by the previous version
     s.run()  # nothing changed in Notes
     assert "folder-card" in index.read_text(encoding="utf-8") and s.state.get("index_layout") == ne.INDEX_LAYOUT
+
+
+def test_new_note_style_is_applied_in_place_once(env):
+    s, r, root, _ = env
+    r.put("n1", "A")
+    r.put("n2", "B")
+    s.run()
+    a, b = root / "Notes/A.html", root / "Notes/B.html"
+    old_css = '<style id="skyfold">\n:root{--bg:#f5f7fa}\n</style>'
+    for p in (a, b):  # pages as an older Skyfold styled them
+        text = ne._STYLE_BLOCK.sub(old_css, p.read_text(encoding="utf-8"), count=1)
+        p.write_text(text, encoding="utf-8")
+    s.state.set("page:n1", ne._digest(a))
+    s.state.set("page:n2", ne._digest(b))
+    b.write_text(b.read_text(encoding="utf-8") + "<!-- my edit -->", encoding="utf-8")  # changed by the user
+    s.state.set("note_style", "1")
+    r.exports = 0
+    s.run()
+    assert r.exports == 0  # nothing downloaded again
+    new_a = a.read_text(encoding="utf-8")
+    assert f'data-style="{ne.NOTE_STYLE}"' in new_a and "#f5f7fa" not in new_a and "text" in new_a
+    assert s.state.get("page:n1") == ne._digest(a)  # still recognised as Skyfold's page
+    assert "#f5f7fa" in b.read_text(encoding="utf-8")  # someone's edit: left alone
+    assert not [p for p in root.rglob("*") if p.name.startswith(ne.STAGE_PREFIX)]
+    before = a.read_bytes()
+    s.run()
+    assert a.read_bytes() == before
+
+
+def test_restyle_html_only_touches_old_style_block():
+    page = '<html><head><style id="skyfold">x</style></head><body><style>user</style>hi</body></html>'
+    out = ne.restyle_note_html(page)
+    assert out is not None and "<style>user</style>hi" in out and ne.NOTE_CSS.strip() in out
+    assert ne.restyle_note_html(out) is None
+    assert ne.restyle_note_html("<html>no style</html>") is None

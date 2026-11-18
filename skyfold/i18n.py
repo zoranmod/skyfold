@@ -586,6 +586,11 @@ BS: dict[str, str] = {
     "Light / dark": "Svijetlo / tamno",
     "Collapse all": "Skupi sve",
     "Expand all": "Raširi sve",
+    "Upload photos and videos I add to this folder to iCloud Photos": "Šalji u iCloud slike i videe koje dodam u ovaj folder",
+    "Uploading {name}…": "Šaljem {name}…",
+    "Upload failed ({name}): {error}": "Slanje nije uspjelo ({name}): {error}",
+    "Already in iCloud Photos: {name}": "Već je u iCloud slikama: {name}",
+    "Uploaded to iCloud Photos: {name}": "Poslano u iCloud slike: {name}",
     "GitHub is limiting update checks from your internet connection right now; try again in {n} min.":
         "GitHub trenutno ograničava provjere ažuriranja s tvoje internet veze; pokušaj ponovo za {n} min.",
     "was {old}": "ranije {old}",

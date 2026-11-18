@@ -419,6 +419,7 @@ class Settings:
     include_videos: bool = True
     include_live_video: bool = True
     albums_as_folders: bool = True
+    photos_upload: bool = False  # new photos/videos put in the photos folder go up to iCloud Photos
     delete_pc_to_cloud: bool = True
     delete_cloud_to_pc: bool = True
     delete_threshold: int = 5  # more deletions than this at once are asked about first

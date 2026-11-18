@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -80,6 +81,16 @@ class FakeRemote:
         data = self.blobs[res.url]
         dest.write_bytes(data)
         on_bytes(len(data))
+
+    def upload(self, path: Path):
+        data = path.read_bytes()
+        self.uploads = getattr(self, "uploads", []) + [path.name]
+        for aid, a in self.assets.items():  # iCloud keeps one copy of the same bytes
+            if self.blobs.get(a.resources[0].url) == data:
+                return a
+        aid = f"UP{len(self.uploads)}"
+        self.add(aid, path.name, data)
+        return self.assets[aid]
 
 
 @pytest.fixture()
@@ -422,3 +433,76 @@ def test_throttle_spaces_out_downloads(monkeypatch):
     slept.clear()
     th.take(1_000_000)
     assert slept == []
+
+
+# uploads (PC -> iCloud Photos) ------------------------------------------------------------------
+def _old(p: Path) -> Path:
+    t0 = time.time() - 600
+    os.utime(p, (t0, t0))
+    return p
+
+
+def test_upload_off_by_default(env):
+    s, r, root, _ = env
+    s.run()
+    (root / "new.jpg").write_bytes(b"n")
+    _old(root / "new.jpg")
+    s.run()
+    assert getattr(r, "uploads", []) == []
+
+
+def test_upload_new_photo_once_and_not_downloaded_back(env):
+    s, r, root, trashed = env
+    s.settings.photos_upload = True
+    r.add("A1", "IMG_0001.JPG", b"x")
+    s.run()
+    (root / "Moje").mkdir()
+    (root / "Moje/beach.jpg").write_bytes(b"sand")
+    _old(root / "Moje/beach.jpg")
+    (root / "Moje/notes.txt").write_bytes(b"t")  # not a photo
+    _old(root / "Moje/notes.txt")
+    s.run()
+    assert r.uploads == ["beach.jpg"]
+    assert any(a.filename == "beach.jpg" for a in r.assets.values())
+    res = s.run()  # iCloud's change feed now has the new photo: it is already here
+    res = s.run(force_full=True)
+    assert res.downloaded == 0
+    assert r.uploads == ["beach.jpg"]
+    assert sorted(p.name for p in (root / "2025/11").iterdir()) == ["IMG_0001.JPG"]
+    assert trashed == []
+    # deleting it on the PC afterwards deletes it in iCloud like any other photo
+    (root / "Moje/beach.jpg").unlink()
+    s.run()
+    assert len(r.deleted) == 1 and r.deleted[0].startswith("UP")
+
+
+def test_upload_waits_for_fresh_files_and_skips_duplicates(env):
+    s, r, root, _ = env
+    s.settings.photos_upload = True
+    r.add("A1", "IMG_0001.JPG", b"same")
+    s.run()
+    (root / "fresh.jpg").write_bytes(b"still copying")
+    (root / "copy.jpg").write_bytes(b"same")  # iCloud already has these bytes
+    _old(root / "copy.jpg")
+    (root / (eng.TMP_PREFIX + "x.jpg")).write_bytes(b"tmp")
+    _old(root / (eng.TMP_PREFIX + "x.jpg"))
+    s.run()
+    assert r.uploads == ["copy.jpg"]
+    assert len(r.assets) == 1
+    s.run()
+    assert r.uploads == ["copy.jpg"]  # handled once, not sent again
+    _old(root / "fresh.jpg")
+    s.run()
+    assert r.uploads == ["copy.jpg", "fresh.jpg"]
+
+
+def test_no_upload_while_a_photo_is_missing(env):
+    s, r, root, _ = env
+    s.settings.photos_upload = True
+    r.add("A1", "IMG_0001.JPG", b"x")
+    s.run()
+    # a photo renamed by hand: missing under its old name, "new" under another - not an upload
+    (root / "2025/11/IMG_0001.JPG").rename(root / "renamed.jpg")
+    _old(root / "renamed.jpg")
+    s.run()
+    assert getattr(r, "uploads", []) == []
