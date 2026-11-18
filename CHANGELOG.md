@@ -4,6 +4,11 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [1.0.14] - 2026-11-18
+
+### Changed
+- The panel's recent activity says what happened to each file and where: "Deleted in iCloud · iCloud Drive/Downloads", "Downloaded", "Uploaded", and for a rename the new name with the old one. Before, only the file name was shown (the rest was in the tooltip).
+
 ## [1.0.13] - 2026-11-18
 
 ### Added
