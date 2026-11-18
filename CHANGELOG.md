@@ -4,6 +4,8 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [1.0.11] - 2026-11-18
+
 ### Fixed
 - Notes: sharper and more complete images (Codex's image-quality investigation, all 15 open cases):
   - a photo's full image is used also when it is kept on the attachment itself, or when the media record lists a thumbnail first, and for every note that shares it;
