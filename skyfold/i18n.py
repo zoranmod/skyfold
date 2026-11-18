@@ -586,6 +586,7 @@ BS: dict[str, str] = {
     "Light / dark": "Svijetlo / tamno",
     "Collapse all": "Skupi sve",
     "Expand all": "Raširi sve",
+    "was {old}": "ranije {old}",
     "Favorites": "Favoriti",
     "Bookmarks Menu": "Meni oznaka",
     'Choose a folder for the bookmarks file': 'Izaberi folder za fajl s oznakama',

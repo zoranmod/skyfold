@@ -71,6 +71,13 @@ def split_activity(text: str, kind: str = "") -> tuple[str, str]:
         return text, ""
     head, sep, tail = text.rpartition(": ")
     tail = tail.strip()
+    if sep and head and " → " in tail and chr(10) not in tail:  # a rename or move: the new name, and from where
+        old, _, new = tail.partition(" → ")
+        if head.startswith("Drive: "):
+            head = head[len("Drive: "):]
+        head = head[:1].upper() + head[1:]
+        before = old if old.rsplit("/", 1)[0] != new.rsplit("/", 1)[0] else old.rsplit("/", 1)[-1]
+        return new.rsplit("/", 1)[-1], head + " · " + t("was {old}", old=before)
     if not sep or not head or chr(10) in tail or len(tail) > 260 or " → " in tail:
         return text, ""
     name = tail.rsplit("/", 1)[-1]
@@ -378,7 +385,8 @@ def reveal(target: str) -> None:
 
 
 class ActivityRow(QFrame):
-    """Activity entry: glyph, the event text, and the time as a second muted line. Entries about a
+    """Activity entry: glyph, the file name with what happened to it (and where) on a second muted line,
+    and the time. Entries about a
     file or folder open it when clicked; errors open their details. The same event repeated right
     after itself is counted on one row ("×3") instead of filling the list."""
 
@@ -408,16 +416,22 @@ class ActivityRow(QFrame):
         self.text.setObjectName("ActTitle")
         self.text.setMinimumWidth(0)
         self.text.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.detail = QLabel()  # (kept for the tooltip and the accessible name; not shown as a line)
-        self.detail.setObjectName("Muted")
-        self.detail.setText(self.detail_text)
-        self.detail.hide()
+        self.detail = QLabel(self)  # what happened, and where: "Deleted in iCloud · iCloud Drive/Downloads"
+        # (a child from the start: shown without a parent it would flash up as a window of its own)
+        self.detail.setObjectName("Hint")
+        self.detail.setMinimumWidth(0)
+        self.detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.detail.setVisible(bool(self.detail_text))
         self.when = QLabel(fmt_time(ts))
         self.when.setObjectName("Hint")
+        col = QVBoxLayout()
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+        col.addWidget(self.text)
+        col.addWidget(self.detail)
         lay.addWidget(self.tile, 0, Qt.AlignVCenter)
-        lay.addWidget(self.text, 1)
+        lay.addLayout(col, 1)
         lay.addWidget(self.when, 0, Qt.AlignVCenter)
-        self.detail.setParent(self)
         if target or kind == "error":
             self.setFocusPolicy(Qt.StrongFocus)  # Tab reaches it; Enter or Space opens it
         self._set_title()
@@ -430,6 +444,9 @@ class ActivityRow(QFrame):
         title = self.title_text + (f"  (×{self.count})" if self.count > 1 else "")
         self.text.ensurePolished()
         self.text.setText(QFontMetrics(self.text.font()).elidedText(title.replace(chr(10), " "), Qt.ElideMiddle, 236))
+        if self.detail_text:
+            self.detail.ensurePolished()
+            self.detail.setText(QFontMetrics(self.detail.font()).elidedText(self.detail_text, Qt.ElideMiddle, 236))
         tip = [title] + ([self.detail_text] if self.detail_text else []) + ([self.target] if self.target else [])
         if self.kind == "error" and not self.target:
             tip.append(t("Click for details"))

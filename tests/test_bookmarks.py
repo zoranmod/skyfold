@@ -116,3 +116,13 @@ def test_no_bookmarks_in_icloud_is_an_empty_file_not_an_error(tmp_path):
     api = FakeApi([{"serverErrorCode": "ZONE_NOT_FOUND"}])
     path, n, _ = bm.export(api, tmp_path)
     assert n == 0 and bm.MARK in path.read_text(encoding="utf-8")
+
+
+def test_activity_rows_say_what_happened():
+    from skyfold.ui.flyout import split_activity
+
+    assert split_activity("Drive: deleted in iCloud: Downloads/Dome.heic", "cloud") == (
+        "Dome.heic", "Deleted in iCloud · iCloud Drive/Downloads")
+    assert split_activity("Drive: deleted in iCloud: Notes", "cloud") == ("Notes", "Deleted in iCloud · iCloud Drive")
+    assert split_activity("Drive: renamed/moved in iCloud: Work/a.mp4 → Work/Ivana.mp4", "upload") == (
+        "Ivana.mp4", "Renamed/moved in iCloud · was a.mp4")
