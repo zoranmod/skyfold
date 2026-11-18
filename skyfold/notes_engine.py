@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 
 MARKER = ".skyfold-notes"
 FORMAT = "7"  # bump to re-export all notes when the page format improves
-QUALITY = "2"  # bump to re-export notes whose photos or drawings are still shown as small previews
+QUALITY = "3"  # bump to re-export notes whose photos, drawings or scans are still shown as small previews
 ASSETS = "_assets"
 INDEX = "Notes.html"
 UNSAFE = re.compile(r'[\x00-\x1f<>:"/\\|?*]+')
@@ -129,7 +129,15 @@ class ICloudNotes:
                     return getattr(raw, name)
 
                 def download_asset_to(self, url, directory):
-                    path = raw.download_asset_to(url, directory)
+                    try:
+                        path = raw.download_asset_to(url, directory)
+                    except Exception as exc:  # noqa: BLE001
+                        preview = _PREVIEW_FOR.get(url)
+                        if not preview:
+                            raise
+                        log.info("Note image: the full size couldn't be fetched (%s); its preview is used",
+                                 brief(exc))
+                        path = raw.download_asset_to(preview, directory)
                     ident = _file_identity(Path(path))
                     if ident:
                         made.add(ident)
@@ -144,6 +152,8 @@ class ICloudNotes:
             _SKETCH_INFO.clear()
             _HEIC_FULL.clear()
             _ATTACHMENT_KEYS.clear()
+            _ALIASES.clear()
+            _PREVIEW_FOR.clear()
             if not filename.startswith(STAGE_PREFIX):
                 _CURRENT_NOTE[0] = str(out_dir.name + "/" + filename)
             if not exporter.export(record, output_dir=str(out_dir), filename=filename):
@@ -179,23 +189,22 @@ def _prefer_sharpest_previews() -> None:
                         def size(tok):
                             return int(getattr(tok, "size", None) or (tok.get("size") if isinstance(tok, dict) else 0) or 0)
 
-                        idx = list(range(len(tokens)))
+                        idx = [i for i in range(len(tokens)) if asset_url(tokens[i])]  # only ones that can be fetched
                         if isinstance(apps, (list, tuple)) and len(apps) == len(tokens):
                             same = [i for i in idx if str(apps[i]) == str(pref_code)]
                             idx = same or idx
-                        best = max(idx, key=lambda i: size(tokens[i]))
-                        url = asset_url(tokens[best])
-                        if url:
-                            return url
+                        if idx:
+                            return asset_url(tokens[max(idx, key=lambda i: size(tokens[i]))])
                     except Exception:  # noqa: BLE001 - fall back to the library's choice
                         pass
-                    return _orig(self, tokens, apps, pref_code, asset_url)
+                    return _orig(tokens, apps, pref_code, asset_url)  # (a static method: no self)
 
                 cls._match_preview_appearance = largest
     except Exception as exc:  # noqa: BLE001
         log.info("Could not tune note previews: %s", exc)
     _prefer_full_images()
     _prefer_vector_sketches()
+    _better_attachment_choices()
 
 
 # Photos the browser can show as they are; for these the full image beats any preview.
@@ -213,21 +222,188 @@ def _prefer_full_images() -> None:
         original = ex._wire_media_to_parent
 
         def wire(ds, media_map, mrec, url, config, _orig=original):
-            _orig(ds, media_map, mrec, url, config)
-            parent = media_map.get(mrec.recordName)
-            try:
-                uti = (ds.get_attachment_uti(parent) or "").lower() if parent else ""
-            except Exception:  # noqa: BLE001
-                uti = ""
-            if parent and url and uti in FULL_IMAGE_UTIS:
-                ds.set_primary_asset_url(parent, url)
-            elif parent and url and uti in HEIC_UTIS:  # a browser can't show it: converted after the export
-                for key in _ATTACHMENT_KEYS.get(parent, [parent]):
-                    _HEIC_FULL[key] = url
+            parents = getattr(media_map, "parents", {}).get(mrec.recordName) or [media_map.get(mrec.recordName)]
+            for parent in [p for p in parents if p]:  # a media record two attachments share: both get it
+                try:
+                    before = ds.get_primary_asset_url(parent)
+                except Exception:  # noqa: BLE001
+                    before = None
+                _orig(ds, {mrec.recordName: parent}, mrec, url, config)
+                try:
+                    uti = (ds.get_attachment_uti(parent) or "").lower()
+                except Exception:  # noqa: BLE001
+                    uti = ""
+                if url and uti in FULL_IMAGE_UTIS:
+                    if before and before != url:
+                        _PREVIEW_FOR[url] = before  # if the full image can't be fetched, the preview is
+                    ds.set_primary_asset_url(parent, url)
+                elif url and uti in HEIC_UTIS:  # a browser can't show it: converted after the export
+                    if before:
+                        ds.set_primary_asset_url(parent, before)  # the preview stays what the page shows
+                    for key in _ATTACHMENT_KEYS.get(parent, [parent]):
+                        _HEIC_FULL[key] = url
 
         ex._wire_media_to_parent = wire
+
+        original_media_url = ex._media_field_url
+
+        def media_url(mrec, _orig=original_media_url):
+            """The media record's full image first (not whichever asset field comes first)."""
+            try:
+                found = {}
+                for k in mrec.fields:
+                    u = getattr(getattr(mrec.fields.get_field(k), "value", None), "downloadURL", None)
+                    if isinstance(k, str) and isinstance(u, str) and u:
+                        found[k] = u
+                for name in ("Image", "FullImage", "Original", "PrimaryAsset", "Asset", "Media"):
+                    if name in found:
+                        return found[name]
+                for k, u in found.items():
+                    if not any(w in k.lower() for w in ("thumb", "preview", "small")):
+                        return u
+            except Exception:  # noqa: BLE001
+                pass
+            return _orig(mrec)
+
+        ex._media_field_url = media_url
+
+        original_hydrate = ex._hydrate_attachment_records
+
+        def hydrate(ds, resp, config, _orig=original_hydrate):
+            media_map = _MediaMap(_orig(ds, resp, config))
+            for rec in getattr(resp, "records", None) or []:
+                try:
+                    rn = getattr(getattr(rec.fields.get_field("Media"), "value", None), "recordName", None)
+                except Exception:  # noqa: BLE001
+                    rn = None
+                if rn and rec.recordName not in media_map.parents.setdefault(rn, []):
+                    media_map.parents[rn].append(rec.recordName)
+            return media_map
+
+        ex._hydrate_attachment_records = hydrate
     except Exception as exc:  # noqa: BLE001
         log.info("Could not prefer full note images: %s", exc)
+
+
+class _MediaMap(dict):
+    """media record -> its (first) attachment, as pyicloud keeps it; .parents: all attachments using it."""
+
+    def __init__(self, *a) -> None:
+        super().__init__(*a)
+        self.parents: dict[str, list[str]] = {}
+
+
+SCAN_UTIS = {"com.apple.paper.doc.scan", "com.apple.notes.gallery"}  # scanned documents: their full PDF
+LEGACY_DRAWING_UTIS = {"com.apple.drawing", "com.apple.drawing.2", "com.apple.notes.sketch"}
+
+
+def _better_attachment_choices() -> None:
+    """Choices pyicloud leaves to chance, made on what the attachment record actually holds:
+    previews by their real size in pixels (not bytes), a full image kept on the attachment itself,
+    a scanned document's full PDF, an older drawing's full bitmap - and an attachment known under two
+    names (record and inline id) gets the same file under both."""
+    try:
+        from pyicloud.services.notes.rendering import attachments as at
+        from pyicloud.services.notes.rendering import ck_datasource as cds
+
+        cls = cds.CloudKitNoteDataSource
+        original_add, original_set = cls.add_attachment_record, cls.set_primary_asset_url
+
+        def set_primary(self, identifier, url, _orig=original_set):
+            for key in _ALIASES.get(identifier, [identifier]):  # every name of the attachment
+                _orig(self, key, url)
+
+        def url_of(v):
+            u = v.get("downloadURL") if isinstance(v, dict) else getattr(v, "downloadURL", None)
+            return u if isinstance(u, str) and u else None
+
+        def add(self, rec, _orig=original_add):
+            _orig(self, rec)
+            try:
+                fields = rec.fields
+                keys = [k for k in (getattr(fields.get_field(n) or (), "value", None)
+                                    for n in ("AttachmentIdentifier", "attachmentIdentifier", "Identifier"))
+                        if isinstance(k, str) and k]
+                keys = list(dict.fromkeys(keys + ([rec.recordName] if rec.recordName else [])))
+                if not keys:
+                    return
+                for k in keys:
+                    _ALIASES[k] = keys
+                uti = (self._uti.get(keys[0]) or "").lower()
+                primary = self._primary_asset_url.get(keys[0])
+
+                def value(name):
+                    return getattr(fields.get_field(name), "value", None) if fields.get_field(name) else None
+
+                def choose(url, as_uti=None):
+                    for k in keys:
+                        self._primary_asset_url[k] = url
+                        if as_uti:
+                            self._uti[k] = as_uti
+
+                tokens = value("PreviewImages")
+                tokens = list(tokens) if isinstance(tokens, (list, tuple)) else []
+                preview_urls = [url_of(t) for t in tokens]
+                from_preview = primary is None or primary in preview_urls
+                image_like = uti.startswith("public.image") or uti in FULL_IMAGE_UTIS | HEIC_UTIS | \
+                    {"public.tiff", "com.apple.paper"}
+                if uti in SCAN_UTIS:  # a scan: its full PDF, shown and kept like any PDF in a note
+                    pdf = url_of(value("FallbackPDF"))
+                    if pdf:
+                        choose(pdf, "com.apple.paper.doc.pdf")
+                    return
+                if uti in LEGACY_DRAWING_UTIS:  # an older drawing: its full bitmap
+                    full = url_of(value("FallbackImage"))
+                    if full:
+                        choose(full, "public.image")
+                    return
+                if not image_like or not from_preview:
+                    return
+                # a full image kept on the attachment itself beats any preview
+                for name in ("Image", "Media", "FallbackImage"):
+                    full = url_of(value(name)) if uti != "com.apple.paper" else None
+                    if not full:
+                        continue
+                    if uti in HEIC_UTIS:  # can't be shown as it is: converted after the export
+                        for k in keys:
+                            _HEIC_FULL[k] = full
+                        break
+                    if primary:
+                        _PREVIEW_FOR[full] = primary  # if the full image can't be fetched
+                    choose(full)
+                    return
+                # previews: the largest in pixels of the chosen appearance (bytes only break ties)
+                widths, heights, apps = value("PreviewWidths"), value("PreviewHeights"), value("PreviewAppearances")
+                n = len(tokens)
+                if n < 2 or not isinstance(widths, (list, tuple)) or not isinstance(heights, (list, tuple)) \
+                        or len(widths) != n or len(heights) != n:
+                    return
+                idx = [i for i in range(n) if preview_urls[i]]
+                if isinstance(apps, (list, tuple)) and len(apps) == n and primary in preview_urls:
+                    shown = apps[preview_urls.index(primary)]
+                    idx = [i for i in idx if apps[i] == shown] or idx
+
+                def rank(i):
+                    tok = tokens[i]
+                    nbytes = tok.get("size") if isinstance(tok, dict) else getattr(tok, "size", 0)
+                    try:
+                        return (int(widths[i]) * int(heights[i]), int(nbytes or 0))
+                    except (TypeError, ValueError):
+                        return (0, 0)
+
+                if idx:
+                    choose(preview_urls[max(idx, key=rank)])
+            except Exception as exc:  # noqa: BLE001 - pyicloud's own choice stays
+                log.debug("Attachment choice not improved: %s", exc)
+
+        cls.add_attachment_record = add
+        cls.set_primary_asset_url = set_primary
+        for u in SCAN_UTIS:  # shown as PDFs (pages as images, the original linked)
+            at._EXACT.setdefault(u, at._EXACT["com.apple.paper.doc.pdf"])
+        for u in LEGACY_DRAWING_UTIS:  # shown as images
+            at._EXACT.setdefault(u, at._EXACT["com.apple.paper"])
+    except Exception as exc:  # noqa: BLE001
+        log.info("Could not improve note attachment choices: %s", exc)
 
 
 _IMAGE_FORMATS = ("png", "jpeg", "jpg", "heic", "heif", "gif", "tiff", "bmp", "webp", "pdf", "svg")
@@ -269,6 +445,8 @@ class _PerThread(MutableMapping):
 _SKETCH_FALLBACKS: MutableMapping = _PerThread()
 _HEIC_FULL: MutableMapping = _PerThread()  # attachment id -> download URL of the full HEIC original
 _ATTACHMENT_KEYS: MutableMapping = _PerThread()  # attachment record name -> every id the page may use
+_ALIASES: MutableMapping = _PerThread()  # any name of an attachment -> all its names
+_PREVIEW_FOR: MutableMapping = _PerThread()  # full image URL -> the preview it replaced (used if it fails)
 _SKETCH_INFO: MutableMapping = _PerThread()
 _CURRENT_NOTE = [""]  # file name of the note being exported (for the log)
 
@@ -653,6 +831,14 @@ def upgrade_sketches(page: Path, fallbacks: dict[str, str], download, made: set 
             full_side, prev_side = max(size.width(), size.height()), max(preview.width(), preview.height(), 0)
             more = full_side > prev_side or (full_side == prev_side and size.width() * size.height()
                                              > max(preview.width(), 0) * max(preview.height(), 0))
+            if ok and more and fmt.lower() not in ("png", "jpeg", "jpg", "gif", "webp"):
+                from PySide6.QtGui import QImage
+
+                img = QImage(str(new))  # e.g. TIFF: a browser can't show it; PNG keeps it lossless
+                converted = _save_image_new(img, new.with_name(new.name + ".png")) if not img.isNull() else None
+                if converted is not None:
+                    new.unlink(missing_ok=True)
+                    new, fmt = converted, "png"
             if not ok or not more or fmt.lower() not in ("png", "jpeg", "jpg", "gif", "webp"):
                 log.info("Drawing in %s: full image not used (readable=%s, %sx%s, format=%s, %d bytes; "
                          "preview %s px)", page.name, ok, size.width(), size.height(), value(fmt, _IMAGE_FORMATS), new.stat().st_size,
@@ -904,8 +1090,9 @@ class NotesSyncer:
             self.state.set(key, None)
 
     def _refresh_for_quality(self) -> None:
-        """Once per QUALITY: notes whose page still shows an iPhone (HEIC) photo or a pen drawing
-        as a small preview are exported again (sharper images); all others are left as they are."""
+        """Once per QUALITY: notes whose page still shows a photo (also iPhone HEIC) or a pen drawing as
+        a small preview, or holds a scanned document or an older drawing, are exported again (sharper
+        images, full scans); all others are left as they are."""
         import urllib.parse
 
         from PySide6.QtGui import QImageReader
@@ -930,8 +1117,9 @@ class NotesSyncer:
             except OSError:
                 continue
             tags = [m.group(0) for m in IMG_TAG.finditer(text)
-                    if 'data-uti="public.hei' in m.group(0) or 'data-uti="com.apple.paper"' in m.group(0)]
-            if any(small(page, tag) for tag in tags):
+                    if 'data-uti="public.' in m.group(0) or 'data-uti="com.apple.paper"' in m.group(0)]
+            whole = any(f'data-uti="{u}"' in text for u in SCAN_UTIS | LEGACY_DRAWING_UTIS)
+            if whole or any(small(page, tag) for tag in tags):
                 self.state.put(nid, row[1], row[2], row[3], None, bool(row[5]))
         self.state.set("cursor", None)
         self.state.set("quality", QUALITY)

@@ -4,6 +4,16 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Fixed
+- Notes: sharper and more complete images (Codex's image-quality investigation, all 15 open cases):
+  - a photo's full image is used also when it is kept on the attachment itself, or when the media record lists a thumbnail first, and for every note that shares it;
+  - previews are compared by their real size in pixels, not by file size, and a preview that can't be fetched no longer breaks the choice;
+  - an iPhone (HEIC) photo keeps a preview the browser can show until its full-size JPEG is made;
+  - a full image that can't be downloaded falls back to its preview, so the note is still exported;
+  - scanned documents are shown as their full PDF (pages as images, the original linked), older drawings with their full bitmap, and a full drawing in a format browsers can't show (TIFF) is converted to PNG;
+  - an attachment known under two names gets the same file under both.
+  Notes that still show a small preview, a scan or an older drawing are exported again once after the update; all others stay as they are.
+
 ## [1.0.10] - 2026-11-18
 
 ### Added

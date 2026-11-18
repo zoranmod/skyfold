@@ -140,3 +140,20 @@ def test_a_full_drawing_smaller_than_the_preview_is_not_used(tmp_path):
         return str(out)
 
     assert ne.upgrade_sketches(page, {"D1": "u"}, download) == 0
+
+
+def test_notes_with_a_scan_or_a_small_photo_are_exported_again_once(notes_env):
+    s, remote, root, _ = notes_env
+    for nid, title in (("n1", "Plain"), ("n2", "Scan"), ("n3", "Photo")):
+        remote.put(nid, title)
+    s.run()
+    rows = s.state.all()
+    scan, photo = root / rows["n2"][1], root / rows["n3"][1]
+    scan.write_text(scan.read_text(encoding="utf-8") + '<a data-uti="com.apple.paper.doc.scan">Scan</a>',
+                    encoding="utf-8")
+    photo.write_text(photo.read_text(encoding="utf-8") + '<img data-uti="public.jpeg" src="small.jpg">',
+                     encoding="utf-8")
+    s.state.set("quality", "2")  # what 1.0.10 left
+    s._refresh_for_quality()
+    rows = s.state.all()
+    assert rows["n2"][4] is None and rows["n3"][4] is None and rows["n1"][4] is not None

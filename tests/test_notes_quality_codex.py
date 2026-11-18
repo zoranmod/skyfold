@@ -1,5 +1,5 @@
-"""Codex image-quality investigation (of 56e809b), kept as tests. Strict xfails are improvements
-not done yet (planned); each shows up as soon as it is fixed. The tests of Codex's separate
+"""Codex image-quality investigation (of 56e809b), kept as tests. The cases that were strict xfails
+(planned improvements) are done since 1.0.11 and are ordinary tests now. The tests of Codex's separate
 reference module are left out (it is not part of Skyfold).
 
 Offline quality contracts for Skyfold 56e809b; no production monkeypatches.
@@ -101,14 +101,12 @@ def test_heic_nonfirst_preview_currently_stays():
     assert ds.get_primary_asset_url("a").endswith("/large")
 
 
-@pytest.mark.xfail(strict=True, reason="upstream wire still promotes HEIC when selected preview is first")
 def test_heic_single_preview_must_survive_without_codec():
     ds = data(rec("public.heic", PreviewImages=field("ASSETID_LIST", [token("small")])))
     wire(ds)
     assert ds.get_primary_asset_url("a").endswith("/small")
 
 
-@pytest.mark.xfail(strict=True, reason="largest preview means bytes, not pixel dimensions")
 def test_preview_dimensions_beat_compressed_byte_size():
     ds = data(rec("com.apple.paper",
         PreviewImages=field("ASSETID_LIST", [token("384px", 90000), token("2048px", 12000)]),
@@ -124,7 +122,6 @@ def test_appearance_is_preserved_over_larger_dark_preview():
     assert ds.get_primary_asset_url("a").endswith("/light")
 
 
-@pytest.mark.xfail(strict=True, reason="static upstream matcher called with an extra self on fallback")
 def test_unusable_largest_token_keeps_a_valid_smaller_preview():
     ds = data(rec(PreviewImages=field("ASSETID_LIST", [token("valid", 100), {"size": 1000}]),
                   PreviewAppearances=field("INT64_LIST", [0, 0])))
@@ -138,26 +135,22 @@ def test_jpg_alias_uses_original():
 
 
 @pytest.mark.parametrize("field_name", ["Image", "Media", "FallbackImage"])
-@pytest.mark.xfail(strict=True, reason="direct full assets lose to PreviewImages")
 def test_direct_full_bitmap_can_beat_preview(field_name):
     ds = data(rec(**previews(), **{field_name: asset("original", 1000)}))
     assert ds.get_primary_asset_url("a").endswith("/original")
 
 
-@pytest.mark.xfail(strict=True, reason="media selector takes first scalar asset, not Image")
 def test_media_image_beats_unrelated_thumbnail_field():
     media = rec(name="media", Thumbnail=asset("small"), Image=asset("original", 1000))
     assert ex._media_field_url(media).endswith("/original")
 
 
-@pytest.mark.xfail(strict=True, reason="primary URL override updates record name but not logical alias")
 def test_full_asset_updates_inline_alias_too():
     ds = data(rec(AttachmentIdentifier=field("STRING", "inline-id"), **previews()))
     wire(ds)
     assert ds.get_primary_asset_url("inline-id").endswith("/original")
 
 
-@pytest.mark.xfail(strict=True, reason="media_map stores one parent for a shared media record")
 def test_shared_media_upgrades_all_parents():
     ds = CloudKitNoteDataSource(_config=ExportConfig())
     records = [rec(name=n, Media=field("REFERENCE", {"recordName": "media"}), **previews()) for n in ("a", "b")]
@@ -167,14 +160,12 @@ def test_shared_media_upgrades_all_parents():
     assert all(ds.get_primary_asset_url(n).endswith("/original") for n in ("a", "b"))
 
 
-@pytest.mark.xfail(strict=True, reason="scan UTI not handled as PDF")
 def test_scan_fallback_pdf_is_selected():
     ds = data(rec("com.apple.paper.doc.scan", FallbackPDF=asset("full-scan.pdf"), **previews()))
     assert ds.get_primary_asset_url("a") == token("full-scan.pdf")["downloadURL"]
 
 
 @pytest.mark.parametrize("uti", ["com.apple.drawing", "com.apple.drawing.2", "com.apple.notes.sketch"])
-@pytest.mark.xfail(strict=True, reason="legacy drawing UTI not image-like and not upgraded")
 def test_legacy_drawing_fallback_bitmap_is_selected(uti):
     ds = data(rec(uti, FallbackImage=asset("full-drawing.png"), **previews()))
     assert ds.get_primary_asset_url("a") == token("full-drawing.png")["downloadURL"]
@@ -193,7 +184,6 @@ def test_tall_uncropped_sketch_is_not_rejected(tmp_path):
     assert ne.upgrade_sketches(page, {"a": "full"}, download) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="Qt-readable TIFF passes without browser conversion")
 def test_tiff_sketch_is_converted_to_browser_format(tmp_path):
     page, _, download = sketch_case(tmp_path, (2048, 2048), "TIFF")
     assert ne.upgrade_sketches(page, {"a": "full"}, download) == 1
@@ -307,7 +297,6 @@ def test_real_exporter_through_existing_notes_fixture_gets_full_jpeg(env, tmp_pa
     assert raw.downloads == [token("original")["downloadURL"]]
 
 
-@pytest.mark.xfail(strict=True, reason="failed full-image fetch does not retry the available preview")
 def test_optional_full_image_failure_still_exports_available_preview(env, tmp_path):
     s, fake, root, _ = env
     source = png(tmp_path / "preview.jpg", 320, 240, "JPEG")
