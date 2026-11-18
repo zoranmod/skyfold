@@ -28,7 +28,7 @@ You can expect a first reply within 7 days. Once a fix is released, you'll be cr
 
 **Sign out** removes the session. The sync database, the Drive listing, the log and the Apple ID in `settings.json` stay, so a later sign-in with the same Apple ID continues where it stopped. To remove everything, quit Skyfold and delete `%LOCALAPPDATA%\Skyfold` and the `data` folder next to `Skyfold.exe`.
 
-Skyfold connects only to Apple's iCloud services (through [pyicloud](https://github.com/timlaing/pyicloud)). It has no server, telemetry, analytics or update check.
+Skyfold connects to Apple's iCloud services (through [pyicloud](https://github.com/timlaing/pyicloud)) and, once a day unless turned off, to GitHub's public API to look for a newer Skyfold release. It has no server, telemetry or analytics. An update is only installed when you click *Update now*: the release zip from this repository is checked against its published SHA-256 before anything is replaced.
 
 ## In scope
 

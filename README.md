@@ -29,16 +29,20 @@
 - **iCloud Photos.** Downloads your whole library (photos, videos, Live Photo videos) to a folder you choose: all in one folder, by year, or by year and month. **Deletions travel both ways:** delete on the iPhone and the PC copy goes to the Recycle Bin; delete on the PC and the photo goes to "Recently Deleted" in iCloud.
 - **Albums as folders.** Every album you made in Photos also appears under `Albums\`, as hard links that take **no extra disk space**.
 - **iCloud Drive, two-way.** A full local copy of your Drive, or only the folders you pick. New, changed, deleted, **renamed and moved** files and folders are synced in both directions. If a file changed on both sides, both versions are kept.
-- **Apple Notes export.** Every note becomes a web page with its pictures and attachments, in the same folders as in Notes, plus a searchable `Notes.html` index. One-way (iCloud → PC).
+- **Apple Notes export.** Every note becomes a web page with its full-size pictures, scans and attachments, in the same folders as in Notes, plus a searchable `Notes.html` library with your folders, light and dark theme. One-way (iCloud → PC).
 - **Find My.** Your devices with battery and last-seen time, a map link, and **Play sound**. (Apple asks for your password again after each PC restart before it shows them.)
 - **iCloud storage** at a glance in the tray panel.
 - **Built to be safe.** Nothing is deleted permanently, big deletions wait for your OK, and a missing or unplugged folder is never read as "delete everything".
+- **Updates itself.** Skyfold tells you when a new version is out, shows what's new, and updates with one click (your settings and files stay as they are).
+- **Portable and light.** Unzip and run. Follows the Windows light/dark theme. English and Bosnian.
 
 > **Skyfold is a public beta.** Two-way iCloud Drive sync is new and has been through many rounds of independent review, but it hasn't met every real-world folder yet. Skyfold always asks before deleting more items than your limit, and nothing it deletes is permanent (Recycle Bin / "Recently Deleted"). Please keep a backup of anything important and [report problems](https://github.com/zoranmod/skyfold/issues).
-- **Portable and light.** Unzip and run. Follows the Windows light/dark theme. English and Bosnian.
 
 ## Screenshots
 
+<p>
+  <img src="docs/screenshots/notes-index.png" width="880" alt="Notes.html: your Apple Notes as a searchable library with folders">
+</p>
 <p>
   <img src="docs/screenshots/first-run.png" width="360" alt="First run: choose the photos folder and layout">
   <img src="docs/screenshots/settings-drive.png" width="430" alt="Settings: iCloud Drive with chosen folders">
@@ -50,6 +54,9 @@
 <p>
   <img src="docs/screenshots/delete-confirm.png" width="430" alt="Skyfold asks before a large deletion">
   <img src="docs/screenshots/find-my.png" width="430" alt="Find My: devices, battery and play sound">
+</p>
+<p>
+  <img src="docs/screenshots/update.png" width="430" alt="A new version: what's new, and Update now">
 </p>
 
 ## Why not iCloud for Windows?
@@ -79,7 +86,7 @@ Apple's app does things Skyfold doesn't: passwords/keychain, bookmarks, mail/con
 6. Optional: turn on **iCloud Drive** and **Notes** in Settings.
 
 To start Skyfold with Windows, turn on **Settings → General → Start with Windows**.
-To update, quit Skyfold, replace the program files with the new zip's contents and keep the `data` folder.
+**Updates:** from version 1.0.10 on, Skyfold checks once a day for a new version and updates itself with one click (**Settings → About → Check for updates** checks right away). It downloads the release from this repository, checks its SHA-256, and replaces only the program; your `data` folder and synced files are never touched, and if anything goes wrong the previous version is put back. On 1.0.9 or older, update once by hand: quit Skyfold, replace the program files with the new zip's contents and keep the `data` folder.
 To uninstall, quit Skyfold, turn off *Start with Windows* first, then delete the program folder and `%LOCALAPPDATA%\Skyfold`. Your synced photos, Drive and notes folders are left untouched.
 
 **Requirements**
@@ -105,7 +112,7 @@ To uninstall, quit Skyfold, turn off *Start with Windows* first, then delete the
 ## Privacy and security
 
 - **Your password is never stored.** It is only used to sign in, with Apple's own sign-in protocol and two-factor authentication.
-- **Skyfold only talks to Apple.** There is no Skyfold server, no telemetry, no analytics, no crash reporting and no update check. The only other thing it opens is Google Maps in your browser, and only when you click **Map** in Find My.
+- **Skyfold talks to Apple, and once a day to GitHub.** There is no Skyfold server, no telemetry, no analytics and no crash reporting. The daily update check asks GitHub's public API for the latest Skyfold release and sends nothing about you (only the client name "Skyfold/<version>"); turn it off in **Settings → General**. The only other thing it opens is Google Maps in your browser, and only when you click **Map** in Find My.
 - **What is stored on your PC:**
   - Apple's session cookies and the sync database: `%LOCALAPPDATA%\Skyfold` (this PC only, never next to the app, so they aren't uploaded if the app sits in OneDrive or iCloud Drive). The session lasts about two months.
   - Settings, including your Apple ID email: the `data` folder next to `Skyfold.exe` (or `%LOCALAPPDATA%\Skyfold\data` if the program folder can't be written, e.g. under Program Files).
@@ -202,7 +209,8 @@ Skyfold is not affiliated with, endorsed by or sponsored by Apple Inc. Apple, iC
 
 - **Brisanje slika ide u oba smjera, a Drive se sinhronizuje u oba smjera** (i preimenovanja i premještanja). Obrisani fajlovi idu u Recycle Bin ili u "Nedavno obrisano", pa se mogu vratiti.
 - **Skyfold je javna beta.** Dvosmjerna Drive sinhronizacija je nova: Skyfold uvijek pita prije većeg brisanja, ali čuvaj rezervnu kopiju važnih stvari.
-- **Bilješke se čuvaju kao web stranice s pretragom.**
+- **Bilješke se čuvaju kao web stranice** s fotografijama u punoj veličini i bibliotekom s pretragom (Notes.html).
+- **Skyfold se sam ažurira:** javi kad izađe nova verzija, pokaže šta je novo i ažurira se jednim klikom (od verzije 1.0.10).
 - **Program je besplatan i prenosiv.** Raspakuj ga, pokreni `Skyfold.exe` i prijavi se Apple ID-jem.
 - **Jezik** se mijenja u Postavke → Općenito → Jezik.
 - **Koristiš ga na vlastitu odgovornost.** Program dolazi bez garancije i autori ne odgovaraju za izgubljene fajlove. Čuvaj vlastitu rezervnu kopiju.
