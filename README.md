@@ -69,7 +69,9 @@
    - **Chrome / Edge:** Bookmarks → *Import bookmarks and settings* → *Bookmarks HTML file*.
 4. Your bookmarks appear in a **Safari Bookmarks** folder, with the same folders and order as in Safari. Deleted bookmarks, tab groups and the Reading List are left out.
 
-Skyfold only *reads* your bookmarks from iCloud. It's one-way (Safari → browser): bookmarks you add in Firefox don't go to Safari, and importing the file again adds a second copy of the folder, so delete the old one first. It needs *Access iCloud Data on the Web* (see Requirements), like the rest of Skyfold.
+**Without importing (Edge): the Skyfold – Safari Bookmarks extension.** Install it from Edge Add-ons (search "Skyfold", or see the [extension's page](extension/)). With Safari bookmarks turned on in Skyfold, it keeps a **Safari Bookmarks** folder under *Other favorites* up to date by itself (every 30 minutes and on *Update now*), with no file to import. It gets the bookmarks from Skyfold on your PC and never goes online. Firefox and Chrome versions are on the way.
+
+Skyfold only *reads* your bookmarks from iCloud. It's one-way (Safari → browser): bookmarks you add in your browser don't go to Safari. With the file, importing again adds a second copy of the folder, so delete the old one first; the extension keeps one folder and replaces its content. It needs *Access iCloud Data on the Web* (see Requirements), like the rest of Skyfold.
 
 ## Why not iCloud for Windows?
 

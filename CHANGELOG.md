@@ -4,8 +4,13 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [1.0.13] - 2026-11-18
+
 ### Added
-- Browser extension "Skyfold – Safari Bookmarks" for Firefox, Chrome and Edge (in `extension/`): keeps a "Safari Bookmarks" folder the same as your Safari bookmarks, by itself (every 30 minutes and on "Update now"), without importing files. It gets them from Skyfold on this PC (native messaging), never from the internet, and only touches its own folder. Skyfold sets up the link for the current Windows user while Safari bookmarks are turned on, and removes it when they're turned off.
+- Browser extension "Skyfold – Safari Bookmarks" for Firefox, Chrome and Edge (in `extension/`): keeps a "Safari Bookmarks" folder the same as your Safari bookmarks, by itself (every 30 minutes and on "Update now"), without importing files (Edge Add-ons; Firefox and Chrome to follow). It gets them from Skyfold on this PC (native messaging), never from the internet, and only touches its own folder. Skyfold sets up the link for the current Windows user while Safari bookmarks are turned on, and removes it when they're turned off.
+
+### Fixed
+- Safari bookmarks: Safari's Reading List (a folder titled "com.apple.ReadingList") was included; Safari's own folders now carry the names Safari shows (Favorites, Bookmarks Menu) instead of BookmarksBar / BookmarksMenu.
 
 ## [1.0.12] - 2026-11-18
 
