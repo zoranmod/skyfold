@@ -4,6 +4,8 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-11-18
+
 ### Added
 - Updates from inside the app. Skyfold checks GitHub once a day for a newer version (only "Skyfold/<version>" is sent; it can be turned off in Settings → General), tells you once per version and shows a row in the panel. The update window shows what's new; *Update now* downloads the release, checks it against its published SHA-256, closes Skyfold, replaces only the program (Skyfold.exe and _internal; settings in "data" are never touched), puts the old version back if anything fails, and starts Skyfold again. Settings → About has *Check for updates*.
 
