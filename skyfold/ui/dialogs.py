@@ -916,6 +916,16 @@ class SettingsDialog(_Dialog):
         self.notes_dir = self._folder_row(fold, self.s.notes_dir, t("Choose a folder for your notes"))
         fold.addWidget(_label(t("Open Notes.html in that folder to browse and search all notes in your web browser."),
                               "Hint", True))
+        bm = self._card(lay, t("SAFARI BOOKMARKS"))
+        self.bookmarks_on = self._toggle(bm, t("Save my Safari bookmarks for Firefox and Chrome"),
+                                         self.s.bookmarks_enabled)
+        self.bookmarks_dir = self._folder_row(bm, self.s.bookmarks_dir, t("Choose a folder for the bookmarks file"))
+        bm.addWidget(_label(t("Skyfold keeps \"Safari Bookmarks.html\" in this folder up to date (read-only: nothing "
+                              "changes in iCloud). In Firefox or Chrome: Bookmarks → Import, choose that file; your "
+                              "Safari bookmarks appear in a \"Safari Bookmarks\" folder. Importing again adds a "
+                              "second copy."), "Hint", True))
+        self.bookmarks_on.toggled.connect(self.bookmarks_dir.setEnabled)
+        self.bookmarks_dir.setEnabled(self.bookmarks_on.isChecked())
         info = self._card(lay, t("GOOD TO KNOW"))
         for line in (t("Each note is an HTML file with its pictures and attachments, in the same folders as in Notes."),
                      t("Notes deleted on your devices are moved to the Recycle Bin here."),
@@ -1184,6 +1194,8 @@ class SettingsDialog(_Dialog):
         s.drive_delete_pc_to_cloud = self.drive_del_cloud.isChecked()
         s.drive_folders = self.drive_folders
         s.notes_enabled = self.notes_on.isChecked()
+        s.bookmarks_enabled = self.bookmarks_on.isChecked()
+        s.bookmarks_dir = self.bookmarks_dir.text().strip() or s.bookmarks_dir
         s.notes_dir = notes_dir
         self.accept()
 

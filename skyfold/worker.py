@@ -31,6 +31,7 @@ from .safelog import brief, describe
 from .remote import AuthRequired, ICloudRemote, RemoteUnavailable
 from .state import State
 
+BOOKMARKS_INTERVAL = 6 * 3600  # Safari bookmarks file: refreshed at most every 6 h (and on Sync now)
 log = logging.getLogger(__name__)
 
 DRIVE_FULL_INTERVAL = 60 * 60  # seconds between full Drive reads (a large Drive takes ~10 min to read)
@@ -115,6 +116,7 @@ class SyncWorker(QObject):
         self.syncer: Syncer | None = None
         self.drive: DriveSyncer | None = None
         self.notes: NotesSyncer | None = None
+        self._bookmarks_last = 0.0  # when the Safari bookmarks file was last made (monotonic)
         self.notes_state: NotesState | None = None
         self.busy = False
         self._again: tuple[bool, bool] | None = None  # (full photos check, force drive)
@@ -646,6 +648,12 @@ class SyncWorker(QObject):
             return
         if self._halt():
             return
+        if self.settings.bookmarks_enabled and self.api is not None and (
+                full or time.monotonic() - self._bookmarks_last >= BOOKMARKS_INTERVAL or not self._bookmarks_last):
+            if not self._run_bookmarks(problems):
+                return
+            if self._halt():
+                return
         drive_due = self.drive is not None and (
             # 0 = never read yet (monotonic() counts from boot, so it may still be < the interval)
             force_drive or not self._drive_last or time.monotonic() - self._drive_last >= DRIVE_FULL_INTERVAL)
@@ -745,6 +753,23 @@ class SyncWorker(QObject):
             self._storage_at = time.monotonic()
         except Exception as exc:  # noqa: BLE001 - purely informational
             log.info("Storage info unavailable: %s", describe(exc))
+
+    def _run_bookmarks(self, problems: list[str]) -> bool:
+        """Safari bookmarks → "Safari Bookmarks.html" (read-only in iCloud)."""
+        from . import bookmarks
+
+        try:
+            path, n, changed = bookmarks.export(self.api, Path(self.settings.bookmarks_dir))
+        except bookmarks.BookmarksUnavailable as exc:
+            self._bookmarks_last = time.monotonic()  # tried; not again before the next interval
+            problems.append(str(exc))
+            return True
+        except Exception as exc:  # noqa: BLE001
+            return self._handle(exc, problems, t("Safari bookmarks"))
+        self._bookmarks_last = time.monotonic()
+        if changed:
+            self.log("info", t("Safari bookmarks: {n} saved for Firefox and Chrome", n=n), str(path))
+        return True
 
     def _run_notes(self, full: bool, problems: list[str]) -> bool:
         assert self.notes is not None

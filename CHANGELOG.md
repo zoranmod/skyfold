@@ -4,6 +4,9 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Added
+- Safari bookmarks for Firefox and Chrome (Settings → Notes → Safari bookmarks). Skyfold reads your Safari bookmarks from iCloud - read-only, nothing changes there - and keeps "Safari Bookmarks.html" up to date (every 6 hours and on Sync now). Import it in Firefox or Chrome (Bookmarks → Import): your folders and bookmarks appear in a "Safari Bookmarks" folder, in Safari's order. Deleted items, tab groups and the Reading List are left out. A file of that name that Skyfold didn't write is never replaced.
+
 ### Fixed
 - iCloud Drive: a file moved out of the Drive folder (so Skyfold asked about deleting it) and then put back under another name no longer ends up twice in iCloud when the next check was a quick one; a full read now recognises the move.
 - Notes: an older drawing whose full image is a TIFF is converted to PNG, so the browser shows it; a scanned document whose full PDF can't be downloaded shows its preview instead of nothing; when two attachments share one full image that can't be fetched, each keeps its own preview; an attachment's identifiers are read the way pyicloud reads them, so no image is ever filed under another attachment.

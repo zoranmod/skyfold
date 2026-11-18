@@ -414,6 +414,8 @@ class Settings:
     drive_folders: list[str] | None = None  # chosen top folders to sync; None = all of iCloud Drive
     notes_enabled: bool = False
     notes_dir: str = field(default_factory=lambda: str(Path.home() / "Documents" / "Apple Notes"))
+    bookmarks_enabled: bool = False  # Safari bookmarks as a file Firefox/Chrome can import (read-only)
+    bookmarks_dir: str = field(default_factory=lambda: str(Path.home() / "Documents"))
     include_videos: bool = True
     include_live_video: bool = True
     albums_as_folders: bool = True
