@@ -296,6 +296,11 @@ def _set_aside_orphan_journal() -> None:
                 if not _copy_new(p, aside):
                     raise FileExistsError(aside)
                 logging.getLogger("skyfold").warning("A database journal without its database was copied aside: %s", name)
+                # ...but it is still here under its own name. A rollback journal would be replayed into
+                # a database made or taken over now (a WAL from another database is ignored by SQLite):
+                # Skyfold doesn't start until it can be set aside (tried again next start).
+                if name.endswith("-journal"):
+                    JOURNAL_PROBLEMS.append(f"{p}: {exc}")
             except OSError:
                 # Neither: opening the database would overwrite it. Skyfold doesn't start (see app.main).
                 JOURNAL_PROBLEMS.append(f"{p}: {exc}")
@@ -322,7 +327,7 @@ def _move_private(src_dir: Path) -> None:
         log.warning("Couldn't look at the database in %s: %s", src_dir, exc)
         MIGRATION_PROBLEMS.append(f"{src_dir / DATABASE}: {exc}")
         has_db = False
-    if has_db and all(_missing(PRIVATE_DIR / n) for n in DATABASE_FILES):
+    if has_db and all(_missing(PRIVATE_DIR / n) for n in (*DATABASE_FILES, DATABASE + "-journal")):
         try:
             _copy_database(src_dir)
         except Exception as exc:  # noqa: BLE001 - left where it is, unchanged; the user is told
@@ -345,6 +350,8 @@ def migrate_private_files() -> None:
     # Before anything can open (and so create) the database: a journal left here without it is set
     # aside, whether or not there is an earlier database to take over.
     _set_aside_orphan_journal()
+    if JOURNAL_PROBLEMS:
+        return  # nothing is taken over next to a journal that is still in place (Skyfold doesn't start)
     if _missing(PRIVATE_DIR / DATABASE):
         _move_private(local / "iSync")
     _move_private(DATA_DIR)

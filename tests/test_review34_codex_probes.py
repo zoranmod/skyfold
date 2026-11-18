@@ -114,7 +114,6 @@ def test_blocker_pending_folder_cannot_delete_unanswered_children(drive_env, sid
         assert (root / paths[0]).is_file(), local_trash
 
 
-@pytest.mark.xfail(strict=True, reason="planned for 1.0.7: needs the file id of the version shown (goes to the Recycle Bin)")
 def test_blocker_pc_approval_does_not_recycle_a_new_copy_at_the_same_path(drive_env, qt_application):
     s, cloud, root, local_trash = drive_env
     paths = ["a.txt", "b.txt"]
@@ -183,21 +182,30 @@ def test_blocker_file_and_empty_folder_both_count_toward_limit(drive_env, side):
     assert not local_trash and not cloud.trashed
 
 
-def test_characterize_case_only_basename_stays_held_until_renamed_to_new_name(drive_env):
+def test_case_only_renamed_file_is_not_held_forever(drive_env):
+    # B34-1 (fixed in 1.0.10): edited after the case-only rename = new work, it goes up under its name
+    s, cloud, root, local_trash = drive_env
+    seed(s, cloud, ["report.txt"])
+    (root / "report.txt").rename(root / "intermediate")
+    (root / "intermediate").rename(root / "REPORT.TXT")
+    cloud.trash(cloud._item("report.txt"))
+    write(root, "REPORT.TXT", b"saved a new edit")
+    s.run()
+    assert not local_trash and cloud.items["REPORT.TXT"]["data"] == b"saved a new edit"
+
+
+def test_case_only_renamed_unchanged_file_is_left_alone(drive_env):
     s, cloud, root, local_trash = drive_env
     seed(s, cloud, ["report.txt"])
     (root / "report.txt").rename(root / "intermediate")
     (root / "intermediate").rename(root / "REPORT.TXT")
     cloud.trash(cloud._item("report.txt"))
     s.run()
-    write(root, "REPORT.TXT", b"saved a new edit")
-    for _ in range(4):
-        result = s.run()
-        assert not result.pending_to_pc
-    assert not local_trash and not cloud.items and not cloud.uploads
-    (root / "REPORT.TXT").rename(root / "new report.txt")
     s.run()
-    assert cloud.items["new report.txt"]["data"] == b"saved a new edit"
+    assert not cloud.uploads and not local_trash  # renamed file or a new copy: can't be told, kept as is
+    write(root, "REPORT.TXT", b"saved a new edit")  # ...until it is edited: then it is new work
+    s.run()
+    assert cloud.items["REPORT.TXT"]["data"] == b"saved a new edit" and not local_trash
 
 
 @pytest.mark.parametrize("same_pass", [False, True])
@@ -327,7 +335,8 @@ def test_ordinary_folder_rename_moves_without_creating_a_duplicate(drive_env):
     assert set(cloud.items) == {"Holiday", "Holiday/a.txt", "Holiday/Sub", "Holiday/Sub/b.txt"}
 
 
-def test_characterize_fallback_orphan_copy_can_mix_with_a_migrated_database(notes_env, tmp_path, monkeypatch):
+def test_fallback_orphan_copy_never_mixes_with_a_migrated_database(notes_env, tmp_path, monkeypatch):
+    # B34-4 (fixed in 1.0.10): a journal still in place stops the start; nothing is taken over next to it
     source, private = private_paths(monkeypatch, tmp_path)
     prior = source / config.DATABASE
     with closing(sqlite3.connect(prior)) as old:
@@ -363,12 +372,9 @@ os._exit(91)
     with monkeypatch.context() as m:
         m.setattr(config.os, "rename", deny_rename)
         config.migrate_private_files()
-    assert not config.JOURNAL_PROBLEMS and not config.MIGRATION_PROBLEMS
-    assert orphan.exists()
+    assert config.JOURNAL_PROBLEMS and orphan.exists()
     assert any(p.read_bytes() == journal for p in private.glob(orphan.name + ".orphan-*"))
-    with closing(sqlite3.connect(private / config.DATABASE)) as published:
-        assert published.execute("SELECT count(*) FROM evidence WHERE substr(value, 1, 1)=?",
-                                 (b"U",)).fetchone()[0] > 0
+    assert not (private / config.DATABASE).exists()  # not published next to it
     with closing(sqlite3.connect(prior)) as old:
         assert old.execute("SELECT count(*) FROM evidence WHERE substr(value, 1, 1)=?",
                            (b"L",)).fetchone() == (16,)

@@ -115,7 +115,8 @@ def test_completed_editor_delete_and_recreate_save_stays_quick(drive_env, qt_app
     assert worker._drive_pending is None and not recycled
 
 
-def test_characterize_save_repeats_full_read_while_confirmation_waits(drive_env, qt_application):
+def test_save_while_confirmation_waits_stays_quick(drive_env, qt_application):
+    # B36-1 (fixed in 1.0.10): deletions already waiting for an answer don't force full reads
     s, cloud, root, _ = drive_env
     paths = ["Docs/a.txt", "Docs/b.txt"]
     seed(s, cloud, [*paths, "Other/keep.txt"])
@@ -131,7 +132,7 @@ def test_characterize_save_repeats_full_read_while_confirmation_waits(drive_env,
         new = f"Docs/{suffix}-unrelated-save.txt"
         write(root, new, b"UNRELATED SAVE")
         notify([new], "created")
-        assert (cloud.full_walks - before_full, cloud.quick_walks - before_quick) == (2, 2)
+        assert cloud.full_walks == before_full and cloud.quick_walks > before_quick
         assert cloud.items[new]["data"] == b"UNRELATED SAVE"
         assert set(worker._drive_pending.to_cloud) == set(paths)
         assert worker._drive_pending.gen == pending_gen

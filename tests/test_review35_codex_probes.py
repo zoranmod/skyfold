@@ -151,7 +151,7 @@ def test_photos_dialog_approves_the_next_full_pass(photos_env, qt_application, s
     for _ in range(3):
         assert scan(False).gen == pending.gen
     click(open_dialog(), "Delete in iCloud too" if side == "to_cloud" else "Delete on this PC too")
-    assert actions[0][0] == f"approve:{side}:{pending.gen}"
+    assert actions[0][0] == f"approve:{side}:{pending.gen_side[side]}"  # that side's version
     assert schedules == [(True, True, True)]
     if side == "to_cloud":
         assert set(remote.deleted) == set(assets) and not recycled
@@ -160,7 +160,8 @@ def test_photos_dialog_approves_the_next_full_pass(photos_env, qt_application, s
     assert scan() is None
 
 
-def test_characterize_photos_dialog_rejects_its_remaining_unchanged_section(photos_env, qt_application):
+def test_photos_dialog_keeps_its_remaining_unchanged_section_answerable(photos_env, qt_application):
+    # B35-1 (fixed in 1.0.10): each side of the question has its own version
     syncer, remote, root, recycled = photos_env
     assets, paths = photos_batch(syncer, remote, root, 4)
     for path in paths[:2]:
@@ -175,15 +176,14 @@ def test_characterize_photos_dialog_rejects_its_remaining_unchanged_section(phot
     assert set(remote.deleted) == set(assets[:2])
     current = scan()
     assert not current.to_cloud and set(current.to_pc) == set(pending.to_pc)
-    assert current.gen != pending.gen
-    click(dialog, "Delete on this PC too")
-    assert actions[-1][0] == f"approve:to_pc:{pending.gen}"
-    assert len(schedules) == 1 and not recycled
-    click(open_dialog(), "Delete on this PC too")
+    assert current.gen != pending.gen and current.gen_side["to_pc"] == pending.gen_side["to_pc"]
+    click(dialog, "Delete on this PC too")  # the dialog still open from before
+    assert actions[-1][0] == f"approve:to_pc:{pending.gen_side['to_pc']}"
     assert set(recycled) == {p.name for p in paths[2:]}
 
 
-def test_characterize_drive_dialog_rejects_its_remaining_unchanged_section(drive_env, qt_application):
+def test_drive_dialog_keeps_its_remaining_unchanged_section_answerable(drive_env, qt_application):
+    # B35-1 (fixed in 1.0.10): each side of the question has its own version
     s, cloud, root, recycled = drive_env
     paths = ["a.txt", "b.txt", "c.txt", "d.txt"]
     seed(s, cloud, paths)
@@ -201,10 +201,8 @@ def test_characterize_drive_dialog_rejects_its_remaining_unchanged_section(drive
     assert set(cloud.trashed) == set(paths[:2])
     current = controller._pending
     assert current.to_pc == old.to_pc and not current.to_cloud
-    assert current.gen != old.gen
-    click(dialog, "Delete on this PC too")
-    assert not recycled
-    click(open_dialog(), "Delete on this PC too")
+    assert current.gen != old.gen and current.gen_side["to_pc"] == old.gen_side["to_pc"]
+    click(dialog, "Delete on this PC too")  # the dialog still open from before
     assert set(recycled) == set(paths[2:])
 
 

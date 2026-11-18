@@ -594,7 +594,8 @@ class Controller(QObject):
         def decided(d: str, ids: list) -> None:
             # which part of the question shown was answered: an answer only counts for that side
             side = "to_pc" if set(ids) <= set(shown.to_pc) and ids else "to_cloud"
-            self.req.resolvePending.emit(f"{d}:{side}:{getattr(shown, 'gen', '')}", ids)
+            gen = getattr(shown, "gen_side", {}).get(side, getattr(shown, "gen", ""))  # that side's version
+            self.req.resolvePending.emit(f"{d}:{side}:{gen}", ids)
 
         dlg.decided.connect(decided)
         self._show_dialog("pending", dlg)

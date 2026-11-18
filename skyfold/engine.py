@@ -335,6 +335,7 @@ class Syncer:
         self.approved_side: dict[str, set[str]] = {"cloud": set(), "pc": set()}  # confirmed for that side
         self.held_side: dict[str, set[str]] = {"cloud": set(), "pc": set()}  # asked about, per side
         self.question_gen = 0  # goes up whenever the question changes: an answer names the one it saw
+        self.side_gen = {"cloud": 0, "pc": 0}  # the same, per side of the question
         self.held: set[str] = set()  # deletions currently waiting for the user's decision
         # Paths the engine itself touched recently, so the folder watcher can ignore them.
         self.own_paths: dict[str, float] = {}
@@ -737,10 +738,14 @@ class Syncer:
             self.approved_side = {k: v & new_side[k] for k, v in self.approved_side.items()}
         if new_side != self.held_side:
             self.question_gen += 1  # another question: answers to the earlier one don't count
+        for k in ("cloud", "pc"):  # each side has its own version: answering one leaves the other valid
+            if new_side[k] != self.held_side[k]:
+                self.side_gen[k] += 1
         self.held_side = new_side
         self.held = held
         if pending:
             pending.gen = self.question_gen
+            pending.gen_side = {"to_cloud": self.side_gen["cloud"], "to_pc": self.side_gen["pc"]}
 
         # 3) new in iCloud ---------------------------------------------------
         excluded = self.state.excluded()

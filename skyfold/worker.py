@@ -7,6 +7,7 @@ something changes in the Drive folder on this PC).
 
 from __future__ import annotations
 
+import copy
 import logging
 import threading
 import time
@@ -807,6 +808,8 @@ class SyncWorker(QObject):
             pend = Pending(to_cloud=list(to_cloud), to_pc=list(to_pc), names={p: p for p in [*to_cloud, *to_pc]})
             pend.service = "drive"
             pend.gen = getattr(self.drive, "question_gen", 0)  # which question this is (answers name it)
+            sides = getattr(self.drive, "side_gen", {})
+            pend.gen_side = {"to_cloud": sides.get("cloud", 0), "to_pc": sides.get("pc", 0)}  # per side
             if self.drive_state is not None:  # a folder counts with all the files inside it
                 rows = self.drive_state.all()
 
@@ -841,8 +844,19 @@ class SyncWorker(QObject):
         decision, _, rest = decision.partition(":")
         side, _, gen = rest.partition(":")
 
+        def version(q) -> str:  # the version of the side answered (each side has its own)
+            return str(getattr(q, "gen_side", {}).get(side, getattr(q, "gen", "")))
+
+        def rest(q, answered: set):
+            """What the shown question still asks after one of its sides was answered (or None)."""
+            if not side or q is None:
+                return None
+            left = copy.copy(q)
+            setattr(left, side, [i for i in getattr(q, side) if i not in answered])
+            return left if (left.to_cloud or left.to_pc) else None
+
         def current(q) -> bool:
-            if gen and str(getattr(q, "gen", "")) != gen:
+            if gen and version(q) != gen:
                 return False
             return not side or set(ids) <= set(getattr(q, side, ()))
 
@@ -864,8 +878,8 @@ class SyncWorker(QObject):
                 if set(ids) & set(p.to_pc):
                     self.syncer.reject_to_pc([i for i in ids if i in p.to_pc])
                 self.syncer.held -= set(ids)
-            self._pending = None
-            self.pendingChanged.emit(self._drive_pending)
+            self._pending = rest(p, set(ids))  # the other side of the question stays answerable
+            self.pendingChanged.emit(self._pending or self._drive_pending)
             self.full_check()  # restored items didn't change in iCloud, so only a full read finds them
             return
         d = self._drive_pending
@@ -874,7 +888,7 @@ class SyncWorker(QObject):
             if not side:  # (said without a side: the side of the current question that holds them all)
                 in_pc, in_cloud = set(ids) <= to_pc, set(ids) <= to_cloud
                 side = "to_pc" if in_pc and not in_cloud else "to_cloud" if in_cloud and not in_pc else ""
-            stale = bool(gen) and str(getattr(d, "gen", "")) != gen
+            stale = bool(gen) and version(d) != gen
             if stale or (decision == "approve" and (side not in ("to_pc", "to_cloud")
                                                     or not set(ids) <= (to_pc if side == "to_pc" else to_cloud))):
                 # an answer to a question that isn't the current one (it changed meanwhile): not used
@@ -889,8 +903,8 @@ class SyncWorker(QObject):
                 self.drive.discard_pending(ids)
                 for path in ids:
                     self.drive_state.drop(path)
-            self._drive_pending = None
-            self.pendingChanged.emit(self._pending)
+            self._drive_pending = rest(d, set(ids))  # the other side of the question stays answerable
+            self.pendingChanged.emit(self._pending or self._drive_pending)
             self._kick_drive(full=True)
 
     @Slot(list)

@@ -4,6 +4,13 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Fixed
+- A deletion question with both an iCloud and a PC part: answering one part no longer made the other part's button stop working in the window still open (each part has its own version now).
+- iCloud Drive: approving "Delete on this PC too" no longer recycles a different file put at the same path meanwhile (for example a copy put back from a backup); Skyfold checks it is still the very file it asked about, and asks again otherwise.
+- iCloud Drive: a file renamed only in letter case (report.txt to REPORT.TXT) after iCloud deleted it was left waiting forever, even after editing it. Edited, it now goes up under its new name.
+- iCloud Drive: saving a file while a deletion question waits no longer triggers two full reads of iCloud Drive each time.
+- Start-up: a leftover database rollback journal that can't be set aside stops the start instead of being taken into a database (it is never mixed with your sync data).
+
 ## [1.0.9] - 2026-11-18
 
 ### Changed

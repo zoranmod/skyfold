@@ -425,7 +425,9 @@ def test_known_cloud_quick_pass_retains_pending_shell_children(drive_env):
     assert set(paths).issubset(s.state.all())
     assert not any((root / p).exists() for p in paths)
     assert not cloud.trashed
-    assert result.full  # (review 35: a deletion is only decided by a full read)
+    # (review 35: a deletion is only decided by a full read; B36-1: one already waiting for an answer
+    # needs none, it keeps waiting as it was asked)
+    assert result.full or set(result.pending_to_cloud) == set(paths)
 
 
 def test_local_quick_change_escalates_without_releasing_pending_children(drive_env):

@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import sqlite3
+import stat
 import tempfile
 import threading
 import time
@@ -221,9 +222,10 @@ class DriveSyncer:
         # An approval only counts for that side and those very items; a deletion once asked about is
         # never done unanswered, also when a later pass sees fewer items than the limit.
         self._asked_cloud: dict[str, dict | None] = {}
-        self._asked_pc: set[str] = set()
+        self._asked_pc: dict[str, dict | None] = {}  # path -> what was on this PC when asked (_pc_shape)
         self._approved_side: dict[str, str] = {}  # path -> "cloud"/"pc", when the answer said which
         self.question_gen = 0  # goes up whenever the question changes: an answer names the one it saw
+        self.side_gen = {"cloud": 0, "pc": 0}  # the same, per side of the question
         self.own_paths: dict[str, float] = {}
         self.cache: dict[str, DriveItem] = {}  # iCloud tree as of the last read
         self.account = ""  # short fingerprint of the Apple ID this folder belongs to (set by the worker)
@@ -910,6 +912,14 @@ class DriveSyncer:
 
         if scope is None and not partial:
             self._scrub(remote, local, base, uploads)
+        if scope is not None and (to_cloud or to_pc) and self._only_waiting(to_cloud, to_pc):
+            # Only deletions that already wait for your answer (asked, not OK'd yet): nothing new to
+            # decide, so no full read for them; they keep waiting and the rest of the pass goes on.
+            to_cloud.clear()
+            to_pc.clear()
+            still_asked = True
+        else:
+            still_asked = False
         if scope is not None and (to_cloud or to_pc):
             # Something went away on one side. A quick pass sees only a few folders: how many deletions
             # there are in all (the limit for asking you), what is inside a folder, or where it went if
@@ -964,24 +974,30 @@ class DriveSyncer:
         self._deletions(to_cloud, to_pc, remote, base, res)
         known_now = self.state.all() if res.pending_to_cloud else {}
         shapes = {p: self._cloud_shape(p, remote, known_now) for p in res.pending_to_cloud}
+        pc_shapes = {p: self._pc_shape(p) for p in res.pending_to_pc}
         if scope is None:  # approvals only count for deletions still waiting, on the side and items asked about
             self.approved = {p for p in self.approved
                              if (p in res.pending_to_cloud and p in self._asked_cloud
                                  and shapes[p] is not None and self._asked_cloud[p] == shapes[p])
-                             or (p in res.pending_to_pc and p in self._asked_pc)}
+                             or (p in res.pending_to_pc and p in self._asked_pc
+                                 and pc_shapes[p] is not None and self._asked_pc[p] == pc_shapes[p])}
             self._approved_side = {p: v for p, v in self._approved_side.items() if p in self.approved}
-            new_cloud, new_pc = shapes, set(res.pending_to_pc)
+            new_cloud, new_pc = shapes, pc_shapes
         elif res.pending_to_cloud or res.pending_to_pc:  # a quick pass sees only part: it adds, never forgets
-            new_cloud, new_pc = {**self._asked_cloud, **shapes}, self._asked_pc | set(res.pending_to_pc)
+            new_cloud, new_pc = {**self._asked_cloud, **shapes}, {**self._asked_pc, **pc_shapes}
         else:
             new_cloud, new_pc = self._asked_cloud, self._asked_pc
         if new_cloud != self._asked_cloud or new_pc != self._asked_pc:
             self.question_gen += 1  # another question: answers to the earlier one don't count
+            self.side_gen["cloud"] += new_cloud != self._asked_cloud  # per side: answering one side
+            self.side_gen["pc"] += new_pc != self._asked_pc  # leaves the other one valid
             self._asked_cloud, self._asked_pc = new_cloud, new_pc
         if res.pending_to_cloud or res.pending_to_pc:
             self._late = (remote, base, res)
             if self.on_pending:
                 self.on_pending(list(res.pending_to_cloud), list(res.pending_to_pc))
+        elif still_asked:  # the question shown stays as it was (nothing about it was decided here)
+            res.pending_to_cloud, res.pending_to_pc = list(self._asked_cloud), list(self._asked_pc)
 
         # Folders first, then files.
         for path in mkdir_remote:
@@ -1210,11 +1226,18 @@ class DriveSyncer:
             if q is not None and q != p and p not in base and p not in remote and q not in local:
                 if lo.is_dir or q.rsplit("/", 1)[-1] == p.rsplit("/", 1)[-1]:
                     out[q] = lo  # only its folders are spelled differently: the same item
-                else:
-                    # the file's own name differs in letter case: maybe a new file. Neither is
-                    # uploaded nor deleted while it can't be told (left alone until it changes).
+                    continue
+                # The file's own name differs in letter case: maybe that file renamed, maybe a new
+                # copy (same content proves nothing). While it still has the synced content it is
+                # left alone (neither uploaded nor deleted). Changed since, or never synced content:
+                # your new work under its new name, which goes up (it doesn't wait forever).
+                try:
+                    same = self._pc_has_synced_content(base[q], self._abs(p), strict=True)
+                except OSError:
+                    same = True  # can't be read now: left alone until it can
+                if same:
                     self.unreadable |= {p, q}
-                    out[p] = lo
+                out[p] = lo
             else:
                 out[p] = lo
         return out
@@ -1846,17 +1869,60 @@ class DriveSyncer:
 
     def approve(self, paths: list[str], side: str | None = None, gen: int | None = None) -> list[str]:
         """The user's OK for these paths, given for one side ("cloud": delete in iCloud, "pc": on this PC)
-        of the question that was shown (gen: its version). Paths not in that question, or an answer to
+        of the question that was shown (gen: that side's version). Paths not in that question, or an answer to
         an older version of it, don't count."""
-        if gen is not None and gen != self.question_gen:
+        if gen is not None and gen != (self.side_gen[side] if side in self.side_gen else self.question_gen):
             return []
         asked = self._asked_cloud if side == "cloud" else self._asked_pc if side == "pc" else \
-            set(self._asked_cloud) | self._asked_pc
+            set(self._asked_cloud) | set(self._asked_pc)
         ok = [p for p in paths if p in asked]
         self.approved.update(ok)
         if side:
             self._approved_side.update({p: side for p in ok})
         return ok
+
+    def _only_waiting(self, to_cloud: list[str], to_pc: list[str]) -> bool:
+        """Are all these deletions part of the question already asked, on their side, and not OK'd?"""
+        def waiting(p: str, asked: dict) -> bool:
+            q = p
+            while True:
+                if q in asked:
+                    return q not in self.approved
+                if "/" not in q:
+                    return False
+                q = q.rsplit("/", 1)[0]
+
+        return all(waiting(p, self._asked_cloud) for p in to_cloud) and             all(waiting(p, self._asked_pc) for p in to_pc)
+
+    def _pc_shape(self, p: str) -> dict | None:
+        """Which items are at p and below on this PC, by Windows' own file identity (a copy put back
+        at the same path is another file): what a deletion there would remove. None when it can't be
+        read now."""
+        top = self._abs(p)
+        out: dict[str, tuple] = {}
+
+        def ident(rel: str, st: os.stat_result) -> None:
+            kind = "dir" if stat.S_ISDIR(st.st_mode) else "file"
+            out[rel] = (kind, st.st_dev, st.st_ino)
+
+        try:
+            ident(p, os.lstat(top))
+        except FileNotFoundError:
+            return {p: ("absent",)}
+        except OSError:
+            return None
+        def fail(exc: OSError) -> None:
+            raise exc  # a folder inside that can't be read: the shape can't be told
+
+        if out[p][0] == "dir":
+            try:
+                for here, dirs, files in os.walk(top, onerror=fail):
+                    rel = p + "/" + Path(here).relative_to(top).as_posix() if Path(here) != top else p
+                    for name in [*dirs, *files]:
+                        ident(f"{rel}/{name}", os.lstat(os.path.join(here, name)))
+            except OSError:
+                return None
+        return out
 
     def _cloud_shape(self, p: str, d: dict[str, DriveItem], known: dict[str, Base],
                      verify: bool = False) -> dict | None:
@@ -1922,6 +1988,12 @@ class DriveSyncer:
                     then = {q: v for q, v in then.items() if q == p or q.startswith(p + "/")} or None
                 if then is None or self._cloud_shape(p, remote, known, verify=True) != then:
                     return True  # another item (or version) is there now than the one you OK'd
+            else:
+                then = self._asked_pc[k]
+                if then is not None and k != p:
+                    then = {q: v for q, v in then.items() if q == p or q.startswith(p + "/")} or None
+                if then is None or self._pc_shape(p) != then:
+                    return True  # another file is there now (e.g. a copy put back): not the one you OK'd
         return False
 
     def apply_approved_deletions(self) -> None:
