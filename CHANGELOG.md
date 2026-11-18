@@ -4,6 +4,9 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Changed
+- Notes.html has a new look, designed by Codex to match the app: the Skyfold name and logo, folders in a left column (a Folders button on a narrow screen), notes grouped in cards per folder with subfolders under their parent, search, light and dark theme. An existing Notes.html gets the new look once after the update, without downloading notes again.
+
 ## [1.0.8] - 2026-11-18
 
 ### Fixed

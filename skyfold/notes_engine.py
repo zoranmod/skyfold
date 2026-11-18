@@ -965,6 +965,8 @@ class NotesSyncer:
                 self.state.set("legacy_index", "1")
                 if not (self.state.get("index_owned") or self.state.get("index_digest")):
                     self.write_index()
+            elif self.state.get("index_layout") != INDEX_LAYOUT and self.state.get("index_owned") == "1":
+                self.write_index()  # once after an update with a new Notes.html look (from the database)
             self.state.set("last_sync", now_iso())  # checked, nothing changed: still a check
             return res
         res.full = full or not stored
@@ -1228,18 +1230,7 @@ class NotesSyncer:
         rows = sorted(self.state.all().values(), key=lambda r: (r[3] or "", (r[2] or "").lower()))
         data = [{"t": r[2] or t("Untitled"), "f": r[3] or "", "p": r[1], "m": local_datetime(r[4]),
                  "l": bool(r[5])} for r in rows]
-        page = INDEX_TEMPLATE.format(
-            title=html.escape(t("Apple Notes")),
-            search=html.escape(t("Search notes…")),
-            locked=html.escape(t("locked – open it on your iPhone")),
-            count=html.escape(t("{n} notes", n=len(data))),
-            updated=html.escape(t("Updated {when}", when=local_datetime(datetime.now()))),
-            theme_script=THEME_SCRIPT, theme_vars=THEME_VARS,
-            theme_button=THEME_BUTTON.format(label=html.escape(t("Light / dark"), quote=True)),
-            collapse_all=json.dumps(t("Collapse all"), ensure_ascii=False),
-            expand_all=json.dumps(t("Expand all"), ensure_ascii=False),
-            data=json.dumps(data, ensure_ascii=False).replace("</", "<\\/"),
-        )
+        page = render_index(data, t("Updated {when}", when=local_datetime(datetime.now())))
         target = self.root / INDEX
         not_ours = SyncError(t("The Notes folder already has a Notes.html that isn't from Skyfold. Choose an empty "
                                "folder for Notes in Settings."))
@@ -1317,68 +1308,207 @@ class NotesSyncer:
                 self._disown(aside)
         self.state.set("index_digest", written)
         self.state.set("index_owned", "1")
+        self.state.set("index_layout", INDEX_LAYOUT)
 
 
 INDEX_MARK = '<meta name="generator" content="Skyfold notes index">'
+INDEX_LAYOUT = "2"  # raised when Notes.html looks different: an existing one is rewritten once
+# Layout by Codex (design proposal for fdb8e84), in the app's own palette. Placeholders are @@name@@
+# (HTML-escaped words) and @@strings@@ / @@data@@ (JSON); no str.format, so CSS/JS braces stay plain.
 INDEX_TEMPLATE = """<!doctype html>
-<html><head><meta charset="utf-8">""" + INDEX_MARK + """<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{title}</title>
-{theme_script}
-<style>{theme_vars}
-*{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif}}
-.wrap{{max-width:880px;margin:0 auto;padding:28px 16px 60px}}
-.top{{display:flex;align-items:flex-start;gap:8px}} .top>div:first-child{{flex:1;min-width:0}}
-h1{{font-size:26px;margin:0 0 4px}} .sub{{color:var(--muted);font-size:13px;margin-bottom:18px}}
-.tb{{height:34px;padding:0 12px;border:1px solid var(--border);border-radius:9px;background:var(--card);color:var(--text);font-size:13px;font-family:inherit;cursor:pointer}}
-.tb:hover{{border-color:var(--accent);color:var(--accent)}}
-input{{width:100%;padding:11px 14px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text);font:inherit;outline:none}}
-input:focus{{border-color:var(--accent)}}
-.fh{{display:flex;align-items:center;gap:8px;width:100%;margin:22px 0 8px;padding:4px;border:0;background:none;cursor:pointer;
-font-family:inherit;font-size:12px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);text-align:left}}
-.fh:hover{{color:var(--text)}} .fh .c{{margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none}}
-.fh svg{{transition:transform .15s}} .shut>.fh svg{{transform:rotate(-90deg)}} .shut>.body{{display:none}}
-.sub{{margin-left:14px;padding-left:12px;border-left:2px solid var(--border)}} .sub .fh{{margin-top:14px}}
-.body>.card+.sub{{margin-top:4px}}
-.card{{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}}
-a.row,div.row{{display:flex;justify-content:space-between;gap:12px;padding:11px 14px;border-top:1px solid var(--border);color:var(--text);text-decoration:none}}
-.card>.row:first-child{{border-top:none}} a.row:hover{{background:var(--hover)}}
-.m{{color:var(--muted);font-size:13px;white-space:nowrap}} .lk{{color:var(--muted)}}
-</style></head><body><div class="wrap">
-<div class="top"><div><h1>{title}</h1><div class="sub">{count} · {updated}</div></div>
-<button class="tb" id="all" type="button"></button>{theme_button}</div>
-<input id="q" placeholder="{search}" autofocus>
-<div id="list"></div></div>
+<html lang="@@lang@@"><head><meta charset="utf-8">""" + INDEX_MARK + """<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>@@title@@ · Skyfold</title>
+@@theme_script@@
+<style>
+:root{color-scheme:light;--bg:#fff;--group:#f3f5f8;--hover:#e7ebf0;--border:#dce2e9;--text:#20252b;--muted:#59636f;--accent:#075bcd;--accent-soft:#e7f0ff;--accent-text:#fff;--focus:#075bcd}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;--bg:#191e25;--group:#222932;--hover:#303944;--border:#36404d;--text:#f0f3f7;--muted:#b0bac7;--accent:#99c2ff;--accent-soft:#243b59;--accent-text:#10223b;--focus:#99c2ff}}
+:root[data-theme=dark]{color-scheme:dark;--bg:#191e25;--group:#222932;--hover:#303944;--border:#36404d;--text:#f0f3f7;--muted:#b0bac7;--accent:#99c2ff;--accent-soft:#243b59;--accent-text:#10223b;--focus:#99c2ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:13px/1.5 "Segoe UI Variable Text","Segoe UI Variable","Segoe UI",system-ui,sans-serif}
+button,input{font:inherit;color:inherit}button{cursor:pointer;border:0}a{color:var(--accent)}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
+::selection{background:var(--accent);color:var(--accent-text)}[hidden]{display:none!important}
+.icon{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.skip{position:fixed;top:-100px;left:16px;padding:12px;background:var(--accent);color:var(--accent-text);z-index:20;border-radius:8px}.skip:focus{top:12px}
+.shell{max-width:1200px;margin:auto;padding:0 40px}
+.topbar{min-height:110px;display:flex;align-items:center;justify-content:space-between;gap:20px}
+.brand{display:flex;align-items:center;gap:12px}.brandmark{display:grid;place-items:center;width:44px;height:44px;border-radius:11px;background:var(--accent-soft);color:var(--accent)}.brandmark svg{width:34px;height:34px}
+.brand-name{font-size:17px;font-weight:650;letter-spacing:-.3px}.brand-sub{font-size:11px;color:var(--muted);margin-top:1px}
+.top-actions{display:flex;align-items:center;gap:20px}.export-info{color:var(--muted);text-align:right;font-size:11px}.export-info strong{font-weight:500;color:var(--text);display:block;font-size:12px}
+.icon-button{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:8px;background:var(--group);color:var(--muted)}.icon-button:hover{background:var(--hover);color:var(--text)}
+.workspace{display:grid;grid-template-columns:216px minmax(0,1fr);gap:36px;align-items:start;padding-top:20px}
+.sidebar{position:sticky;top:20px}.nav-card{background:var(--group);border-radius:11px;padding:12px 8px 10px}
+.eyebrow{color:var(--muted);font-size:11px;font-weight:600;letter-spacing:.65px;text-transform:uppercase}.nav-label{padding:4px 12px 12px}
+.nav-item{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:10px 12px;border-radius:8px;background:transparent;text-align:left}.nav-item:hover{background:var(--hover)}
+.nav-item[aria-current=page]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.nav-item .num{margin-left:auto;font-size:11px;font-variant-numeric:tabular-nums;color:var(--muted)}.nav-item[aria-current=page] .num{color:var(--accent)}
+.nav-item span:not(.num){min-width:0;overflow-wrap:anywhere}.nav-divider{height:12px}
+.nav-parent{display:flex;align-items:center}.nav-parent>.nav-item{flex:1;min-width:0}
+.disclosure{width:32px;min-height:44px;display:grid;place-items:center;border-radius:8px;background:transparent;color:var(--muted)}.disclosure:hover{background:var(--hover)}.disclosure .icon{width:14px;height:14px}.disclosure[aria-expanded=false] svg{transform:rotate(-90deg)}
+.subnav{margin:2px 0 4px 19px;padding-left:9px;border-left:1px solid var(--border)}.subnav .nav-item{font-size:12px;padding-left:10px}.subnav .icon{width:16px;height:16px}
+.sidebar-note{display:flex;gap:9px;margin:18px 12px;color:var(--muted);font-size:11px;line-height:1.65}.sidebar-note .icon{width:15px;height:15px;margin-top:2px}.sidebar-note p{margin:0}
+.mobile-folders{display:none}.main{min-width:0}
+.intro{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;margin-bottom:23px}.intro h1{font-size:22px;line-height:1.25;letter-spacing:-.55px;font-weight:650;margin:2px 0 7px}.intro p{margin:0;color:var(--muted);font-size:13px}
+.collection-icon{width:44px;height:44px;display:grid;place-items:center;color:var(--muted);background:var(--group);border-radius:11px}.collection-icon .icon{width:23px;height:23px}
+.searchbar{display:flex;align-items:center;gap:10px;background:var(--group);border-radius:8px;padding:0 12px;min-height:46px}.searchbar>.icon{color:var(--muted);width:17px;height:17px}
+.searchbar:focus-within{outline:2px solid var(--focus);outline-offset:2px}.searchbar input{min-width:0;flex:1;width:100%;padding:13px 0;border:0;background:transparent;outline:none}
+.searchbar input:focus-visible{outline:none}.searchbar input::placeholder{color:var(--muted);opacity:1}.searchbar input::-webkit-search-cancel-button{display:none}
+.search-clear{width:30px;height:32px;border-radius:8px;display:grid;place-items:center;background:transparent;color:var(--muted)}.search-clear:hover{background:var(--hover)}.search-clear .icon{width:15px;height:15px}
+.key{font-size:11px;color:var(--muted);white-space:nowrap}
+.collection-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:24px 0 13px}.collection-title{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px;min-width:0}
+.collection-title h2{font-size:13px;font-weight:600;margin:0;overflow-wrap:anywhere}.count{font-size:11px;color:var(--muted)}
+.text-button{background:transparent;color:var(--accent);border-radius:8px;padding:9px 10px;font-size:12px;white-space:nowrap;min-height:36px}.text-button:hover{background:var(--accent-soft)}
+.groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.folder-card{background:var(--group);border-radius:11px;min-width:0;padding:4px 8px 8px;align-self:start}
+.folder-toggle{width:100%;display:flex;align-items:center;gap:8px;padding:12px 8px;min-height:48px;background:transparent;border-radius:8px;text-align:left;font-size:13px;font-weight:600}
+.folder-toggle>.icon{color:var(--muted);width:16px;height:16px}.folder-toggle .folder-count{font-size:11px;color:var(--muted);font-weight:400;margin-left:auto}
+.folder-toggle .chevron{width:13px;height:13px;color:var(--muted)}.folder-toggle[aria-expanded=false] .chevron{transform:rotate(-90deg)}.folder-toggle:hover{background:var(--hover)}
+.folder-title{min-width:0;overflow-wrap:anywhere}.note-list{list-style:none;margin:0;padding:0}
+.note-row{display:flex;align-items:center;gap:10px;min-height:65px;padding:10px 8px;border-radius:8px;text-decoration:none;color:var(--text)}a.note-row:hover{background:var(--hover)}
+.note-glyph{width:30px;height:34px;border-radius:8px;display:grid;place-items:center;color:var(--muted);flex:none}.note-glyph .icon{width:19px;height:19px}
+.note-copy{min-width:0;flex:1}.note-title{display:block;font-weight:550;font-size:13px;line-height:1.4;overflow-wrap:anywhere}.note-date{display:block;color:var(--muted);font-size:11px;margin-top:4px}
+.note-arrow{width:14px;height:14px;color:var(--muted);opacity:0}a.note-row:hover .note-arrow,a.note-row:focus-visible .note-arrow{opacity:1}.locked .note-title{color:var(--muted)}
+.parent-heading{grid-column:1/-1;display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;font-weight:600;margin:10px 2px -3px}.parent-heading .icon{width:16px;height:16px}
+.parent-grid{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.parent-grid .note-row{min-height:77px;gap:7px}.parent-grid .note-glyph{width:22px}.parent-grid .note-arrow{display:none}
+.empty{grid-column:1/-1;background:var(--group);padding:48px 24px;border-radius:11px;text-align:center}.empty>.icon{width:28px;height:28px;color:var(--muted)}.empty h3{font-size:17px;margin:12px 0 5px}.empty p{color:var(--muted);margin:0 0 12px}
+.footer{display:flex;justify-content:space-between;gap:16px;margin:30px 0 32px;color:var(--muted);font-size:11px}.footer p{margin:0}.mobile-update{display:none}
+@media(max-width:1000px){.shell{padding:0 24px}.workspace{grid-template-columns:190px minmax(0,1fr);gap:24px}.parent-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.parent-grid .note-row{min-height:65px}.parent-grid .note-glyph{width:30px}}
+@media(max-width:700px){.shell{padding:0 16px}.topbar{min-height:92px}.brandmark{width:40px;height:40px}.brandmark svg{width:32px;height:32px}.top-actions{gap:0}.export-info{display:none}
+.workspace{display:flex;flex-direction:column;gap:0;padding-top:13px}.sidebar{position:static;width:100%;display:none;margin:0 0 24px}.sidebar.mobile-open{display:block}.sidebar-note{display:none}.main{width:100%}
+.collection-icon{display:none}.mobile-folders{display:inline-flex;align-items:center;gap:8px;background:var(--group);border-radius:8px;min-height:44px;padding:10px 12px;color:var(--text);font-size:12px}
+.mobile-folders[aria-expanded=true]{background:var(--accent-soft);color:var(--accent)}.mobile-folders .icon{width:16px;height:16px}.intro-text{flex:1;min-width:0}.intro p{font-size:12px}
+.groups,.parent-grid{grid-template-columns:minmax(0,1fr);gap:14px}.collection-bar{margin-top:20px;margin-bottom:10px}.note-row,.parent-grid .note-row{min-height:65px}.note-arrow{opacity:1}
+.footer{flex-direction:column;gap:6px;margin-top:26px}.mobile-update{display:inline}.key{display:none}}
+@media(prefers-reduced-motion:no-preference){.icon-button,.note-row,.nav-item{transition:background .12s ease}.disclosure svg,.folder-toggle .chevron{transition:transform .12s ease}}
+@media print{.sidebar,.searchbar,.top-actions,.mobile-folders,.text-button,.footer{display:none}.workspace{display:block}.shell{max-width:none;padding:0}.folder-card{break-inside:avoid}.note-list[hidden]{display:block!important}}
+</style></head>
+<body>
+<a class="skip" href="#main">@@skip@@</a>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="mark" viewBox="0 0 32 32"><path d="M6.72640,23.69280 C4.76229,23.69280 3.06492,22.32107 2.65276,20.40069 C2.24061,18.48030 3.22562,16.53288 5.01676,15.72692 C5.50108,15.50899 5.87075,15.09653 6.03455,14.59132 C6.75883,12.35732 8.91326,10.90519 11.25580,11.07212 C11.95126,11.12167 12.61711,10.78260 12.98608,10.19101 C14.57905,7.63687 17.67622,6.45365 20.56641,7.29507 C23.45661,8.13650 25.43467,10.79727 25.40773,13.80733 C25.40054,14.61092 25.90449,15.33037 26.66216,15.59820 C28.57539,16.27449 29.72311,18.23080 29.38002,20.23082 C29.03693,22.23084 27.30284,23.69280 25.27360,23.69280 L6.72640,23.69280 Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.31200,12.94080V20.19840M11.29600,18.18240L13.31200,20.19840L15.32800,18.18240" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M18.68800,20.19840V12.94080M16.67200,14.95680L18.68800,12.94080L20.70400,14.95680" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="folder" viewBox="0 0 24 24"><path d="M3 7V5.5A1.5 1.5 0 0 1 4.5 4H9l2 3h8.5A1.5 1.5 0 0 1 21 8.5v10a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5V7Z"/></symbol>
+<symbol id="note" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></symbol>
+<symbol id="stack" viewBox="0 0 24 24"><rect x="7" y="3" width="13" height="15" rx="2"/><path d="M4 7v12a2 2 0 0 0 2 2h10M11 7h5M11 11h5"/></symbol>
+<symbol id="search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+<symbol id="chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+<symbol id="arrow" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+<symbol id="lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
+<symbol id="theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17Z" fill="currentColor" stroke="none"/></symbol>
+<symbol id="close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 12-12"/></symbol>
+<symbol id="pc" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+</defs></svg>
+<div class="shell">
+<header class="topbar">
+ <div class="brand"><span class="brandmark"><svg aria-hidden="true"><use href="#mark"/></svg></span><div><div class="brand-name">Skyfold</div><div class="brand-sub">@@brand_sub@@</div></div></div>
+ <div class="top-actions"><div class="export-info"><strong>@@saved@@</strong>@@updated@@</div><button type="button" class="icon-button" id="theme-toggle" title="@@theme@@" aria-label="@@theme@@"><svg class="icon" aria-hidden="true"><use href="#theme"/></svg></button></div>
+</header>
+<div class="workspace">
+ <aside class="sidebar" id="sidebar" aria-label="@@folders@@"><nav class="nav-card" aria-label="@@folders@@"><div class="eyebrow nav-label">@@library@@</div><div id="folder-nav"></div></nav><div class="sidebar-note"><svg class="icon" aria-hidden="true"><use href="#pc"/></svg><p>@@side_note@@</p></div></aside>
+ <main class="main" id="main" tabindex="-1">
+ <div class="intro"><div class="intro-text"><h1>@@title@@</h1><p>@@intro@@</p></div><div class="collection-icon"><svg class="icon" aria-hidden="true"><use href="#stack"/></svg></div><button id="mobile-folders" class="mobile-folders" type="button" aria-expanded="false" aria-controls="sidebar"><svg class="icon" aria-hidden="true"><use href="#folder"/></svg>@@folders@@</button></div>
+ <form role="search" id="search-form"><div class="searchbar"><svg class="icon" aria-hidden="true"><use href="#search"/></svg><label class="sr" for="q">@@search@@</label><input type="search" id="q" placeholder="@@search@@" autocomplete="off"><span class="key" aria-hidden="true">Ctrl K</span><button class="search-clear" id="clear" type="button" title="@@clear@@" aria-label="@@clear@@" hidden><svg class="icon" aria-hidden="true"><use href="#close"/></svg></button></div></form>
+ <div class="collection-bar"><div class="collection-title"><h2 id="selection-title">@@all@@</h2><span class="count" id="count"></span></div><button class="text-button" id="collapse-all" type="button"></button></div>
+ <div id="result-status" class="sr" role="status" aria-live="polite" aria-atomic="true"></div>
+ <div class="groups" id="list"></div>
+ <footer class="footer"><p><span id="totals"></span><span class="mobile-update"> · @@updated@@</span></p><p>@@footer@@</p></footer>
+ </main>
+</div>
+</div>
+<noscript><p style="padding:24px">@@noscript@@</p></noscript>
 <script>
-const notes={data};
-const T={{collapse:{collapse_all},expand:{expand_all}}};
-const list=document.getElementById('list'),q=document.getElementById('q'),all=document.getElementById('all');
-const KEY='skyfold-collapsed';let shut=new Set();
-try{{shut=new Set(JSON.parse(localStorage.getItem(KEY)||'[]'))}}catch(e){{}}
-function save(){{try{{localStorage.setItem(KEY,JSON.stringify([...shut]))}}catch(e){{}}}}
-const folders=[...new Set(notes.flatMap(n=>{{const p=(n.f||'Notes').split('/');return p.map((_,i)=>p.slice(0,i+1).join('/'))}}))];
-function fmt(s){{return s||''}}  // already in Windows' regional format
-function esc(s){{return s.replace(/[&<>"]/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}})[c])}}
-const chev='<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>';
-// Folders nest like on iPhone: "Work/Offers" is shown inside "Work".
-function tree(items){{const root={{kids:new Map(),notes:[]}};
-for(const n of items){{let node=root,path='';for(const part of (n.f||'Notes').split('/')){{path=path?path+'/'+part:part;
-if(!node.kids.has(part))node.kids.set(part,{{name:part,path,kids:new Map(),notes:[]}});node=node.kids.get(part)}}
-node.notes.push(n)}}return root}}
-function total(node){{let c=node.notes.length;for(const k of node.kids.values())c+=total(k);return c}}
-function row(n){{return n.l?'<div class="row lk"><span>🔒 '+esc(n.t)+'</span><span class="m">{locked}</span></div>'
-:'<a class="row" href="'+encodeURI(n.p).replace(/#/g,'%23')+'"><span>'+esc(n.t)+'</span><span class="m">'+esc(fmt(n.m))+'</span></a>'}}
-function render(node,s){{let html='';for(const k of node.kids.values()){{const closed=!s&&shut.has(k.path);
-html+='<section class="'+(closed?'shut':'')+'" data-f="'+esc(k.path)+'"><button class="fh" type="button">'+chev
-+'<span>'+esc(k.name)+'</span><span class="c">'+total(k)+'</span></button><div class="body">';
-if(k.notes.length)html+='<div class="card">'+k.notes.map(row).join('')+'</div>';
-if(k.kids.size)html+='<div class="sub">'+render(k,s)+'</div>';
-html+='</div></section>'}}return html}}
-function draw(){{const s=q.value.trim().toLowerCase();
-const items=notes.filter(n=>!s||n.t.toLowerCase().includes(s)||n.f.toLowerCase().includes(s));
-list.innerHTML=render(tree(items),s);all.textContent=shut.size>=folders.length?T.expand:T.collapse;all.style.display=s?'none':''}}
-list.addEventListener('click',e=>{{const b=e.target.closest('.fh');if(!b||q.value.trim())return;
-const f=b.parentElement.dataset.f;shut.has(f)?shut.delete(f):shut.add(f);save();draw()}});
-all.addEventListener('click',()=>{{shut=shut.size>=folders.length?new Set():new Set(folders);save();draw()}});
-q.addEventListener('input',draw);draw();
-</script></body></html>
+'use strict';
+const notes=@@data@@;
+const S=@@strings@@;
+const $=id=>document.getElementById(id),icon=(name,cls='')=>`<svg class="icon ${cls}" aria-hidden="true"><use href="#${name}"/></svg>`;
+for(const n of notes){n.f=n.f||'Notes';n.t=n.t||S.untitled}
+function plural(n,forms){const a=n%10,b=n%100;const f=n===1?forms[0]:(S.slavic&&a===1&&b!==11)?forms[0]:(S.slavic&&a>=2&&a<=4&&(b<12||b>14))?forms[1]:forms[2];return f.replace('{n}',n)}
+let selected='';const navClosed=new Set(),KEY='skyfold-collapsed';let shut=new Set();
+try{const v=JSON.parse(localStorage.getItem(KEY)||'[]');if(Array.isArray(v))shut=new Set(v.filter(x=>typeof x==='string'))}catch(e){}
+const folders=[...new Set(notes.map(n=>n.f))];
+function persist(){try{localStorage.setItem(KEY,JSON.stringify([...shut]))}catch(e){}}
+function text(tag,value,cls){const el=document.createElement(tag);el.textContent=value;if(cls)el.className=cls;return el}
+function inFolder(n,path){return !path||n.f===path||n.f.startsWith(path+'/')}
+function navButton(label,path,kind){const b=document.createElement('button');b.type='button';b.className='nav-item';b.dataset.folder=path;b.innerHTML=icon(kind||'folder');b.append(text('span',label));b.append(text('span',String(notes.filter(n=>inFolder(n,path)).length),'num'));if(selected===path)b.setAttribute('aria-current','page');b.addEventListener('click',()=>selectFolder(path));return b}
+function drawNav(){
+ const nav=$('folder-nav');nav.replaceChildren(navButton(S.all,'','stack'));nav.append(text('div','','nav-divider'));
+ const root=new Map();for(const folder of folders){let kids=root,path='';for(const part of folder.split('/')){path=path?path+'/'+part:part;if(!kids.has(part))kids.set(part,{name:part,path,kids:new Map()});kids=kids.get(part).kids}}
+ let index=0;function branch(nodes,box){for(const node of nodes.values()){
+  if(!node.kids.size){box.append(navButton(node.name,node.path));continue}
+  const parent=text('div','','nav-parent');parent.append(navButton(node.name,node.path));const toggle=text('button','','disclosure'),id='nav-children-'+index++,open=!navClosed.has(node.path);
+  toggle.type='button';toggle.dataset.branch=node.path;toggle.innerHTML=icon('chevron');toggle.setAttribute('aria-label',node.name);toggle.setAttribute('aria-expanded',String(open));toggle.setAttribute('aria-controls',id);
+  toggle.onclick=()=>{open?navClosed.add(node.path):navClosed.delete(node.path);drawNav();const b=[...nav.querySelectorAll('.disclosure')].find(x=>x.dataset.branch===node.path);if(b)b.focus()};
+  parent.append(toggle);box.append(parent);const sub=text('div','','subnav');sub.id=id;sub.hidden=!open;branch(node.kids,sub);box.append(sub)}}
+ branch(root,nav)}
+function selectFolder(path){selected=path;drawNav();draw();if(matchMedia('(max-width:700px)').matches){$('sidebar').classList.remove('mobile-open');$('mobile-folders').setAttribute('aria-expanded','false');$('mobile-folders').focus()}else{const b=[...document.querySelectorAll('[data-folder]')].find(el=>el.dataset.folder===path);if(b)b.focus()}}
+// Only relative paths inside the Notes folder, each part encoded (a "#" or "?" in a title stays part of the name).
+function safePath(p){if(typeof p!=='string'||!p||/^[\\/]|^[a-z][a-z0-9+.-]*:/i.test(p)||p.split(/[\\/]/).includes('..'))return null;return p.split('/').map(encodeURIComponent).join('/')}
+function noteRow(n){const href=n.l?null:safePath(n.p),row=document.createElement(href?'a':'div');row.className='note-row'+(n.l?' locked':'');row.innerHTML=`<span class="note-glyph">${icon(n.l?'lock':'note')}</span>`;
+ const copy=text('span','','note-copy');copy.append(text('span',n.t,'note-title'));copy.append(text('span',n.l?S.locked:(n.m||''),'note-date'));row.append(copy);
+ if(href){row.href=href;row.insertAdjacentHTML('beforeend',icon('arrow','note-arrow'))}return row}
+function isShut(path){return [...shut].some(f=>f===path||path.startsWith(f+'/'))}
+function setClosed(path,closed){if(closed)shut.add(path);else{for(const f of [...shut])if(f===path||path.startsWith(f+'/'))shut.delete(f)}persist()}
+function folderCard(path,items,index){const card=text('section','','folder-card'),id='folder-body-'+index;card.setAttribute('aria-label',path);const b=text('button','','folder-toggle');b.type='button';b.innerHTML=icon('folder');
+ b.append(text('span',path.split('/').pop(),'folder-title'));b.append(text('span',String(items.length),'folder-count'));b.insertAdjacentHTML('beforeend',icon('chevron','chevron'));b.setAttribute('aria-controls',id);
+ const closed=!$('q').value.trim()&&isShut(path);b.setAttribute('aria-expanded',String(!closed));const ul=text('ul','','note-list');ul.id=id;ul.hidden=closed;
+ for(const n of items){const li=document.createElement('li');li.append(noteRow(n));ul.append(li)}
+ b.onclick=()=>{ul.hidden=!ul.hidden;b.setAttribute('aria-expanded',String(!ul.hidden));if(!$('q').value.trim())setClosed(path,ul.hidden);updateCollapse()};card.append(b,ul);return card}
+function updateCollapse(){const toggles=[...document.querySelectorAll('.folder-toggle')],allClosed=toggles.length&&toggles.every(b=>b.getAttribute('aria-expanded')==='false');$('collapse-all').textContent=allClosed?S.expand:S.collapse;$('collapse-all').dataset.close=allClosed?'':'1';$('collapse-all').hidden=!toggles.length||!!$('q').value.trim()}
+function draw(){
+ const query=$('q').value.trim().toLocaleLowerCase(),filtered=notes.filter(n=>inFolder(n,selected)&&(!query||n.t.toLocaleLowerCase().includes(query)||n.f.toLocaleLowerCase().includes(query)));
+ $('clear').hidden=!query;$('selection-title').textContent=selected?selected.replaceAll('/',' / '):S.all;$('count').textContent=plural(filtered.length,S.notes);$('result-status').textContent=$('count').textContent;
+ const list=$('list'),grids=new Map();list.replaceChildren();
+ for(const [i,f] of folders.entries()){
+  const items=filtered.filter(n=>n.f===f);if(!items.length)continue;const card=folderCard(f,items,i),parent=f.includes('/')?f.slice(0,f.lastIndexOf('/')):'';
+  if(parent&&f!==selected){if(!grids.has(parent)){const h=text('div','','parent-heading');h.innerHTML=icon('folder');h.append(text('span',parent.replaceAll('/',' / ')));list.append(h);const g=text('div','','parent-grid');list.append(g);grids.set(parent,g)}grids.get(parent).append(card)}
+  else list.append(card)}
+ if(!filtered.length){const empty=text('div','','empty');empty.innerHTML=icon('search');empty.append(text('h3',S.none));empty.append(text('p',S.tryOther));const reset=text('button',S.showAll,'text-button');reset.type='button';reset.onclick=()=>{$('q').value='';selected='';drawNav();draw();$('q').focus()};empty.append(reset);list.append(empty)}
+ updateCollapse()}
+$('totals').textContent=plural(notes.length,S.notes)+' · '+plural(folders.length,S.folderCount);
+$('search-form').onsubmit=e=>e.preventDefault();$('q').oninput=draw;$('clear').onclick=()=>{$('q').value='';draw();$('q').focus()};
+$('collapse-all').onclick=()=>{const close=!!$('collapse-all').dataset.close;for(const f of folders.filter(p=>notes.some(n=>n.f===p&&inFolder(n,selected))))setClosed(f,close);draw();$('collapse-all').focus()};
+$('mobile-folders').onclick=()=>{const open=$('sidebar').classList.toggle('mobile-open');$('mobile-folders').setAttribute('aria-expanded',String(open));if(open)$('folder-nav').querySelector('button').focus()};
+const scheme=matchMedia('(prefers-color-scheme:dark)'),root=document.documentElement;
+function dark(){return root.dataset.theme==='dark'||root.dataset.theme==='light'?root.dataset.theme==='dark':scheme.matches}
+function themeLabel(){const l=dark()?S.toLight:S.toDark;$('theme-toggle').title=l;$('theme-toggle').setAttribute('aria-label',l)}
+window.sfToggleTheme=function(){const next=dark()?'light':'dark';root.dataset.theme=next;try{localStorage.setItem('skyfold-theme',next)}catch(e){}themeLabel()};
+$('theme-toggle').onclick=window.sfToggleTheme;scheme.addEventListener('change',themeLabel);themeLabel();
+document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();$('q').focus()}if(e.key==='Escape'&&document.activeElement===$('q')){$('q').value='';draw()}});
+drawNav();draw();
+</script>
+</body></html>
 """
+
+
+def render_index(data: list, updated: str) -> str:
+    """The Notes.html page: the notes' data (title, folder, page, date, locked) and this UI's words."""
+    from .i18n import language
+
+    words = {
+        "title": t("Apple Notes"), "brand_sub": t("Notes on this PC"), "saved": t("Saved to this PC"),
+        "updated": updated, "theme": t("Light / dark"), "folders": t("Folders"), "library": t("Your library"),
+        "side_note": t("Your exported notes, ready to read. Changes in Apple Notes appear after the next sync."),
+        "intro": t("All your notes from iCloud, kept on this PC."), "search": t("Search notes and folders"),
+        "clear": t("Clear search"), "all": t("All notes"), "skip": t("Skip to notes"),
+        "footer": t("Edit your notes on your iPhone, iPad or Mac"),
+        "noscript": t("Turn on JavaScript to search and browse this note index."),
+    }
+    strings = {
+        "all": t("All notes"), "untitled": t("Untitled"), "locked": t("locked – open it on your iPhone"),
+        "collapse": t("Collapse all"), "expand": t("Expand all"), "none": t("No notes found"),
+        "tryOther": t("Try another title or folder name."), "showAll": t("Show all notes"),
+        "toDark": t("Switch to dark theme"), "toLight": t("Switch to light theme"),
+        "notes": [t("1 note"), t("{n} notes (2-4)"), t("{n} notes")],
+        "folderCount": [t("1 folder"), t("{n} folders (2-4)"), t("{n} folders")],
+        "slavic": language() == "bs",  # 1 / 2-4 / 5+ forms ("1 bilješka, 3 bilješke, 7 bilješki")
+    }
+    if not strings["slavic"]:
+        strings["notes"][1], strings["folderCount"][1] = strings["notes"][2], strings["folderCount"][2]
+
+    def js(v) -> str:
+        return json.dumps(v, ensure_ascii=False).replace("</", "<\\/")
+
+    page = INDEX_TEMPLATE.replace("@@theme_script@@", THEME_SCRIPT).replace("@@lang@@", language() or "en")
+    for k, v in words.items():
+        page = page.replace(f"@@{k}@@", html.escape(v, quote=True))
+    return page.replace("@@strings@@", js(strings)).replace("@@data@@", js(data))

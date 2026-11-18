@@ -229,11 +229,16 @@ def test_dates_follow_windows_region():
 
 def test_index_has_theme_switch_and_collapsible_folders(env):
     syncer = env[0] if isinstance(env, tuple) else env
-    page = ne.INDEX_TEMPLATE.format(
-        title="Apple Notes", search="s", locked="l", count="1", updated="u",
-        theme_script=ne.THEME_SCRIPT, theme_vars=ne.THEME_VARS, theme_button=ne.THEME_BUTTON.format(label="x"),
-        collapse_all='"Collapse all"', expand_all='"Expand all"', data="[]")
+    page = ne.render_index([], "u")
     assert "sfToggleTheme" in page and "skyfold-collapsed" in page and "[data-theme=dark]" in page
+    assert "@@" not in page and ne.INDEX_MARK in page[:4096]
+
+
+def test_index_words_and_data_are_escaped():
+    evil = '</script><img src=x onerror=alert(1)>'
+    page = ne.render_index([{"t": evil, "f": "A/<b>", "p": "A/x.html", "m": "1.1.2026.", "l": False}],
+                           "Updated <now>")
+    assert "</script><img" not in page and "<\\/script>" in page and "Updated &lt;now&gt;" in page
 
 
 def test_leftover_numbered_pages_are_cleaned_up(env):
@@ -281,3 +286,15 @@ def test_check_without_changes_still_updates_checked_time(env):
     s.state.set("last_sync", "2000-01-01T00:00:00+00:00")
     s.run()  # nothing changed in iCloud
     assert s.state.get("last_sync") != "2000-01-01T00:00:00+00:00"
+
+
+def test_a_new_index_look_reaches_an_existing_notes_html_once(env):
+    s, r, root, trashed = env
+    r.put("n1", "Dijana")
+    s.run()
+    index = root / ne.INDEX
+    index.write_text(index.read_text(encoding="utf-8").replace("folder-card", "old-look"), encoding="utf-8")
+    s.state.set("index_digest", ne._digest(index))
+    s.state.set("index_layout", "1")  # written by the previous version
+    s.run()  # nothing changed in Notes
+    assert "folder-card" in index.read_text(encoding="utf-8") and s.state.get("index_layout") == ne.INDEX_LAYOUT
