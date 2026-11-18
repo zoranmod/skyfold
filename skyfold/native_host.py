@@ -20,7 +20,7 @@ HOST = "com.skyfold.bookmarks"
 FIREFOX_ID = "safari-bookmarks@skyfold"
 CHROME_ID = "jnjmklnljkebbfbhkcjjjfcmmppfpdel"  # from the public key in extension/manifest.chrome.json
 # ids the stores gave the extension (Edge Add-ons, Chrome Web Store): added once known
-STORE_IDS: tuple[str, ...] = ()
+STORE_IDS: tuple[str, ...] = ("ggcdepiimncfgfelhikkbjpdfikmfhdj",)  # Edge Add-ons (Store ID 0RDCK9PBJ2DZ)
 CHROMIUM_IDS = (CHROME_ID, *STORE_IDS)
 MAX_MESSAGE = 1024 * 1024  # browsers accept at most 1 MB from a host
 BROWSERS = {  # registry places where each browser looks for hosts (current user)

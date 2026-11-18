@@ -52,6 +52,7 @@ def test_without_saved_bookmarks_it_says_so(cache):
 
 def test_only_our_extensions_count_as_a_browser_call():
     assert nh.is_native_call(["Skyfold.exe", f"chrome-extension://{nh.CHROME_ID}/", "--parent-window=0"])
+    assert nh.is_native_call(["Skyfold.exe", "chrome-extension://ggcdepiimncfgfelhikkbjpdfikmfhdj/"])
     assert nh.is_native_call(["Skyfold.exe", r"C:\x\com.skyfold.bookmarks.firefox.json", nh.FIREFOX_ID])
     assert not nh.is_native_call(["Skyfold.exe", "chrome-extension://someoneelse/"])
     assert not nh.is_native_call(["Skyfold.exe", "--tray"])
@@ -108,7 +109,8 @@ def test_registration_is_for_our_extensions_only_and_undone(tmp_path, monkeypatc
     firefox = json.loads((tmp_path / "native-host" / f"{nh.HOST}.firefox.json").read_text())
     chrome = json.loads((tmp_path / "native-host" / f"{nh.HOST}.chrome.json").read_text())
     assert firefox["allowed_extensions"] == [nh.FIREFOX_ID] and firefox["path"].endswith("Skyfold.exe")
-    assert chrome["allowed_origins"] == [f"chrome-extension://{nh.CHROME_ID}/"]
+    assert chrome["allowed_origins"] == [f"chrome-extension://{i}/" for i in nh.CHROMIUM_IDS]
+    assert "chrome-extension://ggcdepiimncfgfelhikkbjpdfikmfhdj/" in chrome["allowed_origins"]  # Edge Add-ons
     assert len([k for k in reg.keys if k.endswith(nh.HOST)]) == 3
     assert not nh.register(True, exe=r"C:\Apps\Skyfold\Skyfold.exe", winreg=reg)  # already so: nothing done
     assert nh.register(False, winreg=reg)
