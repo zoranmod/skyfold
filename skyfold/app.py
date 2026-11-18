@@ -612,6 +612,7 @@ class Controller(QObject):
             self.settings = new
             self.settings.save()
             self.req.applySettings.emit(self.settings.copy(), dlg.reset_state, dlg.reset_drive)
+            self._browser_link()
             if dlg.drive_trash:
                 self.req.trashDrivePaths.emit(list(dlg.drive_trash))
             if theme_changed:
@@ -720,7 +721,20 @@ class Controller(QObject):
         dlg.accepted.connect(chosen)
         self._show_dialog("setup", dlg)
 
+    def _browser_link(self) -> None:
+        """The Safari Bookmarks browser extension finds Skyfold while Safari bookmarks are on (installed app
+        only; also before signing in, so the extension can say what is missing)."""
+        if not getattr(sys, "frozen", False):
+            return
+        from . import native_host
+
+        try:
+            native_host.register(bool(self.settings.bookmarks_enabled))
+        except OSError as exc:
+            log.info("Browser extension link couldn't be updated: %s", exc)
+
     def start(self, show: bool) -> None:
+        self._browser_link()
         if self.settings.start_with_windows:
             try:  # the app may have been moved or renamed: point Windows at the current exe
                 set_start_with_windows(True)

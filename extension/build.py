@@ -15,13 +15,15 @@ FILES = ["background.js", "popup.html", "popup.js", "icons/16.png", "icons/32.pn
          "icons/128.png"]
 
 
-def build(browser: str, manifest: str) -> Path:
+def build(browser: str, manifest: str, drop: tuple = ()) -> Path:
     folder = OUT / browser
     shutil.rmtree(folder, ignore_errors=True)
     (folder / "icons").mkdir(parents=True)
     for f in FILES:
         shutil.copy2(HERE / f, folder / f)
     data = json.loads((HERE / manifest).read_text(encoding="utf-8"))
+    for k in drop:  # e.g. the store gives the extension its own id: no development key
+        data.pop(k, None)
     (folder / "manifest.json").write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     archive = OUT / f"skyfold-safari-bookmarks-{browser}-{data['version']}.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
@@ -32,6 +34,7 @@ def build(browser: str, manifest: str) -> Path:
 
 
 if __name__ == "__main__":
-    for b, m in (("firefox", "manifest.firefox.json"), ("chrome", "manifest.chrome.json")):
-        print(build(b, m))
+    print(build("firefox", "manifest.firefox.json"))
+    print(build("chrome", "manifest.chrome.json"))  # to load unpacked (stable id from its key)
+    print(build("store", "manifest.chrome.json", drop=("key",)))  # Edge Add-ons / Chrome Web Store upload
     sys.exit(0)

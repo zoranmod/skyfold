@@ -118,7 +118,6 @@ class SyncWorker(QObject):
         self.drive: DriveSyncer | None = None
         self.notes: NotesSyncer | None = None
         self._bookmarks_last = 0.0  # when the Safari bookmarks file was last made (monotonic)
-        self._host_registered: bool | None = None  # browser extension link, as last set
         self.notes_state: NotesState | None = None
         self.busy = False
         self._again: tuple[bool, bool] | None = None  # (full photos check, force drive)
@@ -650,7 +649,6 @@ class SyncWorker(QObject):
             return
         if self._halt():
             return
-        self._native_host(bool(self.settings.bookmarks_enabled))
         if self.settings.bookmarks_enabled and self.api is not None and (
                 full or time.monotonic() - self._bookmarks_last >= BOOKMARKS_INTERVAL or not self._bookmarks_last):
             if not self._run_bookmarks(problems):
@@ -756,19 +754,6 @@ class SyncWorker(QObject):
             self._storage_at = time.monotonic()
         except Exception as exc:  # noqa: BLE001 - purely informational
             log.info("Storage info unavailable: %s", describe(exc))
-
-    def _native_host(self, enabled: bool) -> None:
-        """Let the browsers find Skyfold for the Safari Bookmarks extension (only the installed app,
-        only while Safari bookmarks are on; checked once per change)."""
-        if not getattr(sys, "frozen", False) or self._host_registered is enabled:
-            return
-        from . import native_host
-
-        try:
-            native_host.register(enabled)
-            self._host_registered = enabled
-        except OSError as exc:
-            log.info("Browser extension link couldn't be %s: %s", "set up" if enabled else "removed", exc)
 
     def _run_bookmarks(self, problems: list[str]) -> bool:
         """Safari bookmarks → "Safari Bookmarks.html" (read-only in iCloud)."""

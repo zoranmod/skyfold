@@ -1,0 +1,65 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 1280px; height: 800px; overflow: hidden; background: linear-gradient(135deg,#eaf1fd,#f7f9fc);
+         font: 15px/1.4 "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif; color: #20252b; }
+  .head { position: absolute; left: 56px; top: 56px; width: 390px; }
+  .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 26px; }
+  .brand img { width: 56px; height: 56px; }
+  .brand b { font-size: 22px; }
+  h1 { font-size: 36px; line-height: 1.15; margin: 0 0 18px; letter-spacing: -.5px; }
+  p { font-size: 18px; color: #4a5562; margin: 0 0 14px; }
+  .pill { display: inline-block; background: #fff; border-radius: 99px; padding: 7px 14px; margin: 6px 8px 0 0;
+          font-size: 14px; color: #075bcd; box-shadow: 0 1px 2px #0001; }
+  .win { position: absolute; right: 40px; top: 70px; width: 760px; height: 660px; background: #202124; border-radius: 12px;
+         box-shadow: 0 30px 80px #0003; overflow: hidden; color: #e8eaed; }
+  .bar { height: 44px; background: #2b2c2f; display: flex; align-items: center; gap: 8px; padding: 0 14px; font-size: 13px; }
+  .bar .fav { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 6px; }
+  .bar .fav.on { background: #3c3d41; }
+  .menu { position: absolute; background: #2b2c2f; border-radius: 8px; padding: 6px; box-shadow: 0 12px 30px #0006; width: 220px; }
+  .item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; font-size: 14px; }
+  .item.on { background: #3c3d41; }
+  .item .arrow { margin-left: auto; opacity: .7; }
+  .ico { width: 16px; height: 16px; border-radius: 3px; flex: none; }
+  .folder { width: 16px; height: 13px; border: 1.6px solid #c5c8cc; border-radius: 2px; flex: none; }
+  .popup { position: absolute; right: 24px; bottom: 26px; width: 300px; background: #191e25; border-radius: 10px;
+           padding: 16px; box-shadow: 0 12px 30px #0008; }
+  .popup h3 { margin: 0; font-size: 16px; } .popup .sub { color: #b0bac7; font-size: 12px; margin: 2px 0 12px; }
+  .popup .box { background: #222932; border-radius: 9px; padding: 10px 12px; font-size: 13px; margin-bottom: 12px; }
+  .popup button { width: 100%; padding: 9px; border: 0; border-radius: 8px; background: #99c2ff; color: #10223b; font-weight: 600; font: inherit; }
+</style></head>
+<body>
+<div class="head">
+  <div class="brand"><img src="../../extension/icons/128.png" alt=""><b>Skyfold</b></div>
+  <h1>Your Safari bookmarks, in Edge.</h1>
+  <p>The bookmarks from your iPhone, iPad and Mac appear in a “Safari Bookmarks” folder, with the same folders and order as in Safari.</p>
+  <p>They stay up to date by themselves. No importing, no duplicates.</p>
+  <span class="pill">Read-only</span><span class="pill">Works with the free Skyfold app</span><span class="pill">Open source</span>
+</div>
+<div class="win">
+  <div class="bar"><span class="fav">Travel</span><span class="fav">Recipes</span><span style="margin-left:auto" class="fav on"><span class="folder"></span>Other favorites</span></div>
+  <div class="menu" style="right:12px; top:50px;">
+    <div class="item on"><span class="folder"></span>Safari Bookmarks<span class="arrow">›</span></div>
+    <div class="item"><span class="folder"></span>Work<span class="arrow">›</span></div>
+  </div>
+  <div class="menu" style="right:240px; top:50px;">
+    <div class="item on"><span class="folder"></span>Favorites<span class="arrow">›</span></div>
+    <div class="item"><span class="folder"></span>Bookmarks Menu<span class="arrow">›</span></div>
+    <div class="item"><span class="ico" style="background:#3b82f6"></span>Weather</div>
+  </div>
+  <div class="menu" style="right:468px; top:50px;">
+    <div class="item"><span class="ico" style="background:#ef4444"></span>News</div>
+    <div class="item"><span class="ico" style="background:#10b981"></span>Maps</div>
+    <div class="item"><span class="ico" style="background:#f59e0b"></span>Photos</div>
+    <div class="item"><span class="folder"></span>Holidays<span class="arrow">›</span></div>
+    <div class="item"><span class="folder"></span>Cooking<span class="arrow">›</span></div>
+    <div class="item"><span class="ico" style="background:#8b5cf6"></span>Music</div>
+  </div>
+  <div class="popup">
+    <h3>Safari Bookmarks</h3><div class="sub">From iCloud, through the Skyfold app</div>
+    <div class="box">48 bookmarks<br>Read from iCloud: today, 09:30<br>Checked: today, 09:41</div>
+    <button>Update now</button>
+  </div>
+</div>
+</body></html>

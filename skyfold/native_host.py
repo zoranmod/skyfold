@@ -19,6 +19,9 @@ from pathlib import Path
 HOST = "com.skyfold.bookmarks"
 FIREFOX_ID = "safari-bookmarks@skyfold"
 CHROME_ID = "jnjmklnljkebbfbhkcjjjfcmmppfpdel"  # from the public key in extension/manifest.chrome.json
+# ids the stores gave the extension (Edge Add-ons, Chrome Web Store): added once known
+STORE_IDS: tuple[str, ...] = ()
+CHROMIUM_IDS = (CHROME_ID, *STORE_IDS)
 MAX_MESSAGE = 1024 * 1024  # browsers accept at most 1 MB from a host
 BROWSERS = {  # registry places where each browser looks for hosts (current user)
     "firefox": r"Software\Mozilla\NativeMessagingHosts",
@@ -31,7 +34,7 @@ def is_native_call(argv: list[str]) -> bool:
     """Started by a browser for the extension? (Chrome/Edge pass the extension's origin; Firefox the
     host manifest's path and the extension id.)"""
     args = argv[1:]
-    if any(a.startswith(f"chrome-extension://{CHROME_ID}/") for a in args):
+    if any(a.startswith(f"chrome-extension://{i}/") for i in CHROMIUM_IDS for a in args):
         return True
     return len(args) >= 2 and args[0].lower().endswith(".json") and args[1] == FIREFOX_ID
 
@@ -110,7 +113,7 @@ def _manifest(path: str, browser: str) -> dict:
     if browser == "firefox":
         m["allowed_extensions"] = [FIREFOX_ID]
     else:
-        m["allowed_origins"] = [f"chrome-extension://{CHROME_ID}/"]
+        m["allowed_origins"] = [f"chrome-extension://{i}/" for i in CHROMIUM_IDS]
     return m
 
 
