@@ -11,7 +11,7 @@ import pytest
 
 from skyfold import provenance as pv, updater as up
 
-BUNDLE = json.loads((Path(__file__).parent / "data" / "attestation_gh_cli_2.105.0.json").read_text())
+BUNDLE = json.loads((Path(__file__).parent / "fixtures" / "attestation_gh_cli_2.105.0.json").read_text())
 DIGEST = "8813a72c899900afaa10e3fec8fbc64b908c89dbfe837e95ed2fa500fc140627"
 WF = "https://github.com/cli/cli/.github/workflows/deployment.yml@refs/heads/trunk"
 REPO, REF = "https://github.com/cli/cli", "refs/heads/trunk"
