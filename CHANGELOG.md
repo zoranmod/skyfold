@@ -4,6 +4,8 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [1.0.15] - 2026-11-19
+
 ### Added
 - Photos: new setting "Upload photos and videos I add to this folder to iCloud Photos" (off by default). Photos and videos you put into the photos folder go up to iCloud Photos. A file is sent only when it has been unchanged for two minutes, is held open read-only while it is sent, and nothing is sent while a photo is missing from the folder (it could be a moved or renamed one). Album folders, hidden and system files, cloud placeholders and Skyfold's own files are never sent. An uploaded file becomes a synced one (deleting it later deletes it in iCloud too) only after Skyfold has seen it in iCloud and compared it byte for byte; a photo iCloud already had stays an ordinary file on this PC. A Live Photo copied from an iPhone (IMG_1234.HEIC + IMG_1234.MOV) sends its photo; the video part stays on this PC instead of becoming a separate video. A refused upload is tried again an hour later and shown in the panel once; one whose answer got lost is not sent twice.
 
