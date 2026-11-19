@@ -451,6 +451,7 @@ class SyncWorker(QObject):
             except OSError as exc:
                 log.warning("Couldn't remove the Drive cache: %s", exc)
             self.state.set("drive_last_sync", None)
+            self.state.set("drive_first_count", None)  # a new Drive folder counts its own first sync
             if self.drive is not None:
                 self.drive.cache = {}
             self._drive_pending = None

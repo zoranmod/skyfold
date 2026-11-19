@@ -593,6 +593,8 @@ BS: dict[str, str] = {
     "Already in iCloud Photos: {name}": "Već je u iCloud slikama: {name}",
     "Uploaded to iCloud Photos: {name}": "Poslano u iCloud slike: {name}",
     "Photos upload": "Slanje slika u iCloud",
+    "The photos folder now belongs to another Skyfold library (e.g. another disk with the same drive letter). Syncing has stopped so nothing gets deleted by mistake; choose the folder again in Settings.":
+        "Folder za slike sada pripada drugoj Skyfold biblioteci (npr. drugi disk s istim slovom). Sinhronizacija je zaustavljena da se ništa ne obriše greškom; ponovo izaberi folder u Postavkama.",
     "Photos aren't uploaded from this folder: it holds another Apple ID's photos. Choose a new, empty photos folder to upload.":
         "Slike iz ovog foldera se ne šalju: u njemu su slike drugog Apple ID-a. Za slanje izaberi novi, prazan folder za slike.",
     "GitHub is limiting update checks from your internet connection right now; try again in {n} min.":

@@ -6,7 +6,7 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ### Changed
 - **Photos upload is now one-way.** A photo or video sent from the photos folder stays an ordinary file on this PC: deleting or renaming it on the PC doesn't touch it in iCloud, deleting it on the iPhone doesn't touch the PC file, and it isn't downloaded back as a second copy. (In 1.0.15 a sent file became a synced photo; three code reviews kept finding rare cases where that link could delete the wrong file, so it is gone.) Photos already sent with 1.0.15 and matched stay synced as before; ones still waiting for iCloud become one-way.
-- The photos folder now records which Apple ID it was set up for (hidden `.skyfold-account` file). In a folder of another Apple ID nothing is uploaded, and that account's files are never taken over or followed as moved photos, also after choosing the folder again in Settings.
+- The photos folder now records which Apple ID it was set up for (hidden `.skyfold-account` file). In a folder of another Apple ID (also a folder inside it, or one that contains it) nothing is uploaded, and that account's files are never taken over, followed as moved photos or put in the Recycle Bin, also after choosing the folder again in Settings. Photos downloaded while using another account's folder are never sent by that folder's owner later. If a different Skyfold library appears at the photos folder's path (e.g. another disk with the same drive letter), syncing stops instead of deleting anything.
 
 ### Fixed
 - Photos upload:

@@ -191,5 +191,7 @@ class State:
     def reset(self) -> None:
         """Forget everything (used when switching account or folder)."""
         with self._lock:
+            # (what the upload knows about files on this PC stays: it is about those files, not the folder)
             self._db.executescript("DELETE FROM files; DELETE FROM excluded; DELETE FROM album_links; "
-                                   "DELETE FROM meta WHERE key NOT LIKE 'drive_%';")
+                                   "DELETE FROM meta WHERE key NOT LIKE 'drive_%' AND key NOT LIKE 'upload_file:%' "
+                                   "AND key NOT LIKE 'upload_legacy:%';")
