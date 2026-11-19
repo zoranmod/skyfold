@@ -373,6 +373,7 @@ class Syncer:
         self._upload_idle = {}
         self._new_marker = False
         self._held_set: set | None = None
+        self._id_index: dict | None = None
         # Paths the engine itself touched recently, so the folder watcher can ignore them.
         self.own_paths: dict[str, float] = {}
 
@@ -420,6 +421,7 @@ class Syncer:
             if has_files:
                 raise SyncError(t("Photos folder is not available: {path}", path=root))
             root.mkdir(parents=True, exist_ok=True)
+        self._refuse_foreign_root()  # (before anything is written there)
         marker = root / MARKER
         # A folder set up by an earlier version of the app has one of the old marker names. Nothing
         # proves who wrote such a file, so it is never renamed or changed: when this database tracks
@@ -433,11 +435,13 @@ class Syncer:
                     "Syncing has stopped so nothing gets deleted by mistake."
                 ))
             create_marker(marker, t("This folder is synced by Skyfold. Don't delete this file.\n"))
-            self._new_marker = True
+            # (a folder of an older version with one of its marker names isn't a new one)
+            self._new_marker = not any(_regular_file(root / old) for old in LEGACY_MARKERS)
 
     # local changes --------------------------------------------------------
     def scan_local(self) -> tuple[list[str], int]:
         """Return (asset ids whose main file was deleted on the PC, number of files relocated)."""
+        followed = self._reconcile_ids()
         rows = self.state.files()
         # Only files that are really missing count; one that can't be looked at now decides nothing.
         missing = []
@@ -458,7 +462,7 @@ class Syncer:
                 self.state.set(f"fid:{row.asset_id}#{row.resource_key}", f"{st.st_dev}:{st.st_ino}")
         if not missing:
             self._told_unsure = None  # nothing held: a later hold is told again
-            return [], 0
+            return [], followed
 
         # The user may have moved files around inside the folder: follow them by name + size.
         tracked = {r.rel_path.lower() for r in rows}
@@ -563,6 +567,9 @@ class Syncer:
             new_rel = confirmed.get(where)
             if new_rel:
                 self.state.move_file(r.asset_id, r.resource_key, new_rel)
+                self._note_file_id(r.asset_id, r.resource_key, new_rel)  # (moved by copying: its new file)
+                if where not in by_ident:  # followed by contents only: may be someone's copy, never recycled
+                    self.state.set(f"fidsoft:{r.asset_id}#{r.resource_key}", "1")
                 moved += 1
                 continue
             if unsure or PurePosixPath(r.rel_path).name.lower() in unsure_names:
@@ -601,7 +608,7 @@ class Syncer:
             # Only the Live Photo video was removed: forget it and don't bring it back.
             self.state.remove_file(r.asset_id, r.resource_key)
             self.state.exclude(f"{r.asset_id}#{r.resource_key}", "video deleted on PC")
-        return sorted(set(deleted_assets)), moved
+        return sorted(set(deleted_assets)), moved + followed
 
     UPLOAD_EXT = {".heic", ".heif", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff", ".webp", ".dng",
                   ".mov", ".mp4", ".m4v"}
@@ -673,6 +680,56 @@ class Syncer:
             return ("?", "")
         return None
 
+    def _refuse_foreign_root(self) -> None:
+        """Another Apple ID's photos folder, or a folder inside one: stop before anything is written."""
+        if not self.settings.apple_id:
+            return
+        me = self._owner_fp()
+        for folder in self.root.parents:
+            owner = self._owner_of(folder)
+            if owner is not None and owner[0] != me:
+                raise SyncError(t("The photos folder is inside another Skyfold photos folder ({path}). Choose "
+                                  "a folder outside it in Settings.", path=folder))
+        try:
+            parts = (self.root / OWNER_FILE).read_text(encoding="utf-8").split()
+        except OSError:
+            return
+        if not parts or parts[0] != me:
+            raise SyncError(t("This photos folder belongs to another Apple ID. Choose another folder in Settings."))
+
+    def _reconcile_ids(self) -> int:
+        """A tracked name that now holds another file than the one Skyfold wrote there (by file id):
+        if that photo's file is elsewhere in the folder, the photo moved there (names swapped, or a new
+        file took the old name); if it is nowhere, the file was replaced in place (an editor's save) and
+        the new one is that photo. Returns how many photos were followed."""
+        rows = self.state.files()
+        fids = {k.removeprefix("fid:"): v for k, v in self.state.items("fid:")}
+        owners = {v: k for k, v in fids.items()}
+        moves, replaced = [], []
+        for r in rows:
+            fid = fids.get(f"{r.asset_id}#{r.resource_key}")
+            if not fid:
+                continue
+            try:
+                st = os.lstat(self._abs(r.rel_path))
+            except OSError:
+                continue
+            here = f"{st.st_dev}:{st.st_ino}"
+            if not st.st_ino or here == fid:
+                continue
+            dev, _, ino = fid.partition(":")
+            where = self._find_by_id([int(dev), int(ino)]) if ino.isdigit() and dev.lstrip("-").isdigit() else None
+            if where and where.lower() != r.rel_path.lower():
+                moves.append((r, where))
+            elif where is None and here not in owners:
+                replaced.append((r, here))  # (a file that is another tracked photo's isn't this one's)
+        for r, where in moves:
+            self.state.move_file(r.asset_id, r.resource_key, where)
+        for r, here in replaced:
+            self.state.set(f"fid:{r.asset_id}#{r.resource_key}", here)
+            self.state.set(f"fidsoft:{r.asset_id}#{r.resource_key}", "1")  # (replaced: kept, never recycled)
+        return len(moves)
+
     def _check_owner(self) -> None:
         """A photos folder belongs to one Apple ID (recorded in .skyfold-account with an id of this
         library). Another Apple ID's folder, a folder inside another photos folder, or another library
@@ -736,13 +793,17 @@ class Syncer:
             self._held_set = {tuple(x) for x in json.loads(self.state.get("upload_legacy:held") or "[]")}
         return self._held_set
 
-    def _protected(self, p: Path, rel: str, fid: str | None = None) -> bool:
+    def _protected(self, p: Path, rel: str, key: str | None = None) -> bool:
         """Right before a file is recycled for a photo deleted in iCloud: is it still the file Skyfold
-        downloaded (same file id), and not one the upload dealt with?"""
+        downloaded (same file id), and not one the upload dealt with? A photo followed only by its
+        contents (moved by copying, or replaced in place) may be someone's own copy: never recycled."""
         try:
             st = os.lstat(p)
         except OSError:
             return False
+        if key and self.state.get("fidsoft:" + key):
+            return True
+        fid = self.state.get("fid:" + key) if key else None
         if fid and st.st_ino and fid != f"{st.st_dev}:{st.st_ino}":
             return True  # another file was put at this name: not Skyfold's to recycle
         return bool(self._marked(st, rel))
@@ -1161,8 +1222,7 @@ class Syncer:
                     for r in rows_by_asset[a]:
                         p = self._abs(r.rel_path)
                         if (r.resource_key != "original" and not known_missing(p) and not self._changed_on_pc(r)
-                                and not self._protected(p, r.rel_path,
-                                                        self.state.get(f"fid:{r.asset_id}#{r.resource_key}"))):
+                                and not self._protected(p, r.rel_path, f"{r.asset_id}#{r.resource_key}")):
                             try:
                                 self._trash_inside(p)
                             except OSError:
@@ -1191,8 +1251,7 @@ class Syncer:
                     self.cb.progress(i, len(to_pc), t("Moving deleted photos to the Recycle Bin…"))
                     ok = True
                     rows_now = rows_by_asset[a]
-                    if any(self._changed_on_pc(r) or self._protected(
-                            self._abs(r.rel_path), r.rel_path, self.state.get(f"fid:{r.asset_id}#{r.resource_key}"))
+                    if any(self._changed_on_pc(r) or self._protected(self._abs(r.rel_path), r.rel_path, f"{r.asset_id}#{r.resource_key}")
                            for r in rows_now):
                         # edited on this PC (another size than the photo Skyfold downloaded): kept
                         self._keep_on_pc(a, rows_now)
@@ -1569,6 +1628,12 @@ class Syncer:
     def _make_album_dir(self, folder: Path) -> None:
         """Create an album folder, writing down every level Skyfold itself had to make: only those
         are ever removed again when they end up empty."""
+        for level in [folder, *folder.parents]:
+            if level == self.root or not inside_root(self.root, level):
+                break
+            if level.exists() and self._nested_library(level):
+                raise SyncError(t("{path} is another photos folder inside this one; move it out of "
+                                  "the photos folder", path=level))
         missing = []
         p = folder
         while p != self.root and not p.exists():
@@ -1630,8 +1695,8 @@ class Syncer:
                     same = res.size is not None and st.st_size == res.size                         and abs(st.st_mtime - a.date.timestamp()) < 2.5
                 except OSError:
                     same = False
-                if same and self._marked(st, cand):
-                    same = False  # one kept here or sent from here: not this photo
+                if same and (self._marked(st, cand) or (st.st_ino and (st.st_dev, st.st_ino) in self._held_ids())):
+                    same = False  # one kept here or sent from here, or of an older folder: not this photo
                 if same:  # looks like this very photo (e.g. the database was rebuilt): compare after download
                     self._verify.add(cand)
                     return cand
@@ -1663,8 +1728,7 @@ class Syncer:
     def _forget_local_only(self, asset_id: str, rows: list[FileRow]) -> None:
         for r in rows:
             p = self._abs(r.rel_path)
-            if not known_missing(p) and not self._changed_on_pc(r) and not self._protected(
-                    p, r.rel_path, self.state.get(f"fid:{r.asset_id}#{r.resource_key}")):
+            if not known_missing(p) and not self._changed_on_pc(r) and not self._protected(p, r.rel_path, f"{r.asset_id}#{r.resource_key}"):
                 try:
                     self._trash_inside(p)
                 except OSError:
