@@ -16,6 +16,8 @@ from tests.test_notes_quality_codex import (
     OfflineCloudKit, asset, env, field, note_record, png, previews, qt_app, rec, token,
 )
 from tests.test_drive import env as drive_env, write
+from tests.test_engine import env as photos_env
+from tests.test_notes import env as notes_env
 
 
 def package():
@@ -374,3 +376,302 @@ def test_automatic_update_timer_is_only_armed_for_packaged_app(monkeypatch, qt_a
         assert ctl.thread.wait(3000)
         ctl.tray.hide()
         ctl.flyout.close()
+
+
+# Additional regressions for v1.0.14..e3eb54a. An old mtime represents a settled file.
+def test_r37_switching_apple_id_does_not_upload_old_accounts_library(photos_env, qt_app, monkeypatch):
+    from skyfold import app, auth, worker
+    from tests.test_engine import FakeRemote
+
+    original, first, root, _ = photos_env
+    settings = original.settings
+    settings.apple_id = "first@example.invalid"
+    settings.photos_upload = settings.photos_dir_confirmed = True
+    first.add("PRIVATE", "private.jpg", b"first account only")
+    second = FakeRemote()
+    w = worker.SyncWorker(settings)
+    w.state = original.state
+    # Substitute only the service boundaries, persistence, timers and window presentation.
+    monkeypatch.setattr(worker, "ICloudRemote", lambda api: api)
+    monkeypatch.setattr(auth, "_CURRENT", None)
+    monkeypatch.setattr(auth, "commit_login", lambda api: None)
+    monkeypatch.setattr(type(settings), "save", lambda self: None)
+    monkeypatch.setattr(w, "_ensure_watchers", lambda: None)
+    monkeypatch.setattr(w, "_refresh_storage", lambda **kw: None)
+    monkeypatch.setattr(w, "_apply_timers", lambda: None)
+    told = []
+    monkeypatch.setattr(app, "inform", lambda *a, **k: told.append(a[2]))  # (a modal box would wait for a click)
+    w.set_api(first)
+    assert (root / w.state.files()[0].rel_path).read_bytes() == b"first account only"
+    w.sign_out()
+    dialogs = {}
+    ctl = SimpleNamespace(
+        settings=settings, worker=w, _dialogs=dialogs,
+        req=SimpleNamespace(applySettings=SimpleNamespace(emit=w.apply_settings),
+                            setApi=SimpleNamespace(emit=w.set_api)),
+        tray=SimpleNamespace(geometry=lambda: None),
+        flyout=SimpleNamespace(set_account=lambda name: None, show_at=lambda rect: None),
+        _show_dialog=lambda key, dialog: dialogs.update({key: dialog}),
+    )
+    app.Controller._open_login(ctl)
+    dialog = dialogs["login"]
+    try:
+        dialog.loggedIn.emit(second, "second@example.invalid")
+        assert w.api is second
+        assert list(second.assets.values()) == []
+        assert w.settings.photos_upload is False
+        from PySide6.QtTest import QTest
+        QTest.qWait(400)
+        from skyfold.i18n import t
+        assert told and t("Photos upload") in told[0]
+    finally:
+        dialog.close()
+
+
+def test_r37_full_check_consumes_deletion_of_recently_uploaded_asset(photos_env):
+    s, remote, root, _ = photos_env
+    s.settings.photos_upload = True
+    s.run()
+    source = write(root, "new.jpg", b"original", age=300)
+    s.run()  # change feed confirms this upload before the next full library read
+    (aid,) = s.state.asset_ids()
+    remote.remove(aid)
+    s.run(force_full=True)  # first pass after deleting it on the phone
+    s.run()
+    s.run(force_full=True)
+    assert not source.exists() and aid not in s.state.asset_ids()
+
+
+@pytest.mark.parametrize("checkpoint", ["before_send", "registered", "receipt_saved", "matched"])
+def test_r37_upload_restart_does_not_replay_or_gain_unproven_ownership(photos_env, tmp_path, checkpoint):
+    import json
+    from skyfold.engine import Syncer
+    from skyfold.state import State
+
+    s, remote, root, _ = photos_env
+    s.settings.photos_upload = True
+    s.run()
+    path = write(root, "library.jpg", b"photo", age=300)
+    if checkpoint == "matched":
+        s.run()
+    elif checkpoint == "receipt_saved":
+        assert s.upload_new() == 1
+    else:
+        # Reconstruct the two durable states that have no registration receipt.
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        st = path.stat()
+        s.state.set("upload_pending:" + digest, json.dumps(dict(
+            rel=path.name, digest=digest, asset=None, duplicate=False, identity=[st.st_dev, st.st_ino])))
+        if checkpoint == "registered":
+            remote.upload(path)
+    reopened = Syncer(State(tmp_path / "s.db"), remote, s.settings)
+    reopened.run(force_full=True)
+    reopened.run(force_full=True)
+    assert len(getattr(remote, "uploads", [])) == (0 if checkpoint == "before_send" else 1)
+    assert list(root.rglob("*.jpg")) == [path]
+    assert bool(reopened.state.files()) == (checkpoint in {"receipt_saved", "matched"})
+
+
+def test_r37_pending_rename_avoids_download_back_while_another_photo_is_missing(photos_env):
+    from skyfold.remote import UploadReceipt
+
+    s, remote, root, _ = photos_env
+    s.settings.photos_upload = True
+    remote.add("OLD", "old.jpg", b"unrelated")
+    s.run()
+    old = root / s.state.files()[0].rel_path
+    source = write(root, "new.jpg", b"new photo", age=300)
+    # Same indexing delay as test_upload_indexed_later_is_matched_not_downloaded.
+    remote.upload = lambda path: UploadReceipt("NEW", False)
+    s.run()
+    renamed = source.rename(root / "holiday.jpg")
+    old.unlink()
+    remote.add("NEW", "new.jpg", b"new photo")
+    s.run()
+    assert list(root.rglob("*.jpg")) == [renamed]
+
+
+def test_r37_restoring_recycled_upload_recreates_cloud_photo(photos_env):
+    s, remote, root, _ = photos_env
+    s.settings.photos_upload = True
+    s.run()
+    p = write(root, "holiday.jpg", b"holiday", age=300)
+    s.run()
+    (aid,) = s.state.asset_ids()
+    remote.remove(aid)
+    s.run()
+    assert not p.exists() and not remote.assets
+    write(root, "holiday.jpg", b"holiday", age=300)  # restore the original from backup
+    s.run(force_full=True)
+    assert len(remote.assets) == 1
+
+
+def test_r37_kept_photo_stays_local_after_rename(photos_env):
+    s, remote, root, _ = photos_env
+    s.settings.photos_upload = True
+    s.settings.delete_cloud_to_pc = False
+    remote.add("A", "old.jpg", b"family")
+    s.run()
+    p = root / s.state.files()[0].rel_path
+    remote.remove("A")
+    s.run()
+    assert p.is_file() and not remote.assets
+    p.rename(p.with_name("family.jpg"))
+    s.run()
+    assert not remote.assets
+
+
+def test_r37_duplicate_copy_retains_read_only_association(photos_env):
+    s, remote, root, trashed = photos_env
+    remote.add("A", "phone.jpg", b"photo")
+    s.settings.photos_upload = True
+    s.run()
+    synced = root / s.state.files()[0].rel_path
+    copy = write(root, "backup.jpg", b"photo", age=300)
+    s.run(force_full=True)
+    assert remote.uploads == ["backup.jpg"] and list(remote.assets) == ["A"]
+    synced.unlink()  # remove the synced original, leaving the known independent copy
+    s.run()
+    if "A" in remote.assets:
+        remote.remove("A")  # remove it on the phone if the first deletion didn't propagate
+    s.run(force_full=True)
+    assert copy.is_file() and copy.name not in trashed
+
+
+def test_r37_renaming_duplicate_does_not_resend_its_bytes(photos_env):
+    s, remote, root, _ = photos_env
+    remote.add("A", "phone.jpg", b"photo")
+    s.settings.photos_upload = True
+    s.run()
+    copy = write(root, "copy.jpg", b"photo", age=300)
+    s.run(force_full=True)
+    assert remote.uploads == ["copy.jpg"]
+    copy.rename(copy.with_name("renamed.jpg"))
+    s.run()
+    assert remote.uploads == ["copy.jpg"]
+
+
+def test_r37_live_movie_stays_local_after_icloud_still_deletion(photos_env):
+    s, remote, root, _ = photos_env
+    s.settings.photos_upload = True
+    s.run()
+    write(root, "IMG_0001.HEIC", b"still", age=300)
+    movie = write(root, "IMG_0001.MOV", b"motion", age=300)
+    s.run()
+    assert remote.uploads == ["IMG_0001.HEIC"]
+    (aid,) = s.state.asset_ids()
+    remote.remove(aid)
+    s.run()
+    assert movie.is_file() and not remote.assets
+    s.run()
+    assert remote.uploads == ["IMG_0001.HEIC"] and not remote.assets
+
+
+def test_r37_newly_copied_photo_gets_the_advertised_settle_period(photos_env, tmp_path):
+    import shutil
+
+    s, remote, root, _ = photos_env
+    s.settings.photos_upload = True
+    s.run()
+    camera = write(tmp_path / "card", "recent-import.jpg", b"camera photo", age=86400)
+    target = root / camera.name
+    target.write_bytes(b"previous contents")
+    s.run()
+    assert not getattr(remote, "uploads", [])
+    shutil.copy2(camera, target)  # different bytes, but Explorer-style copying preserves the old mtime
+    s.run()
+    assert not getattr(remote, "uploads", [])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows read-only attribute")
+def test_r37_readonly_export_does_not_block_other_notes(notes_env):
+    import stat
+    from tests.test_upload_restyle_safety import old_note
+
+    syncer, page = old_note(notes_env)
+    _, remote, root, _ = notes_env
+    page.chmod(stat.S_IREAD)
+    try:
+        syncer.run()
+        remote.put("B", "Another note")
+        syncer.run()
+        assert (root / "Notes/Another note.html").is_file()
+    finally:
+        for candidate in page.parent.glob("*.html"):
+            candidate.chmod(stat.S_IWRITE)
+
+
+def test_r37_drive_ready_waits_for_file_folder_clash_to_clear(drive_env, tmp_path):
+    from tests.test_drive_first_notice import _worker
+
+    drive, remote, root, _ = drive_env
+    remote.put("Invoices", None)
+    remote.put("Invoices/bill.pdf", b"bill")
+    write(root, "Invoices", b"my file")
+    worker, titles = _worker(tmp_path)
+    worker.drive = drive
+    problems = []
+    assert worker._run_drive(problems) and problems
+    early = list(titles)
+    (root / "Invoices").rename(root / "invoices.txt")
+    assert worker._run_drive([])
+    assert (root / "Invoices/bill.pdf").is_file()
+    assert (early, titles) == ([], ["iCloud Drive is ready"])
+
+
+def test_r37_manual_sync_from_tray_while_paused_refreshes_bookmarks(photos_env):
+    from tests.test_bookmarks_sync_now import _worker
+
+    worker, bookmark_reads = _worker()
+    worker.syncer, _, _, _ = photos_env
+    worker.settings.paused = True
+    worker.sync_now(True)  # the tray menu remains available while polling is paused
+    assert bookmark_reads == [1]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows replacement sharing semantics")
+def test_r37_locked_session_keeps_previous_json_and_saves_on_next_request(tmp_path, monkeypatch):
+    import json
+    from skyfold import auth
+    from tests.test_session_atomic_save import _service
+
+    monkeypatch.setattr(auth, "_CURRENT", None)
+    session = _service(tmp_path).session
+    session.data["client_id"] = "offline-before"
+    session._save_session_data()
+    target = Path(session.session_path)
+    with target.open("rb") as reader:
+        session.data["client_id"] = "offline-after"
+        session._save_session_data()
+        assert json.load(reader)["client_id"] == "offline-before"
+        assert not list(tmp_path.glob("*.tmp"))
+    session._save_session_data()
+    assert json.loads(target.read_text(encoding="utf-8"))["client_id"] == "offline-after"
+
+
+@pytest.mark.parametrize(("status", "reason"), [(403, "Forbidden"), (429, "Too Many Requests")])
+def test_r37_secondary_rate_limit_uses_releases_page(monkeypatch, status, reason):
+    import requests
+
+    calls = []
+
+    def reply(_session, url, **kwargs):
+        calls.append(url)
+        r = requests.Response()
+        r.url = url
+        if url == up.API:
+            r.status_code, r.reason = status, reason
+            r.headers["X-RateLimit-Remaining"] = "41"
+            r._content = b'{"message":"You have exceeded a secondary rate limit."}'
+        elif url == up.PAGE:
+            r.status_code = 302
+            r.headers["Location"] = "https://github.com/zoranmod/skyfold/releases/tag/v1.0.15"
+            r._content = b""
+        else:
+            r.status_code, r._content = 200, b"Release notes"
+        r._content_consumed = True
+        return r
+
+    monkeypatch.setattr(requests.Session, "get", reply)
+    release = up.latest_release()
+    assert release.version == "1.0.15" and up.PAGE in calls

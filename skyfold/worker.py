@@ -196,7 +196,7 @@ class SyncWorker(QObject):
         """Between the services of a cycle: has Quit or Pause been asked for meanwhile?"""
         if self._closing_now():
             return True
-        if self._paused():
+        if self._paused() and not getattr(self, "_sync_now_while_paused", False):
             self._set_state("paused", t("Syncing is paused."))
             return True
         return False
@@ -412,6 +412,7 @@ class SyncWorker(QObject):
             # the Drive and Notes folders hold the other account's files: never sync them into this one
             self.settings.drive_enabled = False
             self.settings.notes_enabled = False
+            self.settings.photos_upload = False  # the photos there are the other account's
             if self.notes_state:
                 self.notes_state.reset()
         from .engine import THROTTLE
@@ -626,6 +627,8 @@ class SyncWorker(QObject):
             self._again = (prev[0] or full, prev[1] or force_drive)
             return
         self.busy = True
+        # Sync now from the tray while paused: this one cycle runs through (Photos, Notes, bookmarks)
+        self._sync_now_while_paused = manual and self._paused()
         try:
             self._cycle(full, force_drive)
             while self._again is not None:
@@ -633,6 +636,7 @@ class SyncWorker(QObject):
                 self._cycle(again_full, again_drive)
         finally:
             self.busy = False
+            self._sync_now_while_paused = False
 
     def _cycle(self, full: bool, force_drive: bool) -> None:
         problems: list[str] = []
@@ -823,7 +827,7 @@ class SyncWorker(QObject):
                 parts.append(t("Deleted in iCloud: {n}", n=res.deleted_cloud))
             if parts:
                 self.notify.emit(t("iCloud Drive synced"), ", ".join(parts))
-        if first and res.full:
+        if first and res.full and not res.errors:  # (a file that couldn't be downloaded isn't "ready")
             self.state.set("drive_first", None)
             self.notify.emit(t("iCloud Drive is ready"),
                              t("The first sync is done: {n} files downloaded. From now on only changes are synced.",

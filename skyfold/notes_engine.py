@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS notes_meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
 
+def _unlink_even_read_only(p: Path) -> None:
+    """Remove Skyfold's own stage file, also when it kept a read-only mark from the page it was."""
+    try:
+        p.unlink()
+    except PermissionError:
+        os.chmod(p, stat.S_IWRITE)
+        p.unlink()
+
+
 @dataclass(slots=True)
 class NoteInfo:
     id: str
@@ -1304,7 +1313,7 @@ class NotesSyncer:
                 if _place_new_name(aside, conflict) is None:
                     raise OSError("Previous page still waiting to be restored")
             else:
-                aside.unlink()
+                _unlink_even_read_only(aside)
         nid = key.removeprefix("style_tx:")
         if not known_missing(page) and not _is_link(page) and _digest(page) == after:
             if self.state.get(f"page:{nid}") == before:
@@ -1312,6 +1321,7 @@ class NotesSyncer:
         self.state.set(key, None)
 
     def _restyle_pages(self) -> int:
+        """Once per NOTE_STYLE: pages exactly as Skyfold wrote them get the new look in place."""
         done = 0
         retry = False
         for nid, row in self.state.all().items():
@@ -1325,6 +1335,8 @@ class NotesSyncer:
             try:
                 if known_missing(page) or _is_link(page) or not inside_root(self.root, page) or _digest(page) != recorded:
                     continue
+                if not os.access(page, os.W_OK):
+                    continue  # made read-only by the user: left exactly as it is
                 with page.open("rb") as source:
                     prefix = source.read(200_000)
                     # Latin-1 gives exact byte offsets even for invalid UTF-8. Only CSS is encoded.

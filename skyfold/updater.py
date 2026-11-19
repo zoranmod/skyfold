@@ -91,11 +91,21 @@ def _rate_limited(r) -> RateLimited | None:
             wait = float(h["X-RateLimit-Reset"]) - _time.time()
     except (TypeError, ValueError):
         wait = None
-    if wait is None and "rate limit" not in str(getattr(r, "reason", "") or "").lower():
+    if wait is None and getattr(r, "status_code", None) != 429             and "rate limit" not in str(getattr(r, "reason", "") or "").lower()             and "rate limit" not in _short_body(r).lower():  # (GitHub's secondary limit says so only there)
         return None
     minutes = max(1, math.ceil((wait or 60) / 60))
     return RateLimited(t("GitHub is limiting update checks from your internet connection right now; try again "
                          "in {n} min.", n=minutes))
+
+
+def _short_body(r) -> str:
+    """The start of an error reply's text (never of a download: its body is left unread)."""
+    try:
+        if getattr(r, "_content_consumed", False) or not getattr(r, "raw", None):
+            return str(getattr(r, "text", "") or "")[:2000]
+        return r.raw.read(2000, decode_content=True).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _get(url: str, *, stream: bool = False, timeout: float = 20, follow: bool = True):

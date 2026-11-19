@@ -544,9 +544,12 @@ class Controller(QObject):
                 _close_stale_settings(self)  # it shows the other account's settings
             if self.settings.apple_id and apple_id.lower() != self.settings.apple_id.lower():
                 turned_off = [name for on, name in ((self.settings.drive_enabled, t("iCloud Drive")),
-                                                    (self.settings.notes_enabled, t("Notes"))) if on]
+                                                    (self.settings.notes_enabled, t("Notes")),
+                                                    (self.settings.photos_upload, t("Photos upload"))) if on]
                 self.settings.drive_enabled = False
                 self.settings.notes_enabled = False
+                # the photos folder holds the other account's photos: never send them to this one
+                self.settings.photos_upload = False
                 self.req.applySettings.emit(self.settings.copy(), True, False)  # new account → fresh state
                 if turned_off:
                     QTimer.singleShot(300, lambda: inform(

@@ -93,6 +93,9 @@ def test_temporarily_unreadable_kept_photo_allows_later_replacement(photos_env, 
     path.write_bytes(b"new version")
     _old(path)
     s.run()
+    from tests.test_engine import _minutes_pass
+    _minutes_pass(s)
+    s.run()
     assert b"new version" in remote.blobs.values()
 
 

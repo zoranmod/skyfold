@@ -476,6 +476,11 @@ def test_upload_new_photo_once_and_not_downloaded_back(env):
     assert len(r.deleted) == 1 and r.deleted[0].startswith("UP")
 
 
+def _minutes_pass(s):
+    """Two minutes go by for the files Skyfold saw changing (its settle wait is over)."""
+    s._upload_sigs = {k: (v[0], v[1] - s.UPLOAD_SETTLE, v[2]) for k, v in s._upload_sigs.items()}
+
+
 def test_upload_waits_for_fresh_files_and_skips_duplicates(env):
     s, r, root, _ = env
     s.settings.photos_upload = True
@@ -492,6 +497,9 @@ def test_upload_waits_for_fresh_files_and_skips_duplicates(env):
     s.run()
     assert r.uploads == ["copy.jpg"]  # handled once, not sent again
     _old(root / "fresh.jpg")
+    s.run()
+    assert r.uploads == ["copy.jpg"]  # seen changing just now: waits from then on
+    _minutes_pass(s)
     s.run()
     assert r.uploads == ["copy.jpg", "fresh.jpg"]
 
