@@ -6,8 +6,9 @@ land in "Recently Deleted" for 30 days.
 
 from __future__ import annotations
 
-import json
 import logging
+import hashlib
+import json
 import os
 import re
 import stat
@@ -16,6 +17,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -23,7 +25,7 @@ from pathlib import Path, PurePosixPath
 from .config import Settings
 from .i18n import t
 from .safelog import brief
-from .remote import AuthRequired, Remote, RemoteAsset, RemoteResource, RemoteUnavailable
+from .remote import AuthRequired, Remote, RemoteAsset, RemoteResource, RemoteUnavailable, UploadRejected
 from .state import FileRow, State
 
 log = logging.getLogger(__name__)
@@ -221,6 +223,33 @@ class Cancelled(Exception):
     pass
 
 
+def _upload_member(path: Path, directory: bool = False) -> bool:
+    """Inspect metadata without opening a cloud placeholder or following a link."""
+    try:
+        st = path.lstat()
+        # Hidden, system, reparse point, offline, recall-on-open, recall-on-data-access.
+        if getattr(st, "st_file_attributes", 0) & (0x2 | 0x4 | 0x400 | 0x1000 | 0x40000 | 0x400000):
+            return False
+        return stat.S_ISDIR(st.st_mode) if directory else stat.S_ISREG(st.st_mode)
+    except OSError:
+        return False
+
+
+@contextmanager
+def _upload_reader(path: Path):
+    """On Windows deny writers and renames until pyicloud finishes reopening and streaming the path."""
+    if os.name == "nt":
+        import _winapi
+        import msvcrt
+
+        handle = _winapi.CreateFile(str(path), 0x80000000, 1, 0, 3, 0x00200000, 0)
+        stream = os.fdopen(msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY), "rb")
+    else:
+        stream = path.open("rb")
+    with stream:
+        yield stream
+
+
 @dataclass
 class Pending:
     """Deletions held back because there were more than the safety threshold."""
@@ -338,6 +367,8 @@ class Syncer:
         self.question_gen = 0  # goes up whenever the question changes: an answer names the one it saw
         self.side_gen = {"cloud": 0, "pc": 0}  # the same, per side of the question
         self.held: set[str] = set()  # deletions currently waiting for the user's decision
+        self._upload_saw_missing = False
+        self._upload_idle = {}
         # Paths the engine itself touched recently, so the folder watcher can ignore them.
         self.own_paths: dict[str, float] = {}
 
@@ -403,7 +434,16 @@ class Syncer:
         """Return (asset ids whose main file was deleted on the PC, number of files relocated)."""
         rows = self.state.files()
         # Only files that are really missing count; one that can't be looked at now decides nothing.
-        missing = [r for r in rows if known_missing(self._abs(r.rel_path))]
+        missing = []
+        self._upload_saw_missing = False
+        for row in rows:
+            try:
+                os.lstat(self._abs(row.rel_path))
+            except (FileNotFoundError, NotADirectoryError):
+                missing.append(row)
+                self._upload_saw_missing = True
+            except OSError:
+                self._upload_saw_missing = True  # a new-looking file might be this one
         if not missing:
             self._told_unsure = None  # nothing held: a later hold is told again
             return [], 0
@@ -516,7 +556,7 @@ class Syncer:
         elif not held:
             self._told_unsure = None
         for r in untracked:
-            self.state.remove_asset(r.asset_id)
+            self._keep_on_pc(r.asset_id, by_asset[r.asset_id])
             self.state.exclude(r.asset_id, "deleted on PC")
             self.cb.activity("local", t("Deleted on this PC only: {name}", name=PurePosixPath(r.rel_path).name))
         lone_videos = [r for r in lone_videos if not any(x.asset_id == r.asset_id for x in untracked)]
@@ -530,123 +570,155 @@ class Syncer:
 
     UPLOAD_EXT = {".heic", ".heif", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff", ".webp", ".dng",
                   ".mov", ".mp4", ".m4v"}
-    LIVE_STILL_EXT = {".heic", ".heif", ".jpg", ".jpeg"}
     UPLOAD_MAX = 100  # per pass; the rest follows next time
     UPLOAD_SETTLE = 120  # seconds a file must stay unchanged first (still being copied otherwise)
 
-    def upload_new(self) -> int:
-        """Photos and videos put into the photos folder go up to iCloud Photos (when turned on). A file
-        is recorded like a downloaded one, so it is never downloaded again; one that iCloud already
-        has (the same bytes) is left as it is. Album folders and Skyfold's own files are never sent."""
-        from .remote import AuthRequired as _Auth, RemoteUnavailable as _Unavail
-
-        upload = getattr(self.remote, "upload", None)
-        if upload is None:
-            return 0
-        tracked = {r.rel_path.lower() for r in self.state.files()}
-        album_entries = {rel.lower() for rel in self.state.album_links()}
-        known_ids = self.state.asset_ids()
+    def _upload_candidates(self):
+        if not _upload_member(self.root, directory=True):
+            return
+        tracked = self.state.paths() | {rel.lower() for rel in self.state.album_links()}
         now = time.time()
-        found: list[tuple[str, Path, os.stat_result]] = []
-        live_kept: list[tuple[str, Path, os.stat_result]] = []
-        for dirpath, dirs, files in os.walk(self.root):
-            dirs[:] = [d for d in dirs if not _is_link(Path(dirpath) / d) and not d.startswith(".")]
-            stills = {PurePosixPath(f).stem.lower() for f in files
-                      if PurePosixPath(f).suffix.lower() in self.LIVE_STILL_EXT}
-            for fn in files:
-                if fn.startswith((TMP_PREFIX, ".")) or fn == MARKER:
+        for dirname, dirs, files in os.walk(self.root):
+            parent = Path(dirname)
+            dirs[:] = sorted(d for d in dirs if not d.startswith(".")
+                             and not (parent == self.root and d.lower() == ALBUMS_DIR.lower())
+                             and _upload_member(parent / d, directory=True))
+            stills = {Path(f).stem.casefold() for f in files
+                      if Path(f).suffix.lower() in {".heic", ".heif", ".jpg", ".jpeg"}}
+            for name in sorted(files):
+                p = parent / name
+                ext = p.suffix.lower()
+                rel = p.relative_to(self.root).as_posix()
+                if name.startswith(".") or ext not in self.UPLOAD_EXT or rel.lower() in tracked:
                     continue
-                if PurePosixPath(fn).suffix.lower() not in self.UPLOAD_EXT:
-                    continue
-                pair_video = PurePosixPath(fn).suffix.lower() == ".mov" and PurePosixPath(fn).stem.lower() in stills
-                full = Path(dirpath) / fn
-                rel = full.relative_to(self.root).as_posix()
-                if rel.lower() in tracked or rel.lower() in album_entries:
+                if ext == ".mov" and p.stem.casefold() in stills:
+                    continue  # the single-file API cannot register a Live Photo pair
+                if not _upload_member(p):
                     continue
                 try:
-                    st = full.stat()
+                    st = p.lstat()
                 except OSError:
                     continue
-                if now - st.st_mtime < self.UPLOAD_SETTLE or st.st_size == 0:
-                    continue  # still being copied (or empty): next time
-                if self.state.get(f"upload_done:{rel.lower()}") == f"{st.st_size}:{int(st.st_mtime)}":
-                    continue  # this very file was handled before (e.g. iCloud already had it)
-                (live_kept if pair_video else found).append((rel, full, st))
-        for rel, full, st in live_kept:
-            # The motion part of a Live Photo (IMG_1234.MOV next to IMG_1234.HEIC): iCloud can't take the
-            # pair from here, and on its own it would show up as a separate video. Its photo goes up.
-            self.state.set(f"upload_done:{rel.lower()}", f"{st.st_size}:{int(st.st_mtime)}")
-            self.cb.activity("info", t("Kept on this PC only (the video part of a Live Photo): {name}", name=full.name))
-        sent = 0
-        for rel, full, st in sorted(found)[: self.UPLOAD_MAX]:
+                if st.st_size and now - st.st_mtime >= self.UPLOAD_SETTLE:
+                    yield rel, p
+
+    def upload_new(self) -> int:
+        """Journal the bytes before sending. Only an observed original can later own the PC file."""
+        attempts = sent = 0
+        now = time.monotonic()
+        self._upload_idle = {k: v for k, v in self._upload_idle.items() if v[1] > now}
+        for rel, path in self._upload_candidates():
             self._check_cancel()
-            self.cb.status(t("Uploading {name}…", name=full.name))
+            key = rel.lower()
             try:
-                digest = _file_hash(full)
-                asset = upload(full)
-            except (Cancelled, _Auth, _Unavail):
-                raise
-            except Exception as exc:  # noqa: BLE001 - tried again next pass
-                mark = f"{st.st_size}:{int(st.st_mtime)}"
-                if self.state.get(f"upload_fail:{rel.lower()}") != mark:  # said once, not every pass
-                    self.state.set(f"upload_fail:{rel.lower()}", mark)
-                    self.cb.activity("error", t("Upload failed ({name}): {error}", name=full.name, error=brief(exc)))
-                log.info("Photos: upload of %s failed: %s", full.name, brief(exc))
-                continue
-            self.state.set(f"upload_fail:{rel.lower()}", None)
-            mark = f"{st.st_size}:{int(st.st_mtime)}"
-            if asset is None or not asset.resources:
-                # accepted, not ready in iCloud yet: not sent again, and when it shows up among the new
-                # photos it is matched with this file (not downloaded a second time)
-                self.state.set(f"upload_done:{rel.lower()}", mark)
-                self.state.set(f"upload_wait:{rel.lower()}", json.dumps([rel, full.name, st.st_size, digest]))
-                self.cb.activity("upload", t("Uploaded to iCloud Photos: {name}", name=rel), str(full))
-                sent += 1
-                continue
-            if asset.id in known_ids:  # iCloud already had this photo (it's elsewhere in the folder)
-                self.state.set(f"upload_done:{rel.lower()}", mark)
-                self.cb.activity("info", t("Already in iCloud Photos: {name}", name=full.name))
-                continue
-            res = asset.resources[0]
-            self.state.add_file(FileRow(asset.id, res.key, rel, st.st_size, asset.is_video,
-                                        asset.date.isoformat(), digest), now_iso())
-            known_ids.add(asset.id)
-            sent += 1
-            self.cb.activity("upload", t("Uploaded to iCloud Photos: {name}", name=rel), str(full))
+                with _upload_reader(path) as stream:
+                    if not _upload_member(path) or not inside_root(self.root, path):
+                        continue
+                    st = os.fstat(stream.fileno())
+                    if time.time() - st.st_mtime < self.UPLOAD_SETTLE:
+                        continue
+                    signature = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+                    idle = self._upload_idle.get(key)
+                    if idle and idle[0] == signature:
+                        continue  # bounded delay only; never use cached bytes to upload or claim a file
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                    pending_key = "upload_pending:" + digest
+                    prior = self.state.get(pending_key)
+                    if prior:
+                        record = json.loads(prior)
+                        identity = [st.st_dev, st.st_ino]
+                        if (st.st_ino and identity == record.get("identity") and rel != record["rel"]
+                                and known_missing(self._abs(record["rel"]))):
+                            record["rel"] = rel
+                            self.state.set(pending_key, json.dumps(record))
+                        self._upload_idle[key] = (signature, now + 600)
+                        continue
+                    done = self.state.get("upload_done:" + key)
+                    if done == "kept":
+                        # The file could not be read when it was kept. The next stable read
+                        # binds that decision to these bytes so future replacements can upload.
+                        self.state.set("upload_done:" + key, digest)
+                    if done in (digest, "kept"):
+                        self._upload_idle[key] = (signature, now + 600)
+                        continue
+                    if done == f"{st.st_size}:{int(st.st_mtime)}":
+                        # Legacy completion records cannot prove ownership. Preserve their no-replay promise.
+                        self.state.set("upload_done:" + key, digest)
+                        continue
+                    retry = self.state.get("upload_retry:" + key)
+                    if retry:
+                        previous, after = json.loads(retry)
+                        if previous == digest and time.time() < after:
+                            continue
+                    record = dict(rel=rel, digest=digest, asset=None, duplicate=False,
+                                  identity=[st.st_dev, st.st_ino])
+                    self.state.set(pending_key, json.dumps(record))
+                    attempts += 1
+                    self.cb.status(t("Uploading {name}…", name=path.name))
+                    try:
+                        receipt = self.remote.upload(path)
+                    except (AuthRequired, RemoteUnavailable, UploadRejected) as exc:
+                        self.state.set(pending_key, None)
+                        if not isinstance(exc, UploadRejected):
+                            raise
+                        self.state.set("upload_retry:" + key, json.dumps([digest, time.time() + 3600]))
+                        if not retry or json.loads(retry)[0] != digest:
+                            self.cb.activity("error", t("Upload failed ({name}): {error}", name=path.name, error=brief(exc)))
+                    except Cancelled:
+                        raise
+                    except Exception:  # the registration may have succeeded before its reply was lost
+                        self.cb.activity("error", t("Upload unconfirmed: {name}. Check iCloud Photos and add it there manually if missing.", name=path.name))
+                    else:
+                        record.update(asset=receipt.asset_id, duplicate=receipt.is_duplicate)
+                        self.state.set(pending_key, json.dumps(record))
+                        self.state.set("upload_retry:" + key, None)
+                        if not receipt.asset_id and not receipt.is_duplicate:
+                            self.cb.activity("error", t("Upload unconfirmed: {name}. Check iCloud Photos and add it there manually if missing.", name=path.name))
+                        elif receipt.is_duplicate:
+                            self.cb.activity("info", t("Already in iCloud Photos: {name}", name=path.name))
+                        else:
+                            sent += 1
+                            self.cb.activity("upload", t("Uploaded to iCloud Photos: {name}", name=rel), str(path))
+            except OSError:
+                continue  # inaccessible or open for writing; no bytes sent
+            if attempts >= self.UPLOAD_MAX:
+                break
         return sent
 
-    def _uploads_waiting(self) -> dict[tuple[str, int], tuple[str, str, str]]:
-        """Files sent to iCloud that weren't ready there yet: (name, size) -> (meta key, path, fingerprint)."""
-        out: dict[tuple[str, int], tuple[str, str, str]] = {}
-        for key, value in self.state.items("upload_wait:"):
+    def _match_upload(self, by_digest, asset, resource, digest, taken, full):
+        """Match the downloaded original byte-for-byte. Only a new registration grants deletion rights."""
+        if resource.key != "original":
+            return False
+        for key, record in by_digest.get(digest, ()):
+            if not self.state.get(key):
+                continue  # two remote records can have the same original bytes
+            rel = record["rel"]
+            p = self._abs(rel)
+            if record["asset"] and record["asset"] != asset.id:
+                continue
+            if not record["asset"] and p.name.lower() != resource.filename.lower():
+                continue
+            if rel.lower() in taken or not _upload_member(p) or not inside_root(self.root, p):
+                continue
             try:
-                rel, name, size, digest = json.loads(value)
-                out[(str(name).lower(), int(size))] = (key, str(rel), str(digest))
-            except (ValueError, TypeError):
-                self.state.set(key, None)
-        return out
-
-    def _match_upload(self, a: RemoteAsset, waiting: dict) -> bool:
-        """A new iCloud photo that is a file sent from this PC: recorded with that file, not downloaded."""
-        res = next((r for r in a.resources if r.key == "original"), None)
-        if res is None or res.size is None:
-            return False
-        hit = waiting.get((res.filename.lower(), res.size)) or waiting.get((a.filename.lower(), res.size))
-        if hit is None:
-            return False
-        key, rel, digest = hit
-        for k in [k for k, v in waiting.items() if v is hit]:
-            del waiting[k]
-        self.state.set(key, None)
-        p = self._abs(rel)
-        try:
-            same = os.stat(p).st_size == res.size and _file_hash(p) == digest
-        except OSError:
-            same = False
-        if not same:  # moved, changed or gone meanwhile: synced like any other new photo
-            return False
-        self.state.add_file(FileRow(a.id, res.key, rel, res.size, res.is_video, a.date.isoformat(), digest), now_iso())
-        return True
+                with _upload_reader(p) as stream:
+                    if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
+                        continue
+                    if record["asset"] and not record["duplicate"]:
+                        if not full:
+                            self.state.set("upload_unlisted:" + asset.id, "1")
+                        self.state.add_file(FileRow(asset.id, "original", rel, resource.size, asset.is_video,
+                                                    asset.date.isoformat(), digest), now_iso())
+                        taken.add(rel.lower())
+                    else:
+                        # A 409 or a lost reply proves no ownership. Keep a read-only association.
+                        self.state.set("upload_seen:" + asset.id, json.dumps([rel, digest]))
+                    self.state.set("upload_done:" + rel.lower(), digest)
+                    self.state.set(key, None)
+                    return True
+            except OSError:
+                continue
+        return False
 
     def _confirm_moves(self, maybe: dict[tuple[str, str], list[str]]) -> tuple[dict[tuple[str, str], str], set]:
         """Which of the look-alike files really are the missing photos? iCloud's copy of each missing
@@ -710,7 +782,7 @@ class Syncer:
         local_deleted, moved = self.scan_local()
         if moved:
             self.cb.activity("info", t("Followed {n} files moved inside the folder", n=moved))
-        if getattr(self.settings, "photos_upload", False) and not local_deleted and not self.held:
+        if getattr(self.settings, "photos_upload", False) and not self._upload_saw_missing and not self.held:
             # (only when nothing is missing: a new-looking file might be a photo moved or renamed)
             self.upload_new()
 
@@ -758,6 +830,13 @@ class Syncer:
                 self._check_cancel()
                 remote_assets[a.id] = a
 
+        awaiting_listing = set()
+        for key, _ in self.state.items("upload_unlisted:"):
+            aid = key.removeprefix("upload_unlisted:")
+            if (full and aid in remote_assets) or aid in gone:
+                self.state.set(key, None)
+            else:
+                awaiting_listing.add(aid)
         known_ids = self.state.asset_ids()
         rows_by_asset: dict[str, list[FileRow]] = defaultdict(list)
         for r in self.state.files():
@@ -769,8 +848,8 @@ class Syncer:
         # 1) deleted on the PC ------------------------------------------------
         to_cloud = [a for a in local_deleted if a in remote_assets]
         for a in local_deleted:
-            if a not in remote_assets:  # gone on both sides already
-                self.state.remove_asset(a)
+            if a not in remote_assets and a not in awaiting_listing:  # gone on both sides already
+                self._keep_on_pc(a, rows_by_asset[a])
         if to_cloud:
             if not self.settings.delete_pc_to_cloud:
                 for a in to_cloud:
@@ -802,7 +881,7 @@ class Syncer:
                                 self._trash_inside(p)
                             except OSError:
                                 pass
-                    self.state.remove_asset(a)
+                    self._keep_on_pc(a, rows_by_asset[a])
                     remote_assets.pop(a, None)
                     result.deleted_cloud += 1
                     self.cb.activity("cloud", t("Deleted in iCloud: {name}", name=rows_by_asset[a][0].rel_path))
@@ -810,13 +889,14 @@ class Syncer:
         # 2) deleted in iCloud -----------------------------------------------
         local_deleted_set = set(local_deleted)
         if full:
-            to_pc = [a for a in known_ids if a not in remote_assets and a not in local_deleted_set]
+            to_pc = [a for a in known_ids if a not in remote_assets and a not in local_deleted_set
+                     and a not in awaiting_listing]
         else:
             to_pc = [a for a in known_ids if a in gone and a not in local_deleted_set]
         if to_pc:
             if not self.settings.delete_cloud_to_pc:
                 for a in to_pc:
-                    self.state.remove_asset(a)
+                    self._keep_on_pc(a, rows_by_asset[a])
                     self.cb.activity("local", t("Deleted in iCloud, kept on this PC: {name}", name=rows_by_asset[a][0].rel_path))
             elif self._needs_answer(to_pc, "pc", len(to_pc) > threshold):
                 pending.to_pc = to_pc
@@ -828,7 +908,7 @@ class Syncer:
                     rows_now = rows_by_asset[a]
                     if any(self._changed_on_pc(r) for r in rows_now):
                         # edited on this PC (another size than the photo Skyfold downloaded): kept
-                        self.state.remove_asset(a)
+                        self._keep_on_pc(a, rows_now)
                         self.cb.activity("local", t("Deleted in iCloud, kept on this PC: {name}",
                                                     name=rows_now[0].rel_path))
                         continue
@@ -876,18 +956,33 @@ class Syncer:
         tracked_keys = {(r.asset_id, r.resource_key) for rows in rows_by_asset.values() for r in rows}
         retry_failed = force_full or stale  # parked failures are tried again on a scheduled or asked-for full read
         parked = 0
+        uploads = defaultdict(list)
+        for key, value in self.state.items("upload_pending:"):
+            record = json.loads(value)
+            if record["asset"] in known_ids:
+                self.state.set("upload_done:" + record["rel"].lower(), record["digest"])
+                self.state.set(key, None)
+            else:
+                uploads[record["digest"]].append((key, record))
         todo: list[tuple[RemoteAsset, RemoteResource]] = []
-        waiting = self._uploads_waiting()
         for a in remote_assets.values():
             if a.id in excluded or a.id in held or a.id in local_deleted_set:
                 continue
-            if waiting and self._match_upload(a, waiting):
-                tracked_keys.update((a.id, r.key) for r in a.resources if r.key == "original")
             if a.is_video and not self.settings.include_videos:
                 continue
             for res in a.resources:
                 if (a.id, res.key) in tracked_keys or f"{a.id}#{res.key}" in excluded:
                     continue
+                observed = self.state.get("upload_seen:" + a.id) if res.key == "original" else None
+                if observed:
+                    rel, digest = json.loads(observed)
+                    p = self._abs(rel)
+                    try:
+                        if _upload_member(p) and inside_root(self.root, p) and _file_hash(p) == digest:
+                            continue
+                    except OSError:
+                        pass
+                    self.state.set("upload_seen:" + a.id, None)
                 if res.key == "original_video" and not (
                     self.settings.include_live_video and self.settings.include_videos
                 ):
@@ -934,6 +1029,8 @@ class Syncer:
                         if res.size and tmp_path.stat().st_size != res.size:
                             raise SyncError(t("file size doesn't match"))
                         digest = _file_hash(tmp_path)  # what Skyfold downloaded: compared before it is ever recycled
+                        if self._match_upload(uploads, a, res, digest, taken, full):
+                            continue
                         adopted = False
                         while rel in self._verify:  # a file is already there: adopt it only if identical
                             self._verify.discard(rel)
@@ -1285,7 +1382,7 @@ class Syncer:
                     self._trash_inside(p)
                 except OSError:
                     pass
-        self.state.remove_asset(asset_id)
+        self._keep_on_pc(asset_id, rows)
         self.state.exclude(asset_id, "deleted on PC")
 
     # decisions on held deletions -------------------------------------------
@@ -1306,11 +1403,29 @@ class Syncer:
 
     def reject_to_cloud(self, ids: list[str]) -> None:
         """User wants files deleted on the PC back: forget them so they download again."""
+        rows = self.state.files()
         for a in ids:
-            self.state.remove_asset(a)
+            self._keep_on_pc(a, [r for r in rows if r.asset_id == a])
             self.state.unexclude_parts(a)  # its Live Photo video comes back too
 
     def reject_to_pc(self, ids: list[str]) -> None:
         """User wants to keep local copies of photos deleted in iCloud: stop tracking them."""
+        rows = self.state.files()
         for a in ids:
-            self.state.remove_asset(a)
+            self._keep_on_pc(a, [r for r in rows if r.asset_id == a])
+
+    def _keep_on_pc(self, asset_id, rows):
+        if self.state.get("upload_unlisted:" + asset_id):
+            self.state.set("upload_unlisted:" + asset_id, None)
+        for row in rows:
+            p = self._abs(row.rel_path)
+            if known_missing(p):
+                continue
+            digest = "kept"
+            if _upload_member(p) and inside_root(self.root, p):
+                try:
+                    digest = _file_hash(p)
+                except OSError:
+                    pass
+            self.state.set("upload_done:" + row.rel_path.lower(), digest)
+        self.state.remove_asset(asset_id)

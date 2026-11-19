@@ -11,7 +11,7 @@ import pytest
 
 from skyfold import engine as eng
 from skyfold.config import Settings
-from skyfold.remote import Changes, RemoteAsset, RemoteResource
+from skyfold.remote import Changes, RemoteAsset, RemoteResource, UploadReceipt
 from skyfold.state import State
 
 
@@ -87,10 +87,10 @@ class FakeRemote:
         self.uploads = getattr(self, "uploads", []) + [path.name]
         for aid, a in self.assets.items():  # iCloud keeps one copy of the same bytes
             if self.blobs.get(a.resources[0].url) == data:
-                return a
+                return UploadReceipt(aid, True)
         aid = f"UP{len(self.uploads)}"
         self.add(aid, path.name, data)
-        return self.assets[aid]
+        return UploadReceipt(aid, False)
 
 
 @pytest.fixture()
@@ -528,9 +528,9 @@ def test_upload_indexed_later_is_matched_not_downloaded(env):
     s.run()
     sent = []
 
-    def slow_upload(path):  # iCloud took it but hasn't indexed it yet
+    def slow_upload(path):  # iCloud registered it but hasn't indexed it yet
         sent.append(path.name)
-        return None
+        return UploadReceipt("LATE1", False)
 
     r.upload = slow_upload
     (root / "late.jpg").write_bytes(b"late bytes")
@@ -547,7 +547,7 @@ def test_upload_indexed_later_is_matched_not_downloaded(env):
     assert trashed == []
 
 
-def test_failing_upload_is_retried_but_reported_once(env):
+def test_rejected_upload_waits_and_is_reported_once(env):
     s, r, root, _ = env
     s.settings.photos_upload = True
     s.run()
@@ -556,7 +556,7 @@ def test_failing_upload_is_retried_but_reported_once(env):
 
     def broken(path):
         calls.append(path.name)
-        raise ValueError("server said no")
+        raise eng.UploadRejected("503")
 
     r.upload = broken
     orig = s.cb.activity
@@ -565,5 +565,5 @@ def test_failing_upload_is_retried_but_reported_once(env):
     _old(root / "x.jpg")
     s.run()
     s.run()
-    assert calls == ["x.jpg", "x.jpg"]
+    assert calls == ["x.jpg"]  # rejected: tried again after a pause, not on every pass
     assert len(errors) == 1
