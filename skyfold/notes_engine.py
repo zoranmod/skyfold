@@ -1619,7 +1619,8 @@ class NotesSyncer:
         except (OSError, ValueError):
             unchanged = False
         if unchanged:
-            aside.unlink(missing_ok=True)
+            if not known_missing(aside):
+                _unlink_even_read_only(aside)  # (a page made read-only keeps that mark when moved aside)
             return
         named = target.with_name(f"{target.stem} ({t('previous version')}).html")
         try:

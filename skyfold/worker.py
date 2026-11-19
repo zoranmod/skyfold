@@ -341,6 +341,8 @@ class SyncWorker(QObject):
         if known and known != fp:
             log.warning("The sync database belongs to another Apple ID; Photos and Notes start afresh")
             self.state.reset()
+            self.state.set("foreign_files", "1")  # the photos there are the other account's: never sent or taken over
+            self.settings.photos_upload = False
             self._pending = None
             self.pendingChanged.emit(self._drive_pending)
             if self.notes_state is not None:
@@ -413,6 +415,7 @@ class SyncWorker(QObject):
             self.settings.drive_enabled = False
             self.settings.notes_enabled = False
             self.settings.photos_upload = False  # the photos there are the other account's
+            self._foreign_files = True  # marked once the state is reset below
             if self.notes_state:
                 self.notes_state.reset()
         from .engine import THROTTLE
@@ -433,6 +436,9 @@ class SyncWorker(QObject):
             self.state.set("albums_refreshed", None)
         if reset_state and self.state:
             self.state.reset()
+            if getattr(self, "_foreign_files", False):
+                self.state.set("foreign_files", "1")  # the photos folder holds the other account's photos
+                self._foreign_files = False
             self._pending = None
             self.pendingChanged.emit(self._drive_pending)
         if reset_drive and self.drive_state:
@@ -519,7 +525,7 @@ class SyncWorker(QObject):
     @Slot(bool)
     def sync_now(self, manual: bool = True) -> None:
         """Quick sync: Photos reads only what changed; Drive runs if it's due (or on manual sync)."""
-        self._request(full=False, manual=manual, force_drive=manual)
+        self._request(full=False, manual=manual, force_drive=manual, everything=manual)
 
     @Slot()
     def full_check(self) -> None:
@@ -533,10 +539,13 @@ class SyncWorker(QObject):
         self._kick_drive(full=False)
 
     # Drive runs in its own thread so a long read (a big Drive takes ~10 min) never holds up Photos.
-    def _kick_drive(self, full: bool) -> None:
+    def _kick_drive(self, full: bool, once: bool = False) -> None:
+        """once: Sync now while paused - one Drive pass runs anyway."""
         with self._drive_lock:
-            if getattr(self, "_closing", False) or self._paused():
+            if getattr(self, "_closing", False) or (self._paused() and not once):
                 return  # quitting or paused: nothing new starts (Resume asks again)
+            if once:
+                self._drive_once = True
             self._drive_stopped = False  # a new request to sync
             if full:
                 self._drive_want_full = True
@@ -554,9 +563,10 @@ class SyncWorker(QObject):
             with self._drive_lock:
                 if self.drive is None:
                     break
-                if self._paused() or getattr(self, "_closing", False) \
+                if (self._paused() and not getattr(self, "_drive_once", False)) or getattr(self, "_closing", False) \
                         or getattr(self, "_drive_stopped", False):
                     break  # paused, stopped or quitting meanwhile: the waiting changes stay queued
+                self._drive_once = False  # (Sync now while paused: this one pass)
                 if self._drive_want_full:
                     self._drive_want_full, changed = False, None
                 elif self._drive_changes:
@@ -610,7 +620,7 @@ class SyncWorker(QObject):
         self._set_state("auth", t("Your session has expired. Please sign in again."))
         self.notify.emit(t("Sign-in required"), t("Your iCloud session has expired. Click to sign in again."))
 
-    def _request(self, full: bool, manual: bool, force_drive: bool = False) -> None:
+    def _request(self, full: bool, manual: bool, force_drive: bool = False, everything: bool = False) -> None:
         if self._closing_now():
             return
         if not self.settings.photos_dir_confirmed:
@@ -628,7 +638,8 @@ class SyncWorker(QObject):
             return
         self.busy = True
         # Sync now from the tray while paused: this one cycle runs through (Photos, Notes, bookmarks)
-        self._sync_now_while_paused = manual and self._paused()
+        # (only Sync now itself; a full check asked for by answering a Photos question stays Photos only)
+        self._sync_now_while_paused = everything and self._paused()
         try:
             self._cycle(full, force_drive)
             while self._again is not None:
@@ -664,7 +675,7 @@ class SyncWorker(QObject):
             # 0 = never read yet (monotonic() counts from boot, so it may still be < the interval)
             force_drive or not self._drive_last or time.monotonic() - self._drive_last >= DRIVE_FULL_INTERVAL)
         if drive_due:
-            self._kick_drive(full=True)  # in the background; Photos carries on
+            self._kick_drive(full=True, once=getattr(self, "_sync_now_while_paused", False))  # in the background
         self._ensure_watchers()
         self._emit_stats()
         if problems:
@@ -827,7 +838,8 @@ class SyncWorker(QObject):
                 parts.append(t("Deleted in iCloud: {n}", n=res.deleted_cloud))
             if parts:
                 self.notify.emit(t("iCloud Drive synced"), ", ".join(parts))
-        if first and res.full and not res.errors:  # (a file that couldn't be downloaded isn't "ready")
+        partly = getattr(getattr(self.drive, "remote", None), "incomplete", None)
+        if first and res.full and not res.errors and not partly:  # (anything not read or downloaded: not "ready")
             self.state.set("drive_first", None)
             self.notify.emit(t("iCloud Drive is ready"),
                              t("The first sync is done: {n} files downloaded. From now on only changes are synced.",

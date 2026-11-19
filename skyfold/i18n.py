@@ -593,6 +593,8 @@ BS: dict[str, str] = {
     "Already in iCloud Photos: {name}": "Već je u iCloud slikama: {name}",
     "Uploaded to iCloud Photos: {name}": "Poslano u iCloud slike: {name}",
     "Photos upload": "Slanje slika u iCloud",
+    "Photos aren't uploaded from this folder: it holds another Apple ID's photos. Choose a new, empty photos folder to upload.":
+        "Slike iz ovog foldera se ne šalju: u njemu su slike drugog Apple ID-a. Za slanje izaberi novi, prazan folder za slike.",
     "GitHub is limiting update checks from your internet connection right now; try again in {n} min.":
         "GitHub trenutno ograničava provjere ažuriranja s tvoje internet veze; pokušaj ponovo za {n} min.",
     "was {old}": "ranije {old}",

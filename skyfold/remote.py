@@ -22,6 +22,10 @@ class RemoteUnavailable(Exception):
     """iCloud Photos cannot be read (e.g. Advanced Data Protection is on)."""
 
 
+class LookupIncomplete(Exception):
+    """A looked-up photo exists in iCloud but couldn't be read completely yet: not an answer about it."""
+
+
 class UploadRejected(Exception):
     """No asset was registered. Retrying these bytes later is safe."""
 
@@ -326,11 +330,15 @@ class ICloudRemote:
                 for rec in resp.records:
                     if isinstance(rec, CKRecord) and rec.recordType == "CPLAsset" and not self._gone(rec):
                         recs[rec.recordName] = rec
-            return {a.id: a for a in self._build(recs, {})}
+            built = {a.id: a for a in self._build(recs, {})}
         except (AuthRequired, RemoteUnavailable):
             raise
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
+        if set(recs) - set(built):
+            # a live photo whose original isn't ready in iCloud yet (just uploaded): not gone
+            raise LookupIncomplete(f"{len(set(recs) - set(built))} photos aren't complete in iCloud yet")
+        return built
 
     def delete(self, asset_id: str) -> None:
         asset = self._assets.get(asset_id)

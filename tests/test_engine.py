@@ -478,7 +478,10 @@ def test_upload_new_photo_once_and_not_downloaded_back(env):
 
 def _minutes_pass(s):
     """Two minutes go by for the files Skyfold saw changing (its settle wait is over)."""
-    s._upload_sigs = {k: (v[0], v[1] - s.UPLOAD_SETTLE, v[2]) for k, v in s._upload_sigs.items()}
+    import json
+    for key, value in s.state.items("upload_sig:"):
+        sig, seen, changed = json.loads(value)
+        s.state.set(key, json.dumps([sig, seen - s.UPLOAD_SETTLE, changed]))
 
 
 def test_upload_waits_for_fresh_files_and_skips_duplicates(env):

@@ -6,19 +6,19 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ### Fixed
 - Photos upload, after another review:
-  - Signing in with another Apple ID turns the upload off (the photos folder holds the first account's photos); it was left on and would have sent them to the new account.
-  - A copy that iCloud already had, or a photo kept on this PC after it was deleted in iCloud, is never taken for a moved photo, so deleting that photo in iCloud no longer puts the copy in the Recycle Bin.
-  - A file is never sent twice under another name: renaming a kept photo or a copy iCloud already had doesn't send it again.
+  - Signing in with another Apple ID turns the upload off, also when the other account's database is found at start (e.g. a portable copy): the photos folder holds the first account's photos, and they are never sent to, or taken over by, the new account. A new, empty photos folder makes uploading possible again.
+  - Files the upload leaves alone (a copy iCloud already had, a photo kept on this PC after it was deleted in iCloud, the video of a Live Photo) are recognised by their Windows file id, so also after a rename: they are never sent again and never taken for a moved photo (deleting that photo in iCloud no longer puts such a copy in the Recycle Bin). Undoing a rename of an uploaded photo no longer deletes it in iCloud.
   - The video part of a Live Photo stays on this PC also after its photo is deleted in iCloud (it was then sent as a separate video).
   - A photo Skyfold put in the Recycle Bin because it was deleted in iCloud, and that you restore later, is sent to iCloud again.
-  - An uploaded photo deleted on the phone before iCloud listed it is now handled like any other deletion (its PC copy was kept forever).
-  - An uploaded file renamed before iCloud listed it, while another photo was missing, is no longer downloaded a second time.
-  - A file whose contents change while Skyfold watches waits the two minutes from then, also when the copy kept the camera's old date.
-- Notes: a note page you made read-only is left as it is instead of stopping the Notes sync.
-- Safari bookmarks: **Sync now** refreshes the bookmarks file right away, also while syncing is paused; before, it waited for the 6-hour interval unless a full library check ran. (The Edge extension picks it up on its next update or on *Update now*.)
+  - A photo restored after it was deleted (from the Recycle Bin or a backup) is sent to iCloud again.
+  - An uploaded photo deleted on the phone before iCloud listed it is now handled like any other deletion (its PC copy was kept forever); one iCloud hasn't finished preparing is not taken for deleted.
+  - An uploaded file renamed before iCloud listed it is no longer downloaded a second time (also when its old name is used again, or the upload was turned off meanwhile).
+  - A file whose contents change while Skyfold watches waits the two minutes from then, also when the copy kept the camera's old date and across a restart.
+- Notes: a note page you made read-only no longer stops the Notes sync; the new look leaves it as it is, and a change made in iCloud still replaces it without an error.
+- **Sync now** while syncing is paused runs once through everything (Photos, iCloud Drive, Notes, Safari bookmarks); answering a Photos question while paused still only touches Photos. Safari bookmarks: **Sync now** refreshes the bookmarks file right away; before, it waited for the 6-hour interval unless a full library check ran. (The Edge extension picks it up on its next update or on *Update now*.)
 - Update checks: GitHub's secondary rate limit (403 or 429 with an explanation in the reply) also uses the releases page and says how long to wait.
 - Sign-in: the saved session is replaced in one step, so a crash or power cut while it is being saved no longer leaves a cut-off file that would mean signing in (and maybe entering a two-factor code) again.
-- iCloud Drive: the "iCloud Drive is ready" notice now comes after the first full sync without errors, also when a quick check (after a change on the PC) ran before it.
+- iCloud Drive: the "iCloud Drive is ready" notice now comes after the first full sync without errors or unread folders, also when a quick check (after a change on the PC) ran before it.
 
 ## [1.0.15] - 2026-11-19
 

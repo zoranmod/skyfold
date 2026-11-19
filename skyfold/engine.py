@@ -25,7 +25,7 @@ from pathlib import Path, PurePosixPath
 from .config import Settings
 from .i18n import t
 from .safelog import brief
-from .remote import AuthRequired, Remote, RemoteAsset, RemoteResource, RemoteUnavailable, UploadRejected
+from .remote import AuthRequired, Remote, RemoteAsset, RemoteResource, RemoteUnavailable, LookupIncomplete, UploadRejected
 from .state import FileRow, State
 
 log = logging.getLogger(__name__)
@@ -369,7 +369,7 @@ class Syncer:
         self.held: set[str] = set()  # deletions currently waiting for the user's decision
         self._upload_saw_missing = False
         self._upload_idle = {}
-        self._upload_sigs: dict[str, tuple] = {}  # path -> (size+mtime, when seen, changed since first seen)
+        self._ident_index: dict | None = None
         # Paths the engine itself touched recently, so the folder watcher can ignore them.
         self.own_paths: dict[str, float] = {}
 
@@ -451,9 +451,9 @@ class Syncer:
 
         # The user may have moved files around inside the folder: follow them by name + size.
         tracked = {r.rel_path.lower() for r in rows}
-        # Files the upload already handled (a separate copy iCloud had, one kept here): never taken for
-        # a moved photo, or deleting that photo in iCloud later would recycle them.
-        tracked |= {key.removeprefix("upload_done:") for key, _ in self.state.items("upload_done:")}
+        # Files the upload left alone (a separate copy iCloud had, one kept here, a Live Photo's video):
+        # never taken for a moved photo, or deleting that photo in iCloud later would recycle them.
+        marked = self._marked_ids()
         album_entries = {rel.lower() for rel in self.state.album_links()}  # same name and size as the originals
         index: dict[tuple[str, int], list[str]] = defaultdict(list)  # every look-alike, not just one
         by_size: dict[int, list[str]] = defaultdict(list)  # untracked files by size: renamed photos
@@ -470,9 +470,12 @@ class Syncer:
                 if rel.lower() in tracked or rel.lower() in album_entries:
                     continue
                 try:
-                    size = full.stat().st_size
+                    st = full.stat()
+                    size = st.st_size
                 except OSError:
                     unsure_names.add(fn.lower())
+                    continue
+                if st.st_ino and (st.st_dev, st.st_ino) in marked:
                     continue
                 index[(fn.lower(), size)].append(rel)
                 by_size[size].append(rel)  # (a photo renamed in Explorer keeps its size, not its name)
@@ -577,59 +580,99 @@ class Syncer:
     UPLOAD_MAX = 100  # per pass; the rest follows next time
     UPLOAD_SETTLE = 120  # seconds a file must stay unchanged first (still being copied otherwise)
 
-    def _upload_done(self, rel: str, digest: str) -> None:
-        """This file was handled (sent, already in iCloud, or kept here after iCloud lost it): it is
-        never sent again - under this name or any other (a rename or copy of the same bytes)."""
-        self.state.set("upload_done:" + rel.lower(), digest)
-        if digest != "kept":
-            self.state.set("upload_known:" + digest, "1")
+    # Files the upload must leave alone are remembered by their Windows file id (it stays the same
+    # when a file is renamed or moved, and a copy gets a new one): "copy" = iCloud already had these
+    # bytes, "kept" = kept on this PC after iCloud lost the photo, "live" = the video of a Live Photo.
+    def _mark(self, st: os.stat_result, digest: str, kind: str) -> None:
+        if st.st_ino:
+            self.state.set(f"upload_file:{st.st_dev}:{st.st_ino}", json.dumps([digest, kind]))
 
-    def _upload_forget(self, rows: list[FileRow]) -> None:
-        """Skyfold itself put these files in the Recycle Bin (deleted in iCloud): restoring one later
-        is a new photo for iCloud again."""
-        for r in rows:
-            self.state.set("upload_done:" + r.rel_path.lower(), None)
-            if r.hash:
-                self.state.set("upload_known:" + r.hash, None)
+    def _marked(self, st: os.stat_result) -> list | None:
+        value = self.state.get(f"upload_file:{st.st_dev}:{st.st_ino}") if st.st_ino else None
+        return json.loads(value) if value else None
+
+    def _marked_ids(self) -> set[tuple[int, int]]:
+        out = set()
+        for key, _ in self.state.items("upload_file:"):
+            try:
+                dev, ino = key.removeprefix("upload_file:").split(":")
+                out.add((int(dev), int(ino)))
+            except ValueError:
+                pass
+        return out
+
+    def _where_is(self, ident) -> str | None:
+        """The path of the file with this file id now (one walk of the folder per pass, when needed)."""
+        if self._ident_index is None:
+            self._ident_index = {}
+            for dirname, dirs, files in os.walk(self.root):
+                dirs[:] = [d for d in dirs if not _is_link(Path(dirname) / d)]
+                for name in files:
+                    p = Path(dirname) / name
+                    try:
+                        st = p.lstat()
+                    except OSError:
+                        continue
+                    if st.st_ino:
+                        self._ident_index[(st.st_dev, st.st_ino)] = p.relative_to(self.root).as_posix()
+        return self._ident_index.get(tuple(ident)) if ident else None
+
+    def _identity_at(self, rel: str):
+        try:
+            st = os.lstat(self._abs(rel))
+        except OSError:
+            return None
+        return [st.st_dev, st.st_ino]
+
+    def _migrate_upload_marks(self) -> None:
+        """Earlier versions remembered handled files by name (and 975c07c by content): such a file still
+        here becomes a file-id mark; the old records go."""
+        tracked = self.state.paths()
+        for key, value in self.state.items("upload_done:"):
+            rel = key.removeprefix("upload_done:")
+            p = self._abs(rel)
+            if rel not in tracked and value:
+                try:
+                    st = os.lstat(p)
+                    digest = value if len(value) == 64 else "kept"
+                    if digest == "kept" and _upload_member(p):
+                        try:
+                            digest = _file_hash(p)
+                        except OSError:
+                            pass
+                    self._mark(st, digest, "kept")
+                except OSError:
+                    pass
+            self.state.set(key, None)
+        for key, _ in self.state.items("upload_known:"):
+            self.state.set(key, None)
 
     def _upload_settled(self, key: str, st: os.stat_result) -> bool:
-        """Unchanged for UPLOAD_SETTLE seconds. A copy can keep the camera's old modified time, so a
-        file seen changing while Skyfold runs waits that long from when the change was seen."""
-        sig, now = (st.st_size, st.st_mtime_ns), time.monotonic()
-        seen = self._upload_sigs.get(key)
+        """Unchanged for UPLOAD_SETTLE seconds. A copy or an editor can keep the camera's old modified
+        time, so a file seen changing waits that long from when the change was seen (also across a
+        restart: what was seen is saved)."""
+        sig = [st.st_size, st.st_mtime_ns, st.st_ino]
+        raw = self.state.get("upload_sig:" + key)
+        seen = json.loads(raw) if raw else None
         if seen is None or seen[0] != sig:
-            seen = (sig, now, seen is not None)  # (seen before with other contents: changed just now)
-            self._upload_sigs[key] = seen
-        if seen[2] and now - seen[1] < self.UPLOAD_SETTLE:
+            seen = [sig, time.time(), seen is not None]  # seen before with other contents: changed now
+            self.state.set("upload_sig:" + key, json.dumps(seen))
+        if seen[2] and time.time() - seen[1] < self.UPLOAD_SETTLE:
             return False
         return time.time() - st.st_mtime >= self.UPLOAD_SETTLE
 
     def _follow_pending_uploads(self) -> None:
         """A file sent to iCloud and renamed or moved before iCloud listed it: its record follows it (by
-        file id), even while uploads wait (so it is matched, not downloaded a second time)."""
-        lost = {}
+        file id; its old name may hold another file by now), so it is matched, not downloaded again."""
         for key, value in self.state.items("upload_pending:"):
             record = json.loads(value)
             ident = record.get("identity") or []
-            if len(ident) == 2 and ident[1] and known_missing(self._abs(record["rel"])):
-                lost[tuple(ident)] = (key, record)
-        if not lost:
-            return
-        for dirname, dirs, files in os.walk(self.root):
-            dirs[:] = [d for d in dirs if not _is_link(Path(dirname) / d)]
-            for name in files:
-                p = Path(dirname) / name
-                try:
-                    st = p.lstat()
-                except OSError:
-                    continue
-                hit = lost.pop((st.st_dev, st.st_ino), None)
-                if hit:
-                    key, record = hit
-                    record["rel"] = p.relative_to(self.root).as_posix()
-                    self.state.set(key, json.dumps(record))
-                    if not lost:
-                        return
+            if len(ident) != 2 or not ident[1] or self._identity_at(record["rel"]) == ident:
+                continue
+            rel = self._where_is(ident)
+            if rel:
+                record["rel"] = rel
+                self.state.set(key, json.dumps(record))
 
     def _upload_candidates(self):
         if not _upload_member(self.root, directory=True):
@@ -660,7 +703,9 @@ class Syncer:
                 if st.st_size and self._upload_settled(rel.lower(), st):
                     yield rel, p, pair
         # a file that was gone in between is new when it is back (e.g. restored), not "changed"
-        self._upload_sigs = {k: v for k, v in self._upload_sigs.items() if k in present}
+        for key, _ in self.state.items("upload_sig:"):
+            if key.removeprefix("upload_sig:") not in present:
+                self.state.set(key, None)
 
     def upload_new(self) -> int:
         """Journal the bytes before sending. Only an observed original can later own the PC file."""
@@ -682,16 +727,17 @@ class Syncer:
                     if idle and idle[0] == signature:
                         continue  # bounded delay only; never use cached bytes to upload or claim a file
                     digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                    mark = self._marked(st)
+                    if mark and mark[0] == "kept":  # couldn't be read when it was kept: these are its bytes
+                        mark[0] = digest
+                        self._mark(st, digest, mark[1])
+                    if mark and mark[0] == digest:
+                        self._upload_idle[key] = (signature, now + 600)
+                        continue  # (renamed or moved: the same file; edited: new contents, sent)
                     if live_video:
                         # The single-file upload can't make a Live Photo pair; on its own it would be a
                         # separate video. It stays on this PC, also after its photo is gone.
-                        if self.state.get("upload_done:" + key) != digest:
-                            self._upload_done(rel, digest)
-                        self._upload_idle[key] = (signature, now + 600)
-                        continue
-                    if self.state.get("upload_known:" + digest):
-                        if self.state.get("upload_done:" + key) != digest:
-                            self._upload_done(rel, digest)  # renamed or copied: these bytes were handled
+                        self._mark(st, digest, "live")
                         self._upload_idle[key] = (signature, now + 600)
                         continue
                     pending_key = "upload_pending:" + digest
@@ -704,18 +750,6 @@ class Syncer:
                             record["rel"] = rel
                             self.state.set(pending_key, json.dumps(record))
                         self._upload_idle[key] = (signature, now + 600)
-                        continue
-                    done = self.state.get("upload_done:" + key)
-                    if done == "kept":
-                        # The file could not be read when it was kept. The next stable read
-                        # binds that decision to these bytes so future replacements can upload.
-                        self._upload_done(rel, digest)
-                    if done in (digest, "kept"):
-                        self._upload_idle[key] = (signature, now + 600)
-                        continue
-                    if done == f"{st.st_size}:{int(st.st_mtime)}":
-                        # Legacy completion records cannot prove ownership. Preserve their no-replay promise.
-                        self._upload_done(rel, digest)
                         continue
                     retry = self.state.get("upload_retry:" + key)
                     if retry:
@@ -784,8 +818,9 @@ class Syncer:
                         taken.add(rel.lower())
                     else:
                         # A 409 or a lost reply proves no ownership. Keep a read-only association.
-                        self.state.set("upload_seen:" + asset.id, json.dumps([rel, digest]))
-                    self._upload_done(rel, digest)
+                        st = os.fstat(stream.fileno())
+                        self.state.set("upload_seen:" + asset.id, json.dumps([rel, digest, st.st_dev, st.st_ino]))
+                        self._mark(st, digest, "copy")
                     self.state.set(key, None)
                     return True
             except OSError:
@@ -851,12 +886,18 @@ class Syncer:
         self._check_root()
 
         self.cb.status(t("Checking for changes…"))
+        self._ident_index = None
+        self._migrate_upload_marks()  # (only does something for records of an earlier version)
         local_deleted, moved = self.scan_local()
-        if getattr(self.settings, "photos_upload", False):
-            self._follow_pending_uploads()
+        self._follow_pending_uploads()
         if moved:
             self.cb.activity("info", t("Followed {n} files moved inside the folder", n=moved))
-        if getattr(self.settings, "photos_upload", False) and not self._upload_saw_missing and not self.held:
+        if getattr(self.settings, "photos_upload", False) and self.state.get("foreign_files"):
+            if not getattr(self, "_told_foreign", False):
+                self._told_foreign = True
+                self.cb.activity("info", t("Photos aren't uploaded from this folder: it holds another Apple ID's "
+                                           "photos. Choose a new, empty photos folder to upload."))
+        elif getattr(self.settings, "photos_upload", False) and not self._upload_saw_missing and not self.held:
             # (only when nothing is missing: a new-looking file might be a photo moved or renamed)
             self.upload_new()
 
@@ -891,7 +932,10 @@ class Syncer:
                 # Photos deleted on this PC: fetch their current iCloud record so they can be deleted there.
                 need = [a for a in local_deleted if a not in remote_assets and a not in gone]
                 if need:
-                    found = self.remote.lookup(need)
+                    try:
+                        found = self.remote.lookup(need)
+                    except LookupIncomplete:
+                        found = {}
                     remote_assets.update(found)
                     if any(a not in found for a in need):
                         full = True  # no answer isn't "deleted in iCloud": the whole library decides
@@ -1009,7 +1053,6 @@ class Syncer:
                                 result.errors += 1
                                 self.cb.activity("error", t("Couldn't delete {name}: {error}", name=r.rel_path, error=brief(exc)))
                     if ok:
-                        self._upload_forget(rows_now)
                         self.state.remove_asset(a)
                         result.deleted_local += 1
                         self.cb.activity("trash", t("Deleted on this PC (Recycle Bin): {name}", name=rows_by_asset[a][0].rel_path))
@@ -1048,7 +1091,12 @@ class Syncer:
         for key, value in self.state.items("upload_pending:"):
             record = json.loads(value)
             if record["asset"] in known_ids:
-                self._upload_done(record["rel"], record["digest"])
+                ident = record.get("identity") or []
+                if len(ident) == 2 and self._identity_at(record["rel"]) == ident:
+                    try:
+                        self._mark(os.lstat(self._abs(record["rel"])), record["digest"], "copy")
+                    except OSError:
+                        pass
                 self.state.set(key, None)
             else:
                 uploads[record["digest"]].append((key, record))
@@ -1063,7 +1111,12 @@ class Syncer:
                     continue
                 observed = self.state.get("upload_seen:" + a.id) if res.key == "original" else None
                 if observed:
-                    rel, digest = json.loads(observed)
+                    rel, digest, *ident = json.loads(observed)
+                    if ident and self._identity_at(rel) != ident:
+                        moved_to = self._where_is(ident)  # the separate copy was renamed or moved
+                        if moved_to:
+                            rel = moved_to
+                            self.state.set("upload_seen:" + a.id, json.dumps([rel, digest, *ident]))
                     p = self._abs(rel)
                     try:
                         if _upload_member(p) and inside_root(self.root, p) and _file_hash(p) == digest:
@@ -1434,6 +1487,8 @@ class Syncer:
                     same = res.size is not None and st.st_size == res.size                         and abs(st.st_mtime - a.date.timestamp()) < 2.5
                 except OSError:
                     same = False
+                if same and self.state.get("foreign_files"):
+                    same = False  # files of the Apple ID used before: never taken over by this one
                 if same:  # looks like this very photo (e.g. the database was rebuilt): compare after download
                     self._verify.add(cand)
                     return cand
@@ -1515,5 +1570,8 @@ class Syncer:
                     digest = _file_hash(p)
                 except OSError:
                     pass
-            self._upload_done(row.rel_path, digest)
+            try:
+                self._mark(os.lstat(p), digest, "kept")
+            except OSError:
+                pass
         self.state.remove_asset(asset_id)

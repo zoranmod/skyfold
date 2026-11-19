@@ -194,6 +194,10 @@ def test_same_timestamp_replacement_after_duplicate_is_uploaded(photos_env):
     os.replace(replacement, path)
     os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
     s.run()
+    assert b"bbbb" not in remote.blobs.values()  # a new file under that name: it settles first
+    from tests.test_engine import _minutes_pass
+    _minutes_pass(s)
+    s.run()
     assert b"bbbb" in remote.blobs.values()
 
 
