@@ -4,6 +4,9 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Fixed
+- Safari bookmarks: **Sync now** refreshes the bookmarks file (and what the Edge extension shows) right away, as described; before, it waited for the 6-hour interval unless a full library check ran.
+
 ## [1.0.15] - 2026-11-19
 
 ### Added

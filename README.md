@@ -27,10 +27,10 @@
 ## Features
 
 - **iCloud Photos.** Downloads your whole library (photos, videos, Live Photo videos) to a folder you choose: all in one folder, by year, or by year and month. **Deletions travel both ways:** delete on the iPhone and the PC copy goes to the Recycle Bin; delete on the PC and the photo goes to "Recently Deleted" in iCloud.
-- **Upload from the PC (optional).** Turn on *Upload photos and videos I add to this folder to iCloud Photos* (**Settings → Photos**) and photos and videos you put into the photos folder go up to iCloud Photos and appear on your iPhone. A file is sent once it has stayed unchanged for two minutes. It becomes a synced photo only after Skyfold has seen it in iCloud and compared it byte for byte. Album folders, hidden files and cloud placeholders are never sent.
+- **Upload from the PC (optional).** Turn on *Upload photos and videos I add to this folder to iCloud Photos* (**Settings → Photos**) and photos and videos in the photos folder that Skyfold didn't download go up to iCloud Photos and appear on your iPhone, **including ones already there when you turn it on**. A file is sent once it has stayed unchanged for two minutes. It becomes a synced photo only after Skyfold has seen it in iCloud and compared it byte for byte. Album folders, hidden files and cloud placeholders are never sent.
 - **Albums as folders.** Every album you made in Photos also appears under `Albums\`, as hard links that take **no extra disk space**.
 - **iCloud Drive, two-way.** A full local copy of your Drive, or only the folders you pick. New, changed, deleted, **renamed and moved** files and folders are synced in both directions. If a file changed on both sides, both versions are kept.
-- **Apple Notes export.** Every note becomes a web page with its full-size pictures, scans and attachments, in the same folders as in Notes, plus a searchable `Notes.html` library with your folders, light and dark theme. One-way (iCloud → PC).
+- **Apple Notes export.** Every note becomes a web page with its full-size pictures, scans and attachments, in the same folders as in Notes, plus a `Notes.html` library with your folders, search by title and folder, light and dark theme. One-way (iCloud → PC).
 - **Safari bookmarks for Firefox and Chrome.** Your Safari bookmarks from iPhone, iPad or Mac as a bookmarks file that Firefox, Chrome and Edge import, kept up to date, with your folders in Safari's order. Read-only: nothing changes in iCloud.
 - **Find My.** Your devices with battery and last-seen time, a map link, and **Play sound**. (Apple asks for your password again after each PC restart before it shows them.)
 - **iCloud storage** at a glance in the tray panel.
@@ -64,15 +64,15 @@
 ## Safari bookmarks in Firefox or Chrome
 
 1. In Skyfold: **Settings → Notes → Safari bookmarks**, turn on *Save my Safari bookmarks for Firefox and Chrome* (the file goes to your Documents folder unless you choose another), **Save**, then **Sync now**.
-2. Skyfold writes **`Safari Bookmarks.html`** and refreshes it every 6 hours and on **Sync now**.
+2. Skyfold writes **`Safari Bookmarks.html`** and refreshes it every 6 hours and when you click **Sync now**.
 3. Import it once:
    - **Firefox:** Ctrl+Shift+O → *Import and Backup* → *Import Bookmarks from HTML…*
    - **Chrome / Edge:** Bookmarks → *Import bookmarks and settings* → *Bookmarks HTML file*.
 4. Your bookmarks appear in a **Safari Bookmarks** folder, with the same folders and order as in Safari. Deleted bookmarks, tab groups and the Reading List are left out.
 
-**Without importing (Edge): the Skyfold – Safari Bookmarks extension.** Install it from Edge Add-ons once it's listed there (it's in Microsoft's review; see the [extension's page](extension/)). With Safari bookmarks turned on in Skyfold, it keeps a **Safari Bookmarks** folder under *Other favorites* up to date by itself (every 30 minutes and on *Update now*), with no file to import. It gets the bookmarks from Skyfold on your PC and never goes online. Firefox and Chrome versions are on the way.
+**Without importing (Edge): the Skyfold – Safari Bookmarks extension.** Install it from Edge Add-ons once it's listed there (it's in Microsoft's review; see the [extension's page](extension/)). With Safari bookmarks turned on in Skyfold, it keeps a **Safari Bookmarks** folder under *Other favorites* up to date by itself (every 30 minutes and on *Update now*), with no file to import. It gets the bookmarks from Skyfold on your PC and never goes online, so click **Sync now** in Skyfold first if you want the very latest. Firefox and Chrome versions are on the way.
 
-Skyfold only *reads* your bookmarks from iCloud. It's one-way (Safari → browser): bookmarks you add in your browser don't go to Safari. With the file, importing again adds a second copy of the folder, so delete the old one first; the extension keeps one folder and replaces its content. It needs *Access iCloud Data on the Web* (see Requirements), like the rest of Skyfold.
+Skyfold only *reads* your bookmarks from iCloud. It's one-way (Safari → browser): bookmarks you add in your browser don't go to Safari. With the file, importing again adds a second copy of the folder, so delete the old one first; the extension keeps one folder and replaces its content, so don't keep your own favorites inside it. It needs *Access iCloud Data on the Web* (see Requirements), like the rest of Skyfold.
 
 ## Why not iCloud for Windows?
 
@@ -103,8 +103,8 @@ Apple's app does things Skyfold doesn't: passwords/keychain, two-way bookmark sy
 6. Optional: turn on **iCloud Drive** and **Notes** in Settings.
 
 To start Skyfold with Windows, turn on **Settings → General → Start with Windows**.
-**Updates:** from version 1.0.10 on, Skyfold checks once a day for a new version and updates itself with one click (**Settings → About → Check for updates** checks right away). It downloads the release from this repository, checks its SHA-256, and replaces only the program; your `data` folder and synced files are never touched, and if anything goes wrong the previous version is put back. On 1.0.9 or older, update once by hand: quit Skyfold, replace the program files with the new zip's contents and keep the `data` folder.
-To uninstall, quit Skyfold, turn off *Start with Windows* first, then delete the program folder and `%LOCALAPPDATA%\Skyfold`. Your synced photos, Drive and notes folders are left untouched.
+**Updates:** from version 1.0.10 on, Skyfold checks for a new version about a minute after it starts and then once a day, and updates itself with one click (**Settings → About → Check for updates** checks right away). It downloads the release from this repository and checks its SHA-256 and that GitHub's build attestation names this repository's release workflow and tag. Then it replaces only the program (`Skyfold.exe` and `_internal`); your `data` folder and synced files are never touched, and if anything goes wrong the previous version is put back. To update by hand (e.g. from 1.0.9 or older): quit Skyfold, replace `Skyfold.exe` and the `_internal` folder with the ones from the new zip, and keep the `data` folder.
+To uninstall, first turn off *Start with Windows* and *Safari bookmarks* in Settings and click **Save** (so Skyfold removes its startup entry and browser link), quit Skyfold, then delete the program folder and `%LOCALAPPDATA%\Skyfold`. Your synced photos, Drive and notes folders are left untouched.
 
 **Requirements**
 
@@ -121,19 +121,21 @@ To uninstall, quit Skyfold, turn off *Start with Windows* first, then delete the
 
 ## How syncing works
 
-- Apple doesn't notify third-party apps about changes, so iCloud is **checked at intervals**: Photos every 2 minutes by default (each check only reads what changed), iCloud Drive in full once an hour or when you click **Sync now**. **Changes on the PC are sent right away.**
+- Apple doesn't notify third-party apps about changes, so iCloud is **checked at intervals**: Photos every 2 minutes by default (each check only reads what changed), iCloud Drive in full once an hour or when you click **Sync now**. **Changes on the PC are noticed within seconds** (a new photo to upload waits until it has been unchanged for two minutes).
 - **Deletions are never permanent.** PC files go to the Recycle Bin; iCloud items go to "Recently Deleted" (30 days).
-- **Big deletions wait for you.** If more items than your limit (default 5) disappear at once, Skyfold asks before deleting anything.
+- **Big deletions wait for you.** If more items than your limit (default 5) disappear at once on one side, Skyfold asks before deleting them on the other. For iCloud Drive it also asks when more than half of your files would go. Notes pages and Safari bookmarks follow iCloud without asking.
+- **Deletions in one direction can be turned off** (Settings → Photos / iCloud Drive). For Drive this means the remaining copy syncs back: a file deleted on the PC downloads again, one deleted in iCloud uploads again.
 - **Conflicts keep both copies.** If a Drive file changed on both sides, iCloud's version keeps the name and the PC version is saved as `name (PC conflict …)`.
 
 ## Privacy and security
 
 - **Your password is never stored.** It is only used to sign in, with Apple's own sign-in protocol and two-factor authentication.
-- **Skyfold talks to Apple, and once a day to GitHub.** There is no Skyfold server, no telemetry, no analytics and no crash reporting. The daily update check asks GitHub's public API for the latest Skyfold release and sends nothing about you (only the client name "Skyfold/<version>"); turn it off in **Settings → General**. The only other thing it opens is Google Maps in your browser, and only when you click **Map** in Find My.
+- **Skyfold talks to Apple, and once a day to GitHub.** There is no Skyfold server, no telemetry, no analytics and no crash reporting. The daily update check asks GitHub's public API for the latest Skyfold release (and, before an update, its build attestation) and sends nothing about you (only the client name "Skyfold/<version>"); turn it off in **Settings → General**. The only other thing it opens is Google Maps in your browser, and only when you click **Map** in Find My.
 - **What is stored on your PC:**
   - Apple's session cookies and the sync database: `%LOCALAPPDATA%\Skyfold` (this PC only, never next to the app, so they aren't uploaded if the app sits in OneDrive or iCloud Drive). The session lasts about two months.
   - Settings, including your Apple ID email: the `data` folder next to `Skyfold.exe` (or `%LOCALAPPDATA%\Skyfold\data` if the program folder can't be written, e.g. under Program Files).
   - A log file: `%LOCALAPPDATA%\Skyfold\skyfold.log` (max. about 3 MB, rotated). It contains file and folder names but no password.
+  - With Safari bookmarks on: your bookmarks' titles and addresses in `%LOCALAPPDATA%\Skyfold\safari-bookmarks.json` (for the browser extension), besides the exported HTML file.
 - **Anyone who can read `%LOCALAPPDATA%\Skyfold\session` can access your iCloud** until the session expires, like a browser that's still signed in. Use Skyfold on a PC you trust. **Settings → General → Sign out** deletes the session.
 - To report a security problem privately, see [SECURITY.md](SECURITY.md).
 
@@ -228,7 +230,7 @@ Skyfold is not affiliated with, endorsed by or sponsored by Apple Inc. Apple, iC
 - **Brisanje slika ide u oba smjera, a Drive se sinhronizuje u oba smjera** (i preimenovanja i premještanja). Obrisani fajlovi idu u Recycle Bin ili u "Nedavno obrisano", pa se mogu vratiti.
 - **Skyfold je javna beta.** Dvosmjerna Drive sinhronizacija je nova: Skyfold uvijek pita prije većeg brisanja, ali čuvaj rezervnu kopiju važnih stvari.
 - **Safari oznake za Firefox i Chrome:** Postavke → Bilješke → Safari oznake. Skyfold drži ažuran fajl `Safari Bookmarks.html` koji uvezeš u Firefox (Ctrl+Shift+O → Uvoz i rezervna kopija → Uvezi oznake iz HTML-a) ili Chrome. Samo čita iz iClouda; jednosmjerno.
-- **Slanje slika s računara (po želji):** Postavke → Photos → *Šalji u iCloud slike i videe koje dodam u ovaj folder*. Slike i videi koje ubaciš u folder sa slikama šalju se u iCloud Photos i pojave se na telefonu. Opcija je po defaultu isključena.
+- **Slanje slika s računara (po želji):** Postavke → Fotografije → *Šalji u iCloud slike i videe koje dodam u ovaj folder*. Slike i videi koje ubaciš u folder sa slikama šalju se u iCloud Photos i pojave se na telefonu, uključujući one koji su već u folderu kad je uključiš. Opcija je po defaultu isključena.
 - **Bilješke se čuvaju kao web stranice** s fotografijama u punoj veličini i bibliotekom s pretragom (Notes.html).
 - **Skyfold se sam ažurira:** javi kad izađe nova verzija, pokaže šta je novo i ažurira se jednim klikom (od verzije 1.0.10).
 - **Program je besplatan i prenosiv.** Raspakuj ga, pokreni `Skyfold.exe` i prijavi se Apple ID-jem.

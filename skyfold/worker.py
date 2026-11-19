@@ -650,7 +650,8 @@ class SyncWorker(QObject):
         if self._halt():
             return
         if self.settings.bookmarks_enabled and self.api is not None and (
-                full or time.monotonic() - self._bookmarks_last >= BOOKMARKS_INTERVAL or not self._bookmarks_last):
+                full or force_drive or not self._bookmarks_last
+                or time.monotonic() - self._bookmarks_last >= BOOKMARKS_INTERVAL):  # force_drive: Sync now
             if not self._run_bookmarks(problems):
                 return
             if self._halt():
