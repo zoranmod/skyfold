@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -98,6 +99,71 @@ def _verification_page(method: str, url: str, exc: BaseException) -> Any:
     return response
 
 
+def _replace_file(target: str, write: Any) -> None:
+    """Write a new version next to `target`, then swap it in: a crash or power loss mid-write
+    leaves the previous file whole instead of a cut-off one (which would mean signing in again)."""
+    tmp = f"{target}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        write(tmp)
+        for attempt in range(5):
+            try:
+                os.replace(tmp, target)
+                return
+            except PermissionError:  # Windows: the file is open elsewhere for a moment
+                if attempt == 4:
+                    raise
+                time.sleep(0.05)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _save_atomically(session: Any) -> bool:
+    """pyicloud's own save, but each file is replaced in one step. False: this pyicloud doesn't
+    look like the one this was written for, so its own save is used."""
+    import json
+    from http.cookiejar import LWPCookieJar
+
+    try:
+        from pyicloud.session import NON_PERSISTED_SESSION_KEYS
+        data = {k: v for k, v in dict(session._data).items() if k not in NON_PERSISTED_SESSION_KEYS}
+        session_path, jar_path = session.session_path, session.cookiejar_path
+        cookies = session.cookies
+    except (ImportError, AttributeError):
+        return False
+    folder = os.path.dirname(session_path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+
+    def write_session(tmp: str) -> None:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+
+    try:
+        _replace_file(session_path, write_session)
+    except OSError as exc:
+        log.warning("Couldn't save the session: %s", exc)
+        return True
+    if not jar_path:
+        return True
+    try:
+        jar = cookies.copy()  # responses running at the same time may change the live jar
+
+        def write_jar(tmp: str) -> None:
+            LWPCookieJar.save(jar, filename=tmp, ignore_discard=True, ignore_expires=False)
+            with open(tmp, "rb+") as f:
+                os.fsync(f.fileno())
+
+        _replace_file(jar_path, write_jar)
+    except (OSError, ValueError, RuntimeError) as exc:
+        log.warning("Couldn't save the session cookies: %s", exc)
+    return True
+
+
 def _serialize_session_saves() -> None:
     """pyicloud rewrites the session files after every request. Drive downloads run several
     requests at once, so those writes must take turns or the saved sign-in could be corrupted."""
@@ -116,7 +182,8 @@ def _serialize_session_saves() -> None:
             folder = getattr(self, "_cookie_directory", None)
             if folder and not os.path.isdir(folder):
                 return  # signed out meanwhile: don't bring the session back
-            original(self)
+            if not _save_atomically(self):
+                original(self)
 
     save._skyfold_locked = True  # type: ignore[attr-defined]
     PyiCloudSession._save_session_data = save  # type: ignore[method-assign]

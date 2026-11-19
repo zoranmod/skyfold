@@ -198,7 +198,7 @@ def test_download_failure_is_not_user_cancellation(env, monkeypatch, kind):
     d.put('a.txt', b'cloud data')
     wk = SyncWorker(Settings())
     wk.drive = s
-    wk.state = SimpleNamespace(get=lambda *a: None)
+    wk.state = SimpleNamespace(get=lambda *a: None, set=lambda *a: None)
     wk.api = object()
     states, logs, auth = [], [], []
     wk._set_state = lambda *a: states.append(a)
@@ -232,7 +232,7 @@ def test_resume_clears_old_flag_and_reports_listing_error(env, monkeypatch):
     s.run()
     wk = SyncWorker(Settings())
     wk.drive = s
-    wk.state = SimpleNamespace(get=lambda *a: None)
+    wk.state = SimpleNamespace(get=lambda *a: None, set=lambda *a: None)
     wk._set_state = lambda *a: None
     wk.log = lambda *a: None
     wk.cancel()

@@ -6,6 +6,8 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ### Fixed
 - Safari bookmarks: **Sync now** refreshes the bookmarks file (and what the Edge extension shows) right away, as described; before, it waited for the 6-hour interval unless a full library check ran.
+- Sign-in: the saved session is replaced in one step, so a crash or power cut while it is being saved no longer leaves a cut-off file that would mean signing in (and maybe entering a two-factor code) again.
+- iCloud Drive: the "iCloud Drive is ready" notice now also comes when a quick check (after a change on the PC) ran before the first full sync finished.
 
 ## [1.0.15] - 2026-11-19
 

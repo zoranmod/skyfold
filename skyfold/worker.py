@@ -783,7 +783,10 @@ class SyncWorker(QObject):
 
     def _run_drive(self, problems: list[str], changed: set[str] | None = None) -> bool:
         assert self.drive is not None and self.state is not None
-        first = not self.state.get("drive_last_sync")
+        if not self.state.get("drive_last_sync"):
+            # the very first pass, quick or full: "iCloud Drive is ready" waits for the first full one
+            self.state.set("drive_first", "1")
+        first = bool(self.state.get("drive_first"))
         used_api = getattr(getattr(self.drive, "remote", None), "_api", None)  # the session this pass runs with
         covered: set[str] = set()
         if changed is None:  # a full pass covers what is waiting now; changes made while it runs still count
@@ -821,6 +824,7 @@ class SyncWorker(QObject):
             if parts:
                 self.notify.emit(t("iCloud Drive synced"), ", ".join(parts))
         if first and res.full:
+            self.state.set("drive_first", None)
             self.notify.emit(t("iCloud Drive is ready"),
                              t("The first sync is done: {n} files downloaded. From now on only changes are synced.",
                                n=res.downloaded))
