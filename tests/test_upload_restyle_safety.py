@@ -109,7 +109,7 @@ def test_unlisted_registration_does_not_recycle_source(photos_env, monkeypatch):
         s.run(force_full=True)
         assert path.exists() and not trashed
     s.run(force_full=True)
-    assert [row.rel_path for row in s.state.files()] == [path.name]
+    assert s.state.files() == [] and path.exists()  # one-way: the sent file stays an ordinary file
     assert remote.uploads == [path.name]
 
 
@@ -126,7 +126,7 @@ def test_change_feed_can_precede_visibility_in_all_photos(photos_env, monkeypatc
     s.run(force_full=True)  # the full listing catches up
     remote.remove(next(iter(remote.assets)))
     s.run(force_full=True)
-    assert not path.exists()
+    assert path.exists()  # one-way: deleting it in iCloud leaves the PC file
 
 
 def test_ambiguous_post_is_not_replayed_and_does_not_starve_next_file(photos_env, monkeypatch):
@@ -211,7 +211,7 @@ def test_deleting_unindexed_duplicate_does_not_delete_preexisting_cloud_asset(ph
     path.unlink()
     s.run(force_full=True)
     assert "on-phone" in remote.assets and not remote.deleted
-    assert (root / "2025/11/phone.jpg").read_bytes() == b"same"
+    assert not (root / "2025/11/phone.jpg").exists()  # the copy put here stood for it: not downloaded
 
 
 def test_symbolic_link_never_uploads_target(photos_env):

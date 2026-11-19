@@ -470,10 +470,10 @@ def test_upload_new_photo_once_and_not_downloaded_back(env):
     assert r.uploads == ["beach.jpg"]
     assert sorted(p.name for p in (root / "2025/11").iterdir()) == ["IMG_0001.JPG"]
     assert trashed == []
-    # deleting it on the PC afterwards deletes it in iCloud like any other photo
+    # one-way: deleting it on the PC afterwards leaves it in iCloud
     (root / "Moje/beach.jpg").unlink()
-    s.run()
-    assert len(r.deleted) == 1 and r.deleted[0].startswith("UP")
+    s.run(force_full=True)
+    assert r.deleted == [] and any(a.filename == "beach.jpg" for a in r.assets.values())
 
 
 def _minutes_pass(s):
@@ -554,7 +554,7 @@ def test_upload_indexed_later_is_matched_not_downloaded(env):
     res = s.run()
     assert res.downloaded == 0
     assert [p.name for p in root.rglob("*.jpg")] == ["late.jpg"]
-    assert "LATE1" in s.state.asset_ids()
+    assert "LATE1" not in s.state.asset_ids() and s.state.get("upload_sent:LATE1")  # one-way
     assert trashed == []
 
 

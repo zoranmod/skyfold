@@ -21,10 +21,9 @@ def test_undoing_a_rename_does_not_delete_the_uploaded_cloud_photo(photos_env):
     s.run()
     original = write(root, "beach.jpg", b"beach", age=300)
     s.run()
-    (aid,) = s.state.asset_ids()
+    (aid,) = remote.assets
     moved = original.rename(root / "coast.jpg")
     s.run()
-    assert s.state.files()[0].rel_path == moved.name
     moved.rename(original)
     s.run()
     assert aid in remote.assets and not remote.deleted
@@ -55,12 +54,13 @@ def test_restore_after_pc_initiated_deletion_can_upload_again(photos_env):
     s.run()
     p = write(root, "holiday.jpg", b"holiday", age=300)
     s.run()
-    p.unlink()  # Explorer deletion propagated to the phone
+    p.unlink()  # one-way: deleting the sent file on the PC leaves the photo in iCloud
     s.run()
-    assert remote.deleted and not remote.assets
-    write(root, "recovered.jpg", b"holiday", age=300)
+    assert not remote.deleted and len(remote.assets) == 1
+    write(root, "recovered.jpg", b"holiday", age=300)  # a separate file: sent (iCloud keeps one copy)
     s.run(force_full=True)
-    assert any(a.filename == "recovered.jpg" for a in remote.assets.values())
+    assert len(remote.assets) == 1 and remote.uploads == ["holiday.jpg", "recovered.jpg"]
+    assert not s.state.files()  # neither is downloaded back
 
 
 def test_recycling_primary_retains_known_duplicate_after_rename(photos_env):
@@ -133,7 +133,7 @@ def test_read_only_duplicate_association_follows_rename(photos_env):
     remote.add("A", "phone.jpg", b"family")
     copy = write(root, "backup.jpg", b"family", age=300)
     s.run()
-    assert s.state.get("upload_seen:A") and not s.state.files()
+    assert s.state.get("upload_sent:A") and not s.state.files()
     renamed = copy.rename(root / "archive.jpg")
     s.run(force_full=True)
     assert list(root.rglob("*.jpg")) == [renamed]
@@ -148,8 +148,7 @@ def test_live_cloud_asset_with_unindexed_master_keeps_its_pc_file(photos_env):
     s.run()
     p = write(root, "camera.jpg", b"original", age=300)
     s.run()
-    (aid,) = s.state.asset_ids()
-    assert s.state.get("upload_unlisted:" + aid)
+    (aid,) = remote.assets
 
     def records(*, record_names, zone_id):
         if record_names == [aid]:

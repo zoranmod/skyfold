@@ -434,12 +434,13 @@ def test_r37_full_check_consumes_deletion_of_recently_uploaded_asset(photos_env)
     s.run()
     source = write(root, "new.jpg", b"original", age=300)
     s.run()  # change feed confirms this upload before the next full library read
-    (aid,) = s.state.asset_ids()
+    (aid,) = remote.assets
     remote.remove(aid)
     s.run(force_full=True)  # first pass after deleting it on the phone
     s.run()
     s.run(force_full=True)
-    assert not source.exists() and aid not in s.state.asset_ids()
+    # one-way: the PC file stays and isn't sent again
+    assert source.exists() and not s.state.asset_ids() and remote.uploads == ["new.jpg"]
 
 
 @pytest.mark.parametrize("checkpoint", ["before_send", "registered", "receipt_saved", "matched"])
@@ -469,7 +470,7 @@ def test_r37_upload_restart_does_not_replay_or_gain_unproven_ownership(photos_en
     reopened.run(force_full=True)
     assert len(getattr(remote, "uploads", [])) == (0 if checkpoint == "before_send" else 1)
     assert list(root.rglob("*.jpg")) == [path]
-    assert bool(reopened.state.files()) == (checkpoint in {"receipt_saved", "matched"})
+    assert not reopened.state.files()  # one-way: never a synced photo
 
 
 def test_r37_pending_rename_avoids_download_back_while_another_photo_is_missing(photos_env):
@@ -497,13 +498,12 @@ def test_r37_restoring_recycled_upload_recreates_cloud_photo(photos_env):
     s.run()
     p = write(root, "holiday.jpg", b"holiday", age=300)
     s.run()
-    (aid,) = s.state.asset_ids()
+    (aid,) = remote.assets
     remote.remove(aid)
     s.run()
-    assert not p.exists() and not remote.assets
-    write(root, "holiday.jpg", b"holiday", age=300)  # restore the original from backup
+    assert p.exists() and not remote.assets  # one-way: deleting it in iCloud leaves the PC file
     s.run(force_full=True)
-    assert len(remote.assets) == 1
+    assert not remote.assets  # and it isn't sent back
 
 
 def test_r37_kept_photo_stays_local_after_rename(photos_env):
@@ -559,7 +559,7 @@ def test_r37_live_movie_stays_local_after_icloud_still_deletion(photos_env):
     movie = write(root, "IMG_0001.MOV", b"motion", age=300)
     s.run()
     assert remote.uploads == ["IMG_0001.HEIC"]
-    (aid,) = s.state.asset_ids()
+    (aid,) = remote.assets
     remote.remove(aid)
     s.run()
     assert movie.is_file() and not remote.assets

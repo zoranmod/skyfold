@@ -8,6 +8,7 @@ something changes in the Drive folder on this PC).
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
 import sys
 import threading
@@ -341,7 +342,7 @@ class SyncWorker(QObject):
         if known and known != fp:
             log.warning("The sync database belongs to another Apple ID; Photos and Notes start afresh")
             self.state.reset()
-            self.state.set("foreign_files", "1")  # the photos there are the other account's: never sent or taken over
+            self.state.set("foreign_owner", known)  # a photos folder without its account noted gets that one
             self.settings.photos_upload = False
             self._pending = None
             self.pendingChanged.emit(self._drive_pending)
@@ -408,6 +409,7 @@ class SyncWorker(QObject):
         old_folders = self.settings.drive_folders
         albums_changed = settings.albums_as_folders != self.settings.albums_as_folders
         new_account = bool(self.settings.apple_id) and settings.apple_id.lower() != self.settings.apple_id.lower()
+        old_owner = hashlib.sha256(self.settings.apple_id.strip().lower().encode()).hexdigest()[:16]
         self.settings.__dict__.update(settings.copy().__dict__)
         if new_account:
             reset_state = reset_drive = True
@@ -415,7 +417,7 @@ class SyncWorker(QObject):
             self.settings.drive_enabled = False
             self.settings.notes_enabled = False
             self.settings.photos_upload = False  # the photos there are the other account's
-            self._foreign_files = True  # marked once the state is reset below
+            self._foreign_owner = old_owner  # noted once the state is reset below
             if self.notes_state:
                 self.notes_state.reset()
         from .engine import THROTTLE
@@ -436,9 +438,10 @@ class SyncWorker(QObject):
             self.state.set("albums_refreshed", None)
         if reset_state and self.state:
             self.state.reset()
-            if getattr(self, "_foreign_files", False):
-                self.state.set("foreign_files", "1")  # the photos folder holds the other account's photos
-                self._foreign_files = False
+            if getattr(self, "_foreign_owner", None):
+                # a photos folder without its account noted (from before 1.0.16) is the previous account's
+                self.state.set("foreign_owner", self._foreign_owner)
+                self._foreign_owner = None
             self._pending = None
             self.pendingChanged.emit(self._drive_pending)
         if reset_drive and self.drive_state:
@@ -839,11 +842,19 @@ class SyncWorker(QObject):
             if parts:
                 self.notify.emit(t("iCloud Drive synced"), ", ".join(parts))
         partly = getattr(getattr(self.drive, "remote", None), "incomplete", None)
+        if first:  # every file of the first sync counts, also from passes before the complete one
+            try:
+                total = int(self.state.get("drive_first_count") or 0)
+            except ValueError:
+                total = 0
+            total += res.downloaded or 0
+            self.state.set("drive_first_count", str(total))
         if first and res.full and not res.errors and not partly:  # (anything not read or downloaded: not "ready")
             self.state.set("drive_first", None)
+            self.state.set("drive_first_count", None)
             self.notify.emit(t("iCloud Drive is ready"),
                              t("The first sync is done: {n} files downloaded. From now on only changes are synced.",
-                               n=res.downloaded))
+                               n=total))
         if res.errors:
             problems.append(t("iCloud Drive: finished with {n} errors. Will retry.", n=res.errors))
         return True

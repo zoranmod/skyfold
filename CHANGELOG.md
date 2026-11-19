@@ -4,21 +4,22 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Changed
+- **Photos upload is now one-way.** A photo or video sent from the photos folder stays an ordinary file on this PC: deleting or renaming it on the PC doesn't touch it in iCloud, deleting it on the iPhone doesn't touch the PC file, and it isn't downloaded back as a second copy. (In 1.0.15 a sent file became a synced photo; three code reviews kept finding rare cases where that link could delete the wrong file, so it is gone.) Photos already sent with 1.0.15 and matched stay synced as before; ones still waiting for iCloud become one-way.
+- The photos folder now records which Apple ID it was set up for (hidden `.skyfold-account` file). In a folder of another Apple ID nothing is uploaded, and that account's files are never taken over or followed as moved photos, also after choosing the folder again in Settings.
+
 ### Fixed
-- Photos upload, after another review:
-  - Signing in with another Apple ID turns the upload off, also when the other account's database is found at start (e.g. a portable copy): the photos folder holds the first account's photos, and they are never sent to, or taken over by, the new account. A new, empty photos folder makes uploading possible again.
-  - Files the upload leaves alone (a copy iCloud already had, a photo kept on this PC after it was deleted in iCloud, the video of a Live Photo) are recognised by their Windows file id, so also after a rename: they are never sent again and never taken for a moved photo (deleting that photo in iCloud no longer puts such a copy in the Recycle Bin). Undoing a rename of an uploaded photo no longer deletes it in iCloud.
-  - The video part of a Live Photo stays on this PC also after its photo is deleted in iCloud (it was then sent as a separate video).
-  - A photo Skyfold put in the Recycle Bin because it was deleted in iCloud, and that you restore later, is sent to iCloud again.
-  - A photo restored after it was deleted (from the Recycle Bin or a backup) is sent to iCloud again.
-  - An uploaded photo deleted on the phone before iCloud listed it is now handled like any other deletion (its PC copy was kept forever); one iCloud hasn't finished preparing is not taken for deleted.
-  - An uploaded file renamed before iCloud listed it is no longer downloaded a second time (also when its old name is used again, or the upload was turned off meanwhile).
-  - A file whose contents change while Skyfold watches waits the two minutes from then, also when the copy kept the camera's old date and across a restart.
-- Notes: a note page you made read-only no longer stops the Notes sync; the new look leaves it as it is, and a change made in iCloud still replaces it without an error.
+- Photos upload:
+  - Signing in with another Apple ID turns the upload off, also when the other account's database is found at start (e.g. a portable copy).
+  - Files the upload dealt with (sent, a copy iCloud already had, a photo kept on this PC after it was deleted in iCloud, the video of a Live Photo) are recognised by Windows file id and contents, so also after a rename: they aren't sent again and are never taken for a moved photo or adopted by a new download.
+  - The video part of a Live Photo stays on this PC; a separately imported copy of that video is sent.
+  - A file whose contents change while Skyfold watches waits the two minutes from then, also when the copy kept the camera's old date, after a rename and across a restart.
+  - A photo copied in from the iPhone that iCloud already has isn't downloaded a second time.
+- Notes: a note page you made read-only no longer stops the Notes sync; the new look leaves it as it is, and a change made in iCloud still replaces it without an error (a hard-linked archive of it elsewhere stays read-only).
 - **Sync now** while syncing is paused runs once through everything (Photos, iCloud Drive, Notes, Safari bookmarks); answering a Photos question while paused still only touches Photos. Safari bookmarks: **Sync now** refreshes the bookmarks file right away; before, it waited for the 6-hour interval unless a full library check ran. (The Edge extension picks it up on its next update or on *Update now*.)
 - Update checks: GitHub's secondary rate limit (403 or 429 with an explanation in the reply) also uses the releases page and says how long to wait.
 - Sign-in: the saved session is replaced in one step, so a crash or power cut while it is being saved no longer leaves a cut-off file that would mean signing in (and maybe entering a two-factor code) again.
-- iCloud Drive: the "iCloud Drive is ready" notice now comes after the first full sync without errors or unread folders, also when a quick check (after a change on the PC) ran before it.
+- iCloud Drive: the "iCloud Drive is ready" notice now comes after the first full sync without errors or unread folders and counts every file of the first sync, also when a quick check (after a change on the PC) ran before it.
 
 ## [1.0.15] - 2026-11-19
 

@@ -56,12 +56,43 @@ CREATE TABLE IF NOT EXISTS notes_meta (key TEXT PRIMARY KEY, value TEXT);
 
 
 def _unlink_even_read_only(p: Path) -> None:
-    """Remove Skyfold's own stage file, also when it kept a read-only mark from the page it was."""
+    """Remove Skyfold's own stage file, also when it kept a read-only mark from the page it was. The mark
+    belongs to the file, so when the page also has a hard link elsewhere (someone's archive), that
+    link gets its read-only mark back."""
     try:
         p.unlink()
+        return
     except PermissionError:
+        st = os.lstat(p)
+        if os.name != "nt" or st.st_nlink <= 1:
+            os.chmod(p, stat.S_IWRITE)
+            p.unlink()
+            return
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    k32.SetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+
+    class BasicInfo(ctypes.Structure):
+        _fields_ = [("c", ctypes.c_longlong), ("a", ctypes.c_longlong), ("w", ctypes.c_longlong),
+                    ("ch", ctypes.c_longlong), ("attrs", wintypes.DWORD)]
+
+    # FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES, shared for read/write/delete, OPEN_EXISTING
+    h = k32.CreateFileW(str(p), 0x80 | 0x100, 7, None, 3, 0, None)
+    if h in (None, wintypes.HANDLE(-1).value):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
         os.chmod(p, stat.S_IWRITE)
-        p.unlink()
+        p.unlink()  # (this name goes when the handle closes; the other link stays)
+        info = BasicInfo(0, 0, 0, 0, st.st_file_attributes or 0x80)
+        if not k32.SetFileInformationByHandle(h, 0, ctypes.byref(info), ctypes.sizeof(info)):
+            log.warning("Notes: couldn't put back the read-only mark of a linked page")
+    finally:
+        k32.CloseHandle(h)
 
 
 @dataclass(slots=True)
