@@ -31,21 +31,28 @@ def switch_accounts(photos_env, monkeypatch):
     second = FakeRemote()
     second.add("B", "family.jpg", b"shared picture")
     w.set_api(second)
-    assert w.syncer._foreign and not w.settings.photos_upload
+    # 1.0.16: a photos folder belongs to one Apple ID. B is asked to choose a folder; insisting on A's
+    # (confirming it again, with upload on) stops at the folder's owner check: nothing is synced there.
+    assert not w.settings.photos_upload and not w.settings.photos_dir_confirmed
+    insist = w.settings.copy()
+    insist.photos_dir_confirmed = insist.photos_upload = True
+    w.apply_settings(insist, False)
+    w.sync_now()
     return w, second, first_copy
+
+
+def assert_refused(w, second, first_copy):
+    """B never synced in A's folder: no B photo tracked or downloaded there, nothing of A sent or deleted."""
+    assert not w.state.files() and first_copy.is_file()
+    assert not getattr(second, "uploads", []) and not second.deleted
+    assert not any(p.read_bytes() == b"shared picture" and p != first_copy for p in first_copy.parent.rglob("*.jpg"))
 
 
 def test_foreign_photo_is_not_claimed_by_move_detection(photos_env, monkeypatch):
     w, second, first_copy = switch_accounts(photos_env, monkeypatch)
-    second_copy = photos_env[2] / w.state.files()[0].rel_path
-    assert second_copy != first_copy and first_copy.read_bytes() == second_copy.read_bytes()
-    second_copy.unlink()  # clean up B's downloaded duplicate
+    assert_refused(w, second, first_copy)  # (so B has no copy whose removal could claim A's file)
     w.sync_now()
-    # A safe implementation may delete B here or hold the ambiguous move for review.
-    if "B" in second.assets:
-        second.remove("B")
-    w.sync_now()
-    assert first_copy.exists()
+    assert first_copy.exists() and not second.deleted
 
 
 def test_reselecting_protected_folder_does_not_upload_previous_accounts_photos(

@@ -14,7 +14,7 @@ from tests.test_drive import write
 from tests.test_engine import FakeRemote, env as photos_env
 from tests.test_notes import env as notes_env
 from tests.test_review38_codex_probes import offline_worker
-from tests.test_review39_codex_probes import switch_accounts
+from tests.test_review39_codex_probes import assert_refused, switch_accounts
 
 
 def select_root(w, root, upload):
@@ -43,22 +43,11 @@ def test_selecting_around_another_accounts_root_cannot_export_it(photos_env, mon
 
 
 def test_returning_owner_cannot_upload_guest_accounts_downloads(photos_env, monkeypatch):
-    w, second, _ = switch_accounts(photos_env, monkeypatch)
+    w, second, first_copy = switch_accounts(photos_env, monkeypatch)
     second.add("GUEST", "guest-private.jpg", b"second account only")
     w.sync_now()
-    guest = photos_env[2] / next(r.rel_path for r in w.state.files() if r.asset_id == "GUEST")
-    assert guest.exists() and w.syncer._foreign
-    w.sign_out()
-    owner = w.settings.copy()
-    owner.apple_id = "first@example.invalid"
-    w.apply_settings(owner, True)
-    first = photos_env[1]
-    w.set_api(first)
-    enabled = w.settings.copy()
-    enabled.photos_upload = True
-    w.apply_settings(enabled, False)
-    w.sync_now()
-    assert "guest-private.jpg" not in getattr(first, "uploads", [])
+    assert_refused(w, second, first_copy)  # B's photo never lands in A's folder
+    assert not list(photos_env[2].rglob("guest-private*"))
 
 
 def test_upgrade_preserves_dc4ca0d_foreign_folder(photos_env, monkeypatch):
@@ -79,21 +68,12 @@ def test_upgrade_preserves_dc4ca0d_foreign_folder(photos_env, monkeypatch):
     assert not second.assets
 
 
-@pytest.mark.parametrize("change", ["in_place_edit", pytest.param("new_file", marks=pytest.mark.xfail(
-    strict=True, reason="by design: a file added while B is signed in can't be told apart from B's own"))])
+@pytest.mark.parametrize("change", ["in_place_edit", "new_file"])
 def test_foreign_snapshot_covers_later_files_and_sizes(photos_env, monkeypatch, change):
     w, second, first_copy = switch_accounts(photos_env, monkeypatch)
     second.add("EXPORT", "edited.jpg", b"edited family export at a new size")
     w.sync_now()
-    own = photos_env[2] / next(r.rel_path for r in w.state.files() if r.asset_id == "EXPORT")
-    foreign = first_copy if change == "in_place_edit" else first_copy.with_name("archived-edit.jpg")
-    foreign.write_bytes(own.read_bytes())
-    own.unlink()  # remove B's copy, leaving the owner's matching export
-    w.sync_now()
-    if "EXPORT" in second.assets:
-        second.remove("EXPORT")
-    w.sync_now()
-    assert foreign.is_file()
+    assert_refused(w, second, first_copy)  # B has no copies in A's folder to remove or claim with
 
 
 @pytest.mark.parametrize("side", ["cloud", "pc"])
@@ -163,8 +143,6 @@ def test_lost_reply_does_not_take_an_unrelated_same_content_asset(photos_env):
     assert "SENT" in remote.assets and "SENT" not in s.state.asset_ids()
 
 
-@pytest.mark.xfail(strict=True, reason="accepted: overwriting a sent file with a tracked photo's exact bytes makes "
-                   "it that photo for move detection; ignoring contents would let a reused file id hide a real move")
 def test_edited_sent_file_cannot_be_claimed_as_a_tracked_move(photos_env):
     s, remote, root, _ = photos_env
     remote.add("PHONE", "phone.jpg", b"full quality")
@@ -215,14 +193,10 @@ def test_renamed_legacy_keep_is_protected_before_upload_scan(photos_env):
 
 def test_tracking_at_a_path_cannot_recycle_a_known_foreign_file(photos_env, monkeypatch):
     w, second, first_copy = switch_accounts(photos_env, monkeypatch)
-    own = photos_env[2] / next(r.rel_path for r in w.state.files() if r.asset_id == "B")
-    assert own != first_copy and own.read_bytes() == first_copy.read_bytes()
-    own.unlink()
-    first_copy.rename(own)  # consolidate the two copies under the preferred filename
-    assert w.syncer._foreign_file(own.stat())
+    assert_refused(w, second, first_copy)
     second.remove("B")
     w.sync_now()
-    assert own.is_file()
+    assert first_copy.is_file()
 
 
 def test_tracking_at_a_path_cannot_recycle_a_known_upload(photos_env):
@@ -373,6 +347,7 @@ def test_portable_account_in_new_empty_folder_can_enable_upload(photos_env, tmp_
     reopened.set_api(remote)
     enabled = reopened.settings.copy()
     enabled.photos_upload = True
+    enabled.photos_dir_confirmed = True  # (1.0.16: another Apple ID's database asks to choose the folder first)
     reopened.apply_settings(enabled, False)
     write(root, "second-only.jpg", b"second only", age=3600)
     reopened.sync_now()

@@ -342,8 +342,8 @@ class SyncWorker(QObject):
         if known and known != fp:
             log.warning("The sync database belongs to another Apple ID; Photos and Notes start afresh")
             self.state.reset()
-            self.state.set("foreign_owner", known)  # a photos folder without its account noted gets that one
             self.settings.photos_upload = False
+            self.settings.photos_dir_confirmed = False  # a photos folder belongs to one Apple ID: choose one
             self._pending = None
             self.pendingChanged.emit(self._drive_pending)
             if self.notes_state is not None:
@@ -409,7 +409,6 @@ class SyncWorker(QObject):
         old_folders = self.settings.drive_folders
         albums_changed = settings.albums_as_folders != self.settings.albums_as_folders
         new_account = bool(self.settings.apple_id) and settings.apple_id.lower() != self.settings.apple_id.lower()
-        old_owner = hashlib.sha256(self.settings.apple_id.strip().lower().encode()).hexdigest()[:16]
         self.settings.__dict__.update(settings.copy().__dict__)
         if new_account:
             reset_state = reset_drive = True
@@ -417,7 +416,7 @@ class SyncWorker(QObject):
             self.settings.drive_enabled = False
             self.settings.notes_enabled = False
             self.settings.photos_upload = False  # the photos there are the other account's
-            self._foreign_owner = old_owner  # noted once the state is reset below
+            self.settings.photos_dir_confirmed = False  # a photos folder belongs to one Apple ID: choose one
             if self.notes_state:
                 self.notes_state.reset()
         from .engine import THROTTLE
@@ -438,10 +437,6 @@ class SyncWorker(QObject):
             self.state.set("albums_refreshed", None)
         if reset_state and self.state:
             self.state.reset()
-            if getattr(self, "_foreign_owner", None):
-                # a photos folder without its account noted (from before 1.0.16) is the previous account's
-                self.state.set("foreign_owner", self._foreign_owner)
-                self._foreign_owner = None
             self._pending = None
             self.pendingChanged.emit(self._drive_pending)
         if reset_drive and self.drive_state:

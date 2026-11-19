@@ -543,19 +543,19 @@ class Controller(QObject):
             if apple_id.lower() != (self.settings.apple_id or "").lower():
                 _close_stale_settings(self)  # it shows the other account's settings
             if self.settings.apple_id and apple_id.lower() != self.settings.apple_id.lower():
-                turned_off = [name for on, name in ((self.settings.drive_enabled, t("iCloud Drive")),
-                                                    (self.settings.notes_enabled, t("Notes")),
-                                                    (self.settings.photos_upload, t("Photos upload"))) if on]
+                turned_off = [t("Photos")] + [name for on, name in ((self.settings.drive_enabled, t("iCloud Drive")),
+                                                                    (self.settings.notes_enabled, t("Notes"))) if on]
                 self.settings.drive_enabled = False
                 self.settings.notes_enabled = False
-                # the photos folder holds the other account's photos: never send them to this one
+                # a photos folder belongs to one Apple ID: the new one chooses its own
                 self.settings.photos_upload = False
+                self.settings.photos_dir_confirmed = False
                 self.req.applySettings.emit(self.settings.copy(), True, False)  # new account → fresh state
                 if turned_off:
-                    QTimer.singleShot(300, lambda: inform(
-                        None, APP_NAME, t("You signed in with another Apple ID. Turned off: {services}. Their folders hold the "
-                                          "other account's files; choose a new, empty folder in Settings to turn them "
-                                          "on again.", services=", ".join(turned_off))))
+                    show, text = inform, t("You signed in with another Apple ID. Turned off: {services}. Their folders "
+                                           "hold the other account's files; choose a new, empty folder in Settings to "
+                                           "turn them on again.", services=", ".join(turned_off))
+                    QTimer.singleShot(300, lambda: show(None, APP_NAME, text))
             auth.commit_login(api)  # the old session must not overwrite this one on disk
             self.worker.cancel()  # so the worker switches to the new sign-in now, not after a long pass
             self.settings.apple_id = apple_id

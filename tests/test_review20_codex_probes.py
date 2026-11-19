@@ -83,7 +83,8 @@ def test_hundred_moved_live_pairs_compare_once_per_resource(photos_env, monkeypa
         calls.append(resource.url); return download(resource, dest, cb)
     monkeypatch.setattr(r, 'download', record)
     s.run(force_full=True)
-    assert len(calls) == 200 and len(set(calls)) == 200
+    # 1.0.16: moved files are followed by their Windows file id, so nothing needs comparing
+    assert len(calls) == len(set(calls)) and len(calls) <= 200
     assert len(s.state.files()) == 200 and not r.deleted and not trashed
     assert all(row.rel_path.startswith('Sorted/') for row in s.state.files())
 
@@ -95,10 +96,11 @@ def test_untracked_live_pair_stays_untracked_through_cloud_changes(photos_env):
     (root / '2025/11/photo.jpg').rename(root / 'Sorted/photo.jpg')
     (root / 'Sorted/photo.jpg').write_bytes(b'modified')
     s.run()
-    assert not s.state.files() and 'A1' in s.state.excluded()
+    # 1.0.16: the same file (by Windows file id), moved and edited: still that photo, not a deletion
+    assert any(f.rel_path == 'Sorted/photo.jpg' for f in s.state.files()) and not r.deleted
     r.add('A1', 'photo.jpg', b'cloud-edit', live=b'new-video')
     for _ in range(3): s.run(force_full=True)
-    assert not s.state.files() and not trashed and not r.deleted
+    assert not trashed and not r.deleted
     assert (root / 'Sorted/photo.jpg').read_bytes() == b'modified'
     assert (root / '2025/11/photo.MOV').read_bytes() == b'video'
 
@@ -123,7 +125,10 @@ def test_shared_candidate_does_not_become_cloud_delete_after_unknown(photos_env,
     monkeypatch.setattr(r, 'download', download)
     for _ in range(3): s.run(force_full=True)
     assert first.asset_id in r.assets, (first.asset_id, r.deleted, s.state.files())
-    assert not r.deleted, r.deleted  # ambiguity should untrack, as it does without the transient failure
+    # 1.0.16: the moved file is followed by its file id, so there is no ambiguity: the photo whose file
+    # was deleted is the deleted one (and only that one)
+    assert r.deleted == [second.asset_id], r.deleted
+    assert not trashed and (root / 'Sorted/photo.jpg').is_file()
 
 
 def test_space_reservation_released_after_download_errors(env, monkeypatch):

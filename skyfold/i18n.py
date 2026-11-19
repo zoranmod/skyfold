@@ -490,9 +490,11 @@ BS: dict[str, str] = {
     "When a file changed on both sides, both versions are kept; the PC one gets \"(PC conflict …)\" in its name.":
         "Kad se fajl promijeni na obje strane, čuvaju se obje verzije; ona s PC-a dobije \"(PC conflict …)\" u imenu.",
     "You changed the folder.\n\nFiles won't be moved: the new location is filled from iCloud, and the old folder "
-    "stays untouched and is no longer synced. Continue?":
+    "stays untouched and is no longer synced. Files in the new folder are synced both ways: deleting one there "
+    "deletes it in iCloud too. Continue?":
         "Promijenio si folder.\n\nFajlovi se neće premještati: nova lokacija se puni iz iCloud-a, a stari folder "
-        "ostaje netaknut i više se ne sinhronizuje. Nastaviti?",
+        "ostaje netaknut i više se ne sinhronizuje. Fajlovi u novom folderu se sinhronizuju u oba smjera: "
+        "kad obrišeš jedan tamo, briše se i u iCloud-u. Nastaviti?",
     "iCloud Drive": "iCloud Drive",
     "iCloud Drive synced": "iCloud Drive sinhronizovan",
     "iCloud Drive: finished with {n} errors. Will retry.": "iCloud Drive: završeno uz {n} grešaka. Pokušaću ponovo.",
@@ -593,10 +595,14 @@ BS: dict[str, str] = {
     "Already in iCloud Photos: {name}": "Već je u iCloud slikama: {name}",
     "Uploaded to iCloud Photos: {name}": "Poslano u iCloud slike: {name}",
     "Photos upload": "Slanje slika u iCloud",
-    "The photos folder now belongs to another Skyfold library (e.g. another disk with the same drive letter). Syncing has stopped so nothing gets deleted by mistake; choose the folder again in Settings.":
-        "Folder za slike sada pripada drugoj Skyfold biblioteci (npr. drugi disk s istim slovom). Sinhronizacija je zaustavljena da se ništa ne obriše greškom; ponovo izaberi folder u Postavkama.",
-    "Photos aren't uploaded from this folder: it holds another Apple ID's photos. Choose a new, empty photos folder to upload.":
-        "Slike iz ovog foldera se ne šalju: u njemu su slike drugog Apple ID-a. Za slanje izaberi novi, prazan folder za slike.",
+    "The photos folder now holds another Skyfold library (e.g. another disk with the same drive letter, or an older copy). Syncing has stopped so nothing gets deleted by mistake; choose the folder again in Settings.":
+        "U folderu za slike je sada druga Skyfold biblioteka (npr. drugi disk s istim slovom ili starija kopija). Sinhronizacija je zaustavljena da se ništa ne obriše greškom; ponovo izaberi folder u Postavkama.",
+    "The photos folder is inside another Skyfold photos folder ({path}). Choose a folder outside it in Settings.":
+        "Folder za slike je unutar drugog Skyfold foldera za slike ({path}). U Postavkama izaberi folder izvan njega.",
+    "This photos folder belongs to another Apple ID. Choose another folder in Settings.":
+        "Ovaj folder za slike pripada drugom Apple ID-u. U Postavkama izaberi drugi folder.",
+    "{path} is another photos folder inside this one; move it out of the photos folder":
+        "{path} je drugi folder za slike unutar ovoga; premjesti ga iz foldera za slike",
     "GitHub is limiting update checks from your internet connection right now; try again in {n} min.":
         "GitHub trenutno ograničava provjere ažuriranja s tvoje internet veze; pokušaj ponovo za {n} min.",
     "was {old}": "ranije {old}",

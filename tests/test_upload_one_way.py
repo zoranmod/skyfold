@@ -2,6 +2,8 @@
 downloaded back. Records of the two-way upload of 1.0.15 are carried over."""
 import json
 
+import pytest
+
 from skyfold import engine as eng
 from tests.test_engine import FakeRemote, env  # noqa: F401
 from tests.test_drive import write
@@ -59,11 +61,11 @@ def test_photos_folder_records_its_account(env, tmp_path):  # noqa: F811
     s, remote, root, _ = env
     s.settings.apple_id = "a@example.invalid"
     s.run()
-    owner = (root / eng.OWNER_FILE).read_text(encoding="utf-8").strip()
-    assert owner == s._owner_fp() and not s._foreign
+    fp, library = (root / eng.OWNER_FILE).read_text(encoding="utf-8").split()
+    assert fp == s._owner_fp() and library == s.state.get("library")
     s.settings.apple_id = "b@example.invalid"
     s.settings.photos_upload = True
     write(root, "a-private.jpg", b"a", age=300)
-    s.run()
-    assert s._foreign and not getattr(remote, "uploads", [])
-    assert json.loads(s.state.get("foreign_ids"))
+    with pytest.raises(eng.SyncError):
+        s.run()  # one Apple ID per photos folder
+    assert not getattr(remote, "uploads", [])

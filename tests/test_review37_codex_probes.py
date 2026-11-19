@@ -423,7 +423,8 @@ def test_r37_switching_apple_id_does_not_upload_old_accounts_library(photos_env,
         from PySide6.QtTest import QTest
         QTest.qWait(400)
         from skyfold.i18n import t
-        assert told and t("Photos upload") in told[0]
+        assert told and t("Photos") in told[0]  # (1.0.16: the new Apple ID chooses its own photos folder)
+        assert w.settings.photos_dir_confirmed is False
     finally:
         dialog.close()
 

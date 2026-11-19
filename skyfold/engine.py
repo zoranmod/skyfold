@@ -15,6 +15,7 @@ import stat
 import tempfile
 import threading
 import time
+import uuid
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -370,8 +371,8 @@ class Syncer:
         self.held: set[str] = set()  # deletions currently waiting for the user's decision
         self._upload_saw_missing = False
         self._upload_idle = {}
-        self._foreign = False
-        self._foreign_set: set | None = None
+        self._new_marker = False
+        self._held_set: set | None = None
         # Paths the engine itself touched recently, so the folder watcher can ignore them.
         self.own_paths: dict[str, float] = {}
 
@@ -412,6 +413,7 @@ class Syncer:
         return name
 
     def _check_root(self) -> None:
+        self._new_marker = False
         root = self.root
         has_files = bool(self.state.asset_ids())
         if not root.exists():
@@ -431,6 +433,7 @@ class Syncer:
                     "Syncing has stopped so nothing gets deleted by mistake."
                 ))
             create_marker(marker, t("This folder is synced by Skyfold. Don't delete this file.\n"))
+            self._new_marker = True
 
     # local changes --------------------------------------------------------
     def scan_local(self) -> tuple[list[str], int]:
@@ -439,14 +442,20 @@ class Syncer:
         # Only files that are really missing count; one that can't be looked at now decides nothing.
         missing = []
         self._upload_saw_missing = False
+        fids = {k.removeprefix("fid:"): v for k, v in self.state.items("fid:")}
         for row in rows:
             try:
-                os.lstat(self._abs(row.rel_path))
+                st = os.lstat(self._abs(row.rel_path))
             except (FileNotFoundError, NotADirectoryError):
                 missing.append(row)
                 self._upload_saw_missing = True
+                continue
             except OSError:
                 self._upload_saw_missing = True  # a new-looking file might be this one
+                continue
+            if st.st_ino and f"{row.asset_id}#{row.resource_key}" not in fids:
+                # (photos of earlier versions: their file id is noted the first time they are seen)
+                self.state.set(f"fid:{row.asset_id}#{row.resource_key}", f"{st.st_dev}:{st.st_ino}")
         if not missing:
             self._told_unsure = None  # nothing held: a later hold is told again
             return [], 0
@@ -457,6 +466,7 @@ class Syncer:
         # another Apple ID's files: never taken for a moved photo, or deleting that photo in iCloud later
         # would recycle them.
         album_entries = {rel.lower() for rel in self.state.album_links()}  # same name and size as the originals
+        by_id: dict[str, str] = {}  # untracked files by Windows file id: a moved or renamed photo keeps it
         index: dict[tuple[str, int], list[str]] = defaultdict(list)  # every look-alike, not just one
         by_size: dict[int, list[str]] = defaultdict(list)  # untracked files by size: renamed photos
         unsure = []  # a folder that couldn't be read: any missing photo may have moved there
@@ -478,8 +488,12 @@ class Syncer:
                 except OSError:
                     unsure_names.add(fn.lower())
                     continue
-                if fn == OWNER_FILE or self._foreign_file(st) or self._is_marked_file(full, rel, st):
+                if fn == OWNER_FILE:
                     continue
+                if st.st_ino:
+                    by_id[f"{st.st_dev}:{st.st_ino}"] = rel
+                if self._marked(st, rel):
+                    continue  # sent, kept or a copy iCloud had: someone's own file, never a moved photo
                 index[(fn.lower(), size)].append(rel)
                 by_size[size].append(rel)  # (a photo renamed in Explorer keeps its size, not its name)
         if unsure or unsure_names:
@@ -498,7 +512,17 @@ class Syncer:
         maybe: dict[tuple[str, str], list[str]] = {}
         by_content: dict[tuple[str, str], str] = {}  # renamed (and maybe moved): proven by its content
         taken: set[str] = set()
+        by_ident: dict[tuple[str, str], str] = {}
+        for r in missing:  # the same file (by id) somewhere else: moved or renamed, edited or not
+            rel = by_id.get(fids.get(f"{r.asset_id}#{r.resource_key}", ""))
+            if rel and rel not in taken:
+                by_ident[(r.asset_id, r.resource_key)] = rel
+                taken.add(rel)
+        for files in list(index.values()) + list(by_size.values()):
+            files[:] = [x for x in files if x not in taken]
         for r in missing:
+            if (r.asset_id, r.resource_key) in by_ident:
+                continue
             key = (PurePosixPath(r.rel_path).name.lower(), r.size or -1)
             if index.get(key):
                 maybe[(r.asset_id, r.resource_key)] = index[key]  # shared: each file is claimed once
@@ -506,8 +530,6 @@ class Syncer:
             others = by_size.get(r.size) if r.size else None
             if not others:
                 continue
-            if r.hash and self.state.get("upload_legacy:" + r.hash):
-                continue  # a copy with these bytes was kept on this PC before: it isn't this photo, moved
             if r.hash:  # the fingerprint of what was downloaded: compared here, nothing downloaded
                 for rel in others:
                     if rel in taken:
@@ -528,6 +550,7 @@ class Syncer:
                     files.remove(rel)
         confirmed, unknown = self._confirm_moves({k: v for k, v in maybe.items() if v}) if maybe else ({}, set())
         confirmed.update(by_content)
+        confirmed.update(by_ident)
         # Photos sharing the same look-alikes are decided together: while one of them couldn't be
         # compared, none of the others may claim a file (it might be the unknown one's) or count as deleted.
         shared = {id(maybe[w]) for w in unknown}
@@ -625,79 +648,112 @@ class Syncer:
     def _owner_fp(self) -> str:
         return hashlib.sha256((self.settings.apple_id or "").strip().lower().encode()).hexdigest()[:16]
 
+    def _note_file_id(self, asset_id: str, key: str, rel: str) -> None:
+        """The Windows file id of a photo Skyfold wrote: a rename or move keeps it, so the photo is
+        followed by it (also after it was edited). A stale upload mark on a reused id is dropped."""
+        try:
+            st = os.lstat(self._abs(rel))
+        except OSError:
+            return
+        if st.st_ino:
+            self.state.set(f"fid:{asset_id}#{key}", f"{st.st_dev}:{st.st_ino}")
+            self.state.set(f"upload_file:{st.st_dev}:{st.st_ino}", None)
+
+    def _owner_of(self, folder: Path):
+        """(fingerprint, library id) from folder/.skyfold-account; ("?", "") for a photos folder of a
+        version before 1.0.16 (its marker only); None when folder isn't a photos folder."""
+        try:
+            parts = (folder / OWNER_FILE).read_text(encoding="utf-8").split()
+            return (parts[0] if parts else "?", parts[1] if len(parts) > 1 else "")
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return ("?", "")  # can't be read: not taken for this user's
+        if any((folder / m).exists() for m in (MARKER, *LEGACY_MARKERS)):
+            return ("?", "")
+        return None
+
     def _check_owner(self) -> None:
-        """The photos folder records the Apple ID it was set up for (.skyfold-account). In a folder of
-        another Apple ID nothing is uploaded, and its files are never taken over (adopted, followed as
-        moved or recycled) by this one - also after choosing it again in Settings, or choosing a folder
-        inside it. Another library showing up at this path (a different disk) stops the sync."""
-        self._foreign = False
+        """A photos folder belongs to one Apple ID (recorded in .skyfold-account with an id of this
+        library). Another Apple ID's folder, a folder inside another photos folder, or another library
+        that appeared at this path (e.g. a different disk) stops the sync: nothing is downloaded, sent,
+        taken over or deleted there."""
         if not self.settings.apple_id:
             return
         me = self._owner_fp()
-        owner = None
-        for folder in [self.root, *self.root.parents]:  # (a folder chosen inside another library)
-            try:
-                owner = (folder / OWNER_FILE).read_text(encoding="utf-8").strip()
-                break
-            except FileNotFoundError:
-                continue
-            except OSError:
-                owner = ""  # can't be read: treated as another account's (nothing uploaded)
-                break
-        if owner is None:
-            owner = self.state.get("foreign_owner") or ("?" if self.state.get("foreign_files") else me)
-            if owner != me and not any(n not in (MARKER, OWNER_FILE) for n in os.listdir(self.root)):
-                owner = me  # a new, empty folder: nothing of the other account is in it
-            owner_file = self.root / OWNER_FILE
-            try:
-                with open(owner_file, "x", encoding="utf-8") as fh:
-                    fh.write(owner + "\n")
-                if os.name == "nt":
-                    import ctypes
+        for folder in self.root.parents:
+            owner = self._owner_of(folder)
+            if owner is not None and owner[0] != me:
+                raise SyncError(t("The photos folder is inside another Skyfold photos folder ({path}). Choose "
+                                  "a folder outside it in Settings.", path=folder))
+        owner_file = self.root / OWNER_FILE
+        try:
+            parts = owner_file.read_text(encoding="utf-8").split()
+        except FileNotFoundError:
+            parts = None
+        except OSError as exc:
+            raise SyncError(t("Couldn't check the sync marker in {path}: {error}. Syncing has stopped so nothing "
+                              "gets changed by mistake; it is tried again next time.",
+                              path=self.root, error=brief(exc))) from exc
+        if parts is not None:
+            if not parts or parts[0] != me:
+                raise SyncError(t("This photos folder belongs to another Apple ID. Choose another folder in "
+                                  "Settings."))
+            library = parts[1] if len(parts) > 1 else ""
+        else:
+            library = uuid.uuid4().hex[:16]
+            others = [n for n in os.listdir(self.root) if n not in (MARKER, OWNER_FILE)]
+            if others and not self._new_marker and not self.state.asset_ids():
+                # A photos folder of a version before 1.0.16 that this database didn't sync: whose it
+                # was can't be told. It becomes this Apple ID's, but what is in it now is never sent.
+                held = []
+                for dirname, dirs, files in os.walk(self.root):
+                    dirs[:] = [d for d in dirs if not _is_link(Path(dirname) / d)]
+                    for name in files:
+                        try:
+                            st = (Path(dirname) / name).lstat()
+                        except OSError:
+                            continue
+                        if st.st_ino:
+                            held.append([st.st_dev, st.st_ino])
+                old = json.loads(self.state.get("upload_legacy:held") or "[]")
+                self.state.set("upload_legacy:held", json.dumps(old + held))
+            with open(owner_file, "x", encoding="utf-8") as fh:
+                fh.write(f"{me} {library}\n")
+            if os.name == "nt":
+                import ctypes
 
-                    ctypes.windll.kernel32.SetFileAttributesW(str(owner_file), 0x2)  # hidden
-            except OSError as exc:
-                log.info("Photos: couldn't record the folder's account: %s", exc)
-                owner = owner if owner == me else ""
-        seen_before = self.state.get("folder_owner")
-        if seen_before is not None and seen_before != owner:
-            raise SyncError(t("The photos folder now belongs to another Skyfold library (e.g. another disk with "
-                              "the same drive letter). Syncing has stopped so nothing gets deleted by mistake; "
-                              "choose the folder again in Settings."))
-        self.state.set("folder_owner", owner)
-        self._foreign = owner != me
-        if self._foreign and self.state.get("foreign_ids") is None:
-            seen = []  # the files here now are the other account's
-            for dirname, dirs, files in os.walk(self.root):
-                dirs[:] = [d for d in dirs if not _is_link(Path(dirname) / d)]
-                for name in files:
-                    try:
-                        st = (Path(dirname) / name).lstat()
-                    except OSError:
-                        continue
-                    seen.append([st.st_dev, st.st_ino])
-            self.state.set("foreign_ids", json.dumps(seen))
+                ctypes.windll.kernel32.SetFileAttributesW(str(owner_file), 0x2)  # hidden
+        known = self.state.get("library")
+        if known is not None and known != library:
+            raise SyncError(t("The photos folder now holds another Skyfold library (e.g. another disk with the "
+                              "same drive letter, or an older copy). Syncing has stopped so nothing gets deleted "
+                              "by mistake; choose the folder again in Settings."))
+        self.state.set("library", library)
 
-    def _foreign_file(self, st: os.stat_result) -> bool:
-        """A file of the other Apple ID (by file id, so also after it was edited or renamed)."""
-        if not getattr(self, "_foreign", False):
-            return False
-        if getattr(self, "_foreign_set", None) is None:
-            self._foreign_set = {tuple(x[:2]) for x in json.loads(self.state.get("foreign_ids") or "[]")}
-        return bool(st.st_ino) and (st.st_dev, st.st_ino) in self._foreign_set
+    def _held_ids(self) -> set:
+        if getattr(self, "_held_set", None) is None:
+            self._held_set = {tuple(x) for x in json.loads(self.state.get("upload_legacy:held") or "[]")}
+        return self._held_set
 
-    def _protected(self, p: Path, rel: str) -> bool:
-        """Right before a file is recycled for a photo deleted in iCloud: is it really that photo, or a
-        file the upload dealt with / of another Apple ID that was put at its name?"""
+    def _protected(self, p: Path, rel: str, fid: str | None = None) -> bool:
+        """Right before a file is recycled for a photo deleted in iCloud: is it still the file Skyfold
+        downloaded (same file id), and not one the upload dealt with?"""
         try:
             st = os.lstat(p)
         except OSError:
             return False
-        return self._foreign_file(st) or self._is_marked_file(p, rel, st)
+        if fid and st.st_ino and fid != f"{st.st_dev}:{st.st_ino}":
+            return True  # another file was put at this name: not Skyfold's to recycle
+        return bool(self._marked(st, rel))
 
     def _nested_library(self, folder: Path) -> bool:
-        """A folder inside this one that is itself a Skyfold photos folder (e.g. another account's)."""
-        return folder != self.root and ((folder / MARKER).exists() or (folder / OWNER_FILE).exists())
+        """A folder inside this one that is another Apple ID's (or an unknown) photos folder. A folder of
+        this Apple ID chosen before (e.g. a month folder) is just part of this one."""
+        if folder == self.root:
+            return False
+        owner = self._owner_of(folder)
+        return owner is not None and owner[0] != self._owner_fp()
 
     def _find_by_id(self, ident) -> str | None:
         if not ident or len(ident) != 2 or not ident[1]:
@@ -733,7 +789,7 @@ class Syncer:
             except OSError:
                 return None
             if rel.lower() in tracked:
-                return "other"
+                return "tracked"  # (a matched 1.0.15 upload: an ordinary synced photo, nothing to remember)
             try:
                 digest = check(st, p)
             except OSError:
@@ -754,8 +810,9 @@ class Syncer:
                 done = mark_at(rel, by_digest(value), "kept")
                 if done == "marked":
                     marked_digests.add(value)
-                elif done == "other":  # (renamed while Skyfold was closed: the first file with these bytes)
-                    self.state.set("upload_legacy:" + value, "1")
+                elif done == "other":  # (renamed while Skyfold was closed: a file with these bytes)
+                    count = int(self.state.get("upload_legacy:" + value) or 0)
+                    self.state.set("upload_legacy:" + value, str(count + 1))
             elif value and ":" in value:  # oldest format: size and whole seconds
                 size, _, secs = value.partition(":")
                 done = mark_at(rel, lambda st, p: _file_hash(p) if f"{st.st_size}:{int(st.st_mtime)}" == value
@@ -765,13 +822,20 @@ class Syncer:
             if done:
                 self.state.set(key, None)
         for key, _ in self.state.items("upload_known:"):
-            if key.removeprefix("upload_known:") not in marked_digests:
-                self.state.set("upload_legacy:" + key.removeprefix("upload_known:"), "1")
+            digest = key.removeprefix("upload_known:")
+            if digest not in marked_digests and not self.state.get("upload_legacy:" + digest):
+                self.state.set("upload_legacy:" + digest, "1")
             self.state.set(key, None)
         for key, value in self.state.items("upload_pending:"):
             record = json.loads(value)
-            if known_missing(self._abs(record["rel"])):
-                record["rel"] = self._find_by_id(record.get("identity")) or record["rel"]  # renamed meanwhile
+            ident = record.get("identity") or []
+            try:
+                here = os.lstat(self._abs(record["rel"]))
+                moved = len(ident) == 2 and bool(ident[1]) and [here.st_dev, here.st_ino] != ident
+            except OSError:
+                moved = True
+            if moved:  # renamed meanwhile (its old name may hold another file by now)
+                record["rel"] = self._find_by_id(ident) or record["rel"]
             if record.get("asset"):
                 if record["asset"] not in tracked_ids:
                     self.state.set("upload_sent:" + record["asset"], "1")
@@ -880,11 +944,19 @@ class Syncer:
                             self._mark(st, rel, digest, mark[1])  # readable now: bound to its contents
                         self._upload_idle[key] = (signature, now + 600)
                         continue  # (renamed or moved: the same file; edited: new contents, sent)
-                    if self.state.get("upload_legacy:" + digest):
+                    left = self.state.get("upload_legacy:" + digest)
+                    if left:
                         self._mark(st, rel, digest, "kept")  # dealt with by an earlier version: this file
-                        self.state.set("upload_legacy:" + digest, None)
+                        try:
+                            left = int(left) - 1
+                        except ValueError:
+                            left = 0
+                        self.state.set("upload_legacy:" + digest, str(left) if left > 0 else None)
                         self._upload_idle[key] = (signature, now + 600)
                         continue
+                    if st.st_ino and (st.st_dev, st.st_ino) in self._held_ids():
+                        self._upload_idle[key] = (signature, now + 600)
+                        continue  # in an older photos folder when it was taken over: whose isn't known
                     if live_video:
                         # The single-file upload can't make a Live Photo pair; on its own it would be a
                         # separate video. It stays on this PC, also after its photo is gone.
@@ -917,7 +989,8 @@ class Syncer:
                         if receipt.asset_id not in tracked_ids:
                             self.state.set("upload_sent:" + receipt.asset_id, "1")  # never downloaded back
                     else:
-                        self.state.set("upload_lost:" + digest, path.name)  # recognised by contents and name
+                        # any item in iCloud with these bytes is this file's (or the same picture): one-way
+                        self.state.set("upload_lost:" + digest, "1")
                     if receipt is None or (not receipt.asset_id and not receipt.is_duplicate):
                         self.cb.activity("error", t("Upload unconfirmed: {name}. Check iCloud Photos and add it there manually if missing.", name=path.name))
                     elif receipt.is_duplicate:
@@ -990,19 +1063,14 @@ class Syncer:
         self._check_root()
 
         self.cb.status(t("Checking for changes…"))
-        self._foreign_set = None
+        self._held_set = None
         self._id_index = None
         self._check_owner()
         self._migrate_upload_records()  # (only does something for records of an earlier version)
         local_deleted, moved = self.scan_local()
         if moved:
             self.cb.activity("info", t("Followed {n} files moved inside the folder", n=moved))
-        if getattr(self.settings, "photos_upload", False) and self._foreign:
-            if not getattr(self, "_told_foreign", False):
-                self._told_foreign = True
-                self.cb.activity("info", t("Photos aren't uploaded from this folder: it holds another Apple ID's "
-                                           "photos. Choose a new, empty photos folder to upload."))
-        elif getattr(self.settings, "photos_upload", False) and not self._upload_saw_missing and not self.held:
+        if getattr(self.settings, "photos_upload", False) and not self._upload_saw_missing and not self.held:
             # (only when nothing is missing: a new-looking file might be a photo moved or renamed)
             self.upload_new()
 
@@ -1093,7 +1161,8 @@ class Syncer:
                     for r in rows_by_asset[a]:
                         p = self._abs(r.rel_path)
                         if (r.resource_key != "original" and not known_missing(p) and not self._changed_on_pc(r)
-                                and not self._protected(p, r.rel_path)):
+                                and not self._protected(p, r.rel_path,
+                                                        self.state.get(f"fid:{r.asset_id}#{r.resource_key}"))):
                             try:
                                 self._trash_inside(p)
                             except OSError:
@@ -1122,7 +1191,8 @@ class Syncer:
                     self.cb.progress(i, len(to_pc), t("Moving deleted photos to the Recycle Bin…"))
                     ok = True
                     rows_now = rows_by_asset[a]
-                    if any(self._changed_on_pc(r) or self._protected(self._abs(r.rel_path), r.rel_path)
+                    if any(self._changed_on_pc(r) or self._protected(
+                            self._abs(r.rel_path), r.rel_path, self.state.get(f"fid:{r.asset_id}#{r.resource_key}"))
                            for r in rows_now):
                         # edited on this PC (another size than the photo Skyfold downloaded): kept
                         self._keep_on_pc(a, rows_now)
@@ -1215,6 +1285,12 @@ class Syncer:
                     if rel is None:  # an identical file already existed and was adopted
                         continue
                     target = self._abs(rel)
+                    for folder in [target.parent, *target.parent.parents]:
+                        if folder == self.root or not inside_root(self.root, folder):
+                            break
+                        if self._nested_library(folder):
+                            raise SyncError(t("{path} is another photos folder inside this one; move it out of "
+                                              "the photos folder", path=folder))
                     if not inside_root(self.root, target.parent):
                         raise SyncError(t("{name} leads outside the photos folder; left alone", name=target.parent))
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1233,10 +1309,8 @@ class Syncer:
                         if res.size and tmp_path.stat().st_size != res.size:
                             raise SyncError(t("file size doesn't match"))
                         digest = _file_hash(tmp_path)  # what Skyfold downloaded: compared before it is ever recycled
-                        lost = self.state.get("upload_lost:" + digest) if res.key == "original" else None
-                        if lost and lost.lower() in (res.filename.lower(), a.filename.lower(), "1"):
-                            # sent from this PC when its reply got lost: this is that photo
-                            self.state.set("upload_lost:" + digest, None)
+                        if res.key == "original" and self.state.get("upload_lost:" + digest):
+                            # the same bytes as a file sent from here whose reply got lost: never managed here
                             self.state.set("upload_sent:" + a.id, "1")
                             continue
                         adopted = False
@@ -1253,6 +1327,7 @@ class Syncer:
                         if adopted:
                             self.state.add_file(FileRow(a.id, res.key, rel, res.size, res.is_video,
                                                         a.date.isoformat(), digest), now_iso())
+                            self._note_file_id(a.id, res.key, rel)
                             taken.add(rel.lower())
                             continue
                         for _attempt in range(20):
@@ -1274,11 +1349,7 @@ class Syncer:
                     self.state.add_file(
                         FileRow(a.id, res.key, rel, res.size, res.is_video, a.date.isoformat(), digest), now_iso()
                     )
-                    if self._foreign:  # downloaded into another Apple ID's folder: never sent by its owner
-                        try:
-                            self._mark(os.lstat(target), rel, digest, "guest")
-                        except OSError:
-                            pass
+                    self._note_file_id(a.id, res.key, rel)
                     self.state.set(f"failed:{a.id}#{res.key}", None)
                     taken.add(rel.lower())
                     result.downloaded += 1
@@ -1559,8 +1630,8 @@ class Syncer:
                     same = res.size is not None and st.st_size == res.size                         and abs(st.st_mtime - a.date.timestamp()) < 2.5
                 except OSError:
                     same = False
-                if same and (self._foreign_file(st) or self._marked(st, cand)):
-                    same = False  # another Apple ID's file, or one kept here or sent from here: not this photo
+                if same and self._marked(st, cand):
+                    same = False  # one kept here or sent from here: not this photo
                 if same:  # looks like this very photo (e.g. the database was rebuilt): compare after download
                     self._verify.add(cand)
                     return cand
@@ -1592,7 +1663,8 @@ class Syncer:
     def _forget_local_only(self, asset_id: str, rows: list[FileRow]) -> None:
         for r in rows:
             p = self._abs(r.rel_path)
-            if not known_missing(p) and not self._changed_on_pc(r) and not self._protected(p, r.rel_path):
+            if not known_missing(p) and not self._changed_on_pc(r) and not self._protected(
+                    p, r.rel_path, self.state.get(f"fid:{r.asset_id}#{r.resource_key}")):
                 try:
                     self._trash_inside(p)
                 except OSError:

@@ -34,3 +34,12 @@ def _bookmarks_cache_in_tmp(tmp_path, monkeypatch):
     path = tmp_path / "safari-bookmarks-cache.json"
     monkeypatch.setattr(native_host, "cache_file", lambda: path)
     return path
+
+
+@pytest.fixture(autouse=True)
+def _no_modal_account_notice(monkeypatch):
+    """The notice after signing in with another Apple ID is a modal box shown a moment later; in tests
+    nobody would close it (a test that checks it patches it itself)."""
+    from skyfold import app
+
+    monkeypatch.setattr(app, "inform", lambda *a, **k: None)

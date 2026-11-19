@@ -1127,7 +1127,8 @@ class SettingsDialog(_Dialog):
         ans = ask(
             self, t("New folder"),
             t("You changed the folder.\n\nFiles won't be moved: the new location is filled from iCloud, "
-              "and the old folder stays untouched and is no longer synced. Continue?"))
+              "and the old folder stays untouched and is no longer synced. Files in the new folder are synced "
+              "both ways: deleting one there deletes it in iCloud too. Continue?"))
         return True if ans == QMessageBox.Yes else None
 
     def _save(self) -> None:
