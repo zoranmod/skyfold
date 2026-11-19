@@ -27,6 +27,7 @@
 ## Features
 
 - **iCloud Photos.** Downloads your whole library (photos, videos, Live Photo videos) to a folder you choose: all in one folder, by year, or by year and month. **Deletions travel both ways:** delete on the iPhone and the PC copy goes to the Recycle Bin; delete on the PC and the photo goes to "Recently Deleted" in iCloud.
+- **Upload from the PC (optional).** Turn on *Upload photos and videos I add to this folder to iCloud Photos* (**Settings → Photos**) and photos and videos you put into the photos folder go up to iCloud Photos and appear on your iPhone. A file is sent once it has stayed unchanged for two minutes. It becomes a synced photo only after Skyfold has seen it in iCloud and compared it byte for byte. Album folders, hidden files and cloud placeholders are never sent.
 - **Albums as folders.** Every album you made in Photos also appears under `Albums\`, as hard links that take **no extra disk space**.
 - **iCloud Drive, two-way.** A full local copy of your Drive, or only the folders you pick. New, changed, deleted, **renamed and moved** files and folders are synced in both directions. If a file changed on both sides, both versions are kept.
 - **Apple Notes export.** Every note becomes a web page with its full-size pictures, scans and attachments, in the same folders as in Notes, plus a searchable `Notes.html` library with your folders, light and dark theme. One-way (iCloud → PC).
@@ -69,7 +70,7 @@
    - **Chrome / Edge:** Bookmarks → *Import bookmarks and settings* → *Bookmarks HTML file*.
 4. Your bookmarks appear in a **Safari Bookmarks** folder, with the same folders and order as in Safari. Deleted bookmarks, tab groups and the Reading List are left out.
 
-**Without importing (Edge): the Skyfold – Safari Bookmarks extension.** Install it from Edge Add-ons (search "Skyfold", or see the [extension's page](extension/)). With Safari bookmarks turned on in Skyfold, it keeps a **Safari Bookmarks** folder under *Other favorites* up to date by itself (every 30 minutes and on *Update now*), with no file to import. It gets the bookmarks from Skyfold on your PC and never goes online. Firefox and Chrome versions are on the way.
+**Without importing (Edge): the Skyfold – Safari Bookmarks extension.** Install it from Edge Add-ons once it's listed there (it's in Microsoft's review; see the [extension's page](extension/)). With Safari bookmarks turned on in Skyfold, it keeps a **Safari Bookmarks** folder under *Other favorites* up to date by itself (every 30 minutes and on *Update now*), with no file to import. It gets the bookmarks from Skyfold on your PC and never goes online. Firefox and Chrome versions are on the way.
 
 Skyfold only *reads* your bookmarks from iCloud. It's one-way (Safari → browser): bookmarks you add in your browser don't go to Safari. With the file, importing again adds a second copy of the folder, so delete the old one first; the extension keeps one folder and replaces its content. It needs *Access iCloud Data on the Web* (see Requirements), like the rest of Skyfold.
 
@@ -81,12 +82,13 @@ Apple's app works for many people. Skyfold is for when it doesn't suit you:
 |---|---|---|
 | Files | Real files on disk, always available offline | Mostly online-only placeholders in Explorer |
 | Photos layout | One folder, by year, or by year/month; albums as hard-linked folders | Apple's layout |
+| New photos from the PC | Optional: photos and videos you add to the folder go to iCloud Photos | Yes |
 | Apple Notes | Exported as browsable, searchable HTML | Not available |
 | Safari bookmarks | One-way export file for Firefox / Chrome / Edge | Two-way, through Apple's browser extension |
 | Install | Portable zip, no installer, no Microsoft Store | Microsoft Store app |
 | Source | Open source (GPLv3) | Closed source |
 
-Apple's app does things Skyfold doesn't: passwords/keychain, two-way bookmark sync, mail/contacts/calendar, uploading new photos, and online-only files. If you need those, keep using it.
+Apple's app does things Skyfold doesn't: passwords/keychain, two-way bookmark sync, mail/contacts/calendar, and online-only files. If you need those, keep using it.
 
 ## Install
 
@@ -137,7 +139,7 @@ To uninstall, quit Skyfold, turn off *Start with Windows* first, then delete the
 
 ## Limitations
 
-- **New photos added on the PC are not uploaded** to iCloud Photos. Photos sync is download plus deletions in both directions.
+- **Uploading new photos from the PC is optional and off by default** (Settings → Photos). A Live Photo copied from an iPhone (`IMG_1234.HEIC` + `IMG_1234.MOV`) goes up as a still photo; its video part stays on the PC. Edits to a photo that is already synced aren't uploaded.
 - **Edited photos** are downloaded as originals, without your edits.
 - **Shared albums, the iCloud Shared Photo Library and smart albums** (Favorites, etc.) aren't synced. Photos in the **Hidden** album aren't downloaded, and hiding a photo on the iPhone moves its PC copy to the Recycle Bin.
 - **No online-only placeholders, by design.** iCloud Drive files are real downloads, so you need enough disk space for the folders you choose.
@@ -226,6 +228,7 @@ Skyfold is not affiliated with, endorsed by or sponsored by Apple Inc. Apple, iC
 - **Brisanje slika ide u oba smjera, a Drive se sinhronizuje u oba smjera** (i preimenovanja i premještanja). Obrisani fajlovi idu u Recycle Bin ili u "Nedavno obrisano", pa se mogu vratiti.
 - **Skyfold je javna beta.** Dvosmjerna Drive sinhronizacija je nova: Skyfold uvijek pita prije većeg brisanja, ali čuvaj rezervnu kopiju važnih stvari.
 - **Safari oznake za Firefox i Chrome:** Postavke → Bilješke → Safari oznake. Skyfold drži ažuran fajl `Safari Bookmarks.html` koji uvezeš u Firefox (Ctrl+Shift+O → Uvoz i rezervna kopija → Uvezi oznake iz HTML-a) ili Chrome. Samo čita iz iClouda; jednosmjerno.
+- **Slanje slika s računara (po želji):** Postavke → Photos → *Šalji u iCloud slike i videe koje dodam u ovaj folder*. Slike i videi koje ubaciš u folder sa slikama šalju se u iCloud Photos i pojave se na telefonu. Opcija je po defaultu isključena.
 - **Bilješke se čuvaju kao web stranice** s fotografijama u punoj veličini i bibliotekom s pretragom (Notes.html).
 - **Skyfold se sam ažurira:** javi kad izađe nova verzija, pokaže šta je novo i ažurira se jednim klikom (od verzije 1.0.10).
 - **Program je besplatan i prenosiv.** Raspakuj ga, pokreni `Skyfold.exe` i prijavi se Apple ID-jem.
