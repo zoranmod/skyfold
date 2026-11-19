@@ -22,6 +22,16 @@ class RemoteUnavailable(Exception):
     """iCloud Photos cannot be read (e.g. Advanced Data Protection is on)."""
 
 
+class UploadRejected(Exception):
+    """No asset was registered. Retrying these bytes later is safe."""
+
+
+@dataclass(frozen=True)
+class UploadReceipt:
+    asset_id: str | None
+    is_duplicate: bool
+
+
 @dataclass(slots=True)
 class RemoteResource:
     key: str  # "original" or "original_video"
@@ -57,7 +67,7 @@ class Remote(Protocol):
     def delete(self, asset_id: str) -> None: ...
     def albums(self) -> list[tuple[str, list[str]]]: ...  # (album path like "Trips/Rome", asset ids)
     def download(self, resource: RemoteResource, dest: Path, on_bytes: Callable[[int], None]) -> None: ...
-    def upload(self, path: Path) -> RemoteAsset | None: ...  # the new (or already present) asset
+    def upload(self, path: Path) -> UploadReceipt: ...
 
 
 _WEB_ACCESS_CHECKS = ("requestWebAccessState", "requestPCS", "enableDeviceConsentForPCS")
@@ -173,14 +183,40 @@ class ICloudRemote:
                 resources.append(RemoteResource("original_video", live.filename, live.size, live.url, True))
         return RemoteAsset(asset.id, asset.filename, date, is_video, resources)
 
-    def upload(self, path: Path) -> RemoteAsset | None:
-        """Put a photo or video into the iCloud Photos library. iCloud answers with the asset it
-        created - or the one it already had with these exact bytes (a duplicate is not added twice)."""
+    def upload(self, path: Path) -> UploadReceipt:
+        """Keep the registration receipt. The high-level helper discards it while waiting for indexing."""
         try:
-            asset = self.photos.libraries["root"].upload_file(str(path))
+            library = self.photos.libraries["root"]
+            client = library._client
+            zone = library.zone_id["zoneName"]
         except Exception as exc:  # noqa: BLE001
-            raise _translate(exc) from exc
-        return self._convert(asset) if asset is not None else None
+            translated = _translate(exc)
+            if isinstance(translated, (AuthRequired, RemoteUnavailable)):
+                raise translated from exc
+            raise UploadRejected(type(exc).__name__) from exc
+        try:
+            result = client.upload_file(str(path), zone_name=zone)
+        except Exception as exc:
+            translated = _translate(exc)
+            if isinstance(translated, (AuthRequired, RemoteUnavailable)):
+                raise translated from exc
+            payload = getattr(exc, "payload", None)
+            response = payload.get("response") if isinstance(payload, dict) else None
+            status = response.get("status") if isinstance(response, dict) else None
+            if status in (401, 421, 450):
+                raise AuthRequired(str(status)) from exc
+            # In the pinned uploader these stages precede putAsset. A lost putAsset
+            # reply, in contrast, can follow a successful registration.
+            from pyicloud.services.photos_cloudkit.upload import PhotosUploader
+            tb = exc.__traceback__
+            while tb:
+                if tb.tb_frame.f_code in (PhotosUploader.create_upload_url.__code__, PhotosUploader.send_bytes.__code__):
+                    raise UploadRejected(type(exc).__name__) from exc
+                tb = tb.tb_next
+            if isinstance(status, int) and 400 <= status < 500 and status != 409:
+                raise UploadRejected(str(status)) from exc
+            raise
+        return UploadReceipt(result.cplAsset, result.is_duplicate)
 
     def albums(self) -> list[tuple[str, list[str]]]:
         """User-made albums (not smart albums like Favorites, not album folders) and their photos."""

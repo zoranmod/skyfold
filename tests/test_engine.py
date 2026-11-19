@@ -11,7 +11,7 @@ import pytest
 
 from skyfold import engine as eng
 from skyfold.config import Settings
-from skyfold.remote import Changes, RemoteAsset, RemoteResource
+from skyfold.remote import Changes, RemoteAsset, RemoteResource, UploadReceipt
 from skyfold.state import State
 
 
@@ -87,10 +87,10 @@ class FakeRemote:
         self.uploads = getattr(self, "uploads", []) + [path.name]
         for aid, a in self.assets.items():  # iCloud keeps one copy of the same bytes
             if self.blobs.get(a.resources[0].url) == data:
-                return a
+                return UploadReceipt(aid, True)
         aid = f"UP{len(self.uploads)}"
         self.add(aid, path.name, data)
-        return self.assets[aid]
+        return UploadReceipt(aid, False)
 
 
 @pytest.fixture()

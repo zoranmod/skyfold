@@ -10,6 +10,8 @@ only listed in the index.
 from __future__ import annotations
 
 import html
+import hashlib
+from html.parser import HTMLParser
 import json
 import logging
 import os
@@ -590,12 +592,54 @@ a{color:var(--accent)}
 _STYLE_BLOCK = re.compile(r'\n?<style id="skyfold"[^>]*>.*?</style>\n?', re.DOTALL)
 
 
+class _PageStyles(HTMLParser):
+    """Locate real style elements in the generated header (or the prefix of a headless export)."""
+    def __init__(self, text: str):
+        super().__init__()
+        self.offsets = [0, *(m.end() for m in re.finditer("\n", text))]
+        self.styles = []
+        self.start = None
+        self.finished = False
+
+    def source_offset(self):
+        line, col = self.getpos()
+        return self.offsets[line - 1] + col
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "body":
+            self.finished = True
+        if not self.finished and tag == "style" and dict(attrs).get("id") == "skyfold":
+            self.start = (self.source_offset(), dict(attrs).get("data-style"))
+
+    def handle_endtag(self, tag):
+        if tag == "head":
+            self.finished = True
+        if tag == "style" and self.start is not None:
+            self.styles.append((*self.start, self.source_offset()))
+            self.start = None
+
+
+def _old_style_span(text: str):
+    parser = _PageStyles(text)
+    try:
+        parser.feed(text)
+    except (AssertionError, ValueError):
+        return None  # malformed markup is left alone
+    if len(parser.styles) != 1:
+        return None
+    start, version, end = parser.styles[0]
+    if version == NOTE_STYLE:
+        return None
+    return start, text.index(">", end) + 1
+
+
 def restyle_note_html(page: str) -> str | None:
     """The page with Skyfold's current style block in place of an older one (None: nothing to do)."""
-    m = _STYLE_BLOCK.search(page)
-    if not m or f'data-style="{NOTE_STYLE}"' in m.group(0):
+    span = _old_style_span(page[:200_000])
+    if span is None:
         return None
-    return page[:m.start()] + NOTE_CSS + page[m.end():]
+    start, end = span
+    return page[:start] + NOTE_CSS.strip() + page[end:]
 
 
 def polish_note_html(page: str, back_href: str, back_text: str, updated: str,
@@ -1108,9 +1152,8 @@ _MISSING_ATTACHMENT = re.compile(r"""(?i)\b(?:src|data|poster)\s*=\s*["']?https?
 
 
 def _digest(p: Path) -> str:
-    import hashlib
-
-    return hashlib.sha256(p.read_bytes()).hexdigest()
+    with p.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def _is_our_page(p: Path, strict: bool = False) -> bool:
@@ -1243,10 +1286,34 @@ class NotesSyncer:
         self.state.set("cursor", None)
         self.state.set("quality", QUALITY)
 
+    def _finish_restyle(self, key, entry):
+        """Recover either side of the no-clobber publication before private files are tidied."""
+        rel, backup_name, before, after = entry
+        page = self.root / rel
+        aside = page.with_name(backup_name)
+        if not inside_root(self.root, page.parent):
+            raise OSError("Notes folder moved")
+        if not known_missing(aside):
+            if known_missing(page) and place_new(aside, page):
+                self.state.set(key, None)
+                return
+            public = None if _is_link(page) else _digest(page)
+            if public not in (before, after) or _is_link(aside) or _digest(aside) != before:
+                # Another save won the name while we held this version. Keep both readable.
+                conflict = page.with_name(f"{page.stem} ({t('previous version')}).html")
+                if _place_new_name(aside, conflict) is None:
+                    raise OSError("Previous page still waiting to be restored")
+            else:
+                aside.unlink()
+        nid = key.removeprefix("style_tx:")
+        if not known_missing(page) and not _is_link(page) and _digest(page) == after:
+            if self.state.get(f"page:{nid}") == before:
+                self.state.set(f"page:{nid}", after)
+        self.state.set(key, None)
+
     def _restyle_pages(self) -> int:
-        """Once per NOTE_STYLE: pages exactly as Skyfold wrote them get the new look in place (nothing is
-        downloaded again). A page someone changed since is left as it is."""
         done = 0
+        retry = False
         for nid, row in self.state.all().items():
             if self.cancel_flag.is_set() or self.closing.is_set():
                 raise Cancelled()
@@ -1254,28 +1321,56 @@ class NotesSyncer:
             if not rel or not recorded:
                 continue
             page = self.root / rel
+            key = "style_tx:" + nid
             try:
-                if _is_link(page) or not inside_root(self.root, page) or _digest(page) != recorded:
+                if known_missing(page) or _is_link(page) or not inside_root(self.root, page) or _digest(page) != recorded:
                     continue
-                text = restyle_note_html(page.read_bytes().decode("utf-8", errors="replace"))
-                if text is None:
-                    continue
-                tmp = page.with_name(f"{STAGE_PREFIX}style-{uuid.uuid4().hex}.html")
-                self._own(tmp, "new")
-                try:
-                    tmp.write_bytes(text.encode("utf-8"))
-                    if _digest(page) != recorded:  # saved by someone meanwhile: theirs
-                        tmp.unlink()
+                with page.open("rb") as source:
+                    prefix = source.read(200_000)
+                    # Latin-1 gives exact byte offsets even for invalid UTF-8. Only CSS is encoded.
+                    span = _old_style_span(prefix.decode("latin-1"))
+                    if span is None:
                         continue
-                    os.replace(tmp, page)
-                finally:
-                    if not tmp.exists():
+                    tmp = page.with_name(f"{STAGE_PREFIX}style-{uuid.uuid4().hex}.html")
+                    self._own(tmp, "new")
+                    try:
+                        target_file = tmp.open("xb")
+                    except FileExistsError:
                         self._disown(tmp)
-                self.state.set(f"page:{nid}", _digest(page))
-                done += 1
+                        raise
+                    with target_file as target:
+                        start, end = span
+                        original = hashlib.sha256(prefix)
+                        target.write(prefix[:start])
+                        target.write(NOTE_CSS.strip().encode("utf-8"))
+                        target.write(prefix[end:])
+                        for chunk in iter(lambda: source.read(1 << 20), b""):
+                            original.update(chunk)
+                            target.write(chunk)
+                if original.hexdigest() != recorded:
+                    tmp.unlink()
+                    self._disown(tmp)
+                    continue
+                intended = _digest(tmp)
+                aside = page.with_name(f"{STAGE_PREFIX}style-old-{uuid.uuid4().hex}.html")
+                entry = [rel, aside.name, recorded, intended]
+                self.state.set(key, json.dumps(entry))
+                if not place_new(page, aside):
+                    self.state.set(key, None)
+                    raise OSError("Restyle backup name occupied")
+                try:
+                    if not _is_link(aside) and _digest(aside) == recorded and place_new(tmp, page):
+                        self.state.set(f"page:{nid}", intended)
+                        done += 1
+                finally:
+                    self._finish_restyle(key, entry)
+                    tmp.unlink(missing_ok=True)
+                    self._disown(tmp)
             except OSError as exc:
                 log.info("Notes: couldn't restyle %s: %s", rel, exc)
-        self.state.set("note_style", NOTE_STYLE)
+                retry = True
+        if not retry:
+            self.state.set("note_style", NOTE_STYLE)
         return done
 
     def run(self, full: bool = False) -> NotesResult:
@@ -1285,6 +1380,8 @@ class NotesSyncer:
         res = NotesResult()
         last_page = INDEX
         self._check_root()
+        for key, value in self.state.items("style_tx:"):
+            self._finish_restyle(key, json.loads(value))
         self._tidy_leftovers()
         if self.state.get("format") != FORMAT:  # nicer pages / sharper drawings: export all again
             for nid, row in self.state.all().items():
