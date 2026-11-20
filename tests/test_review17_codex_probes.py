@@ -149,19 +149,34 @@ def test_both_changed_with_matching_new_metadata_keep_both(env, monkeypatch):
 def test_upload_payload_preserves_client_mtime_without_network(tmp_path):
     from skyfold.drive_remote import ICloudDrive, DriveItem
     from pyicloud.services.drive import DriveService
-    payloads = []
-    class Session:
+    import json as _json
+    payloads, bodies = [], []
+    info = {'fileChecksum': 'fake', 'wrappingKey': 'fake', 'referenceChecksum': 'fake', 'size': 6}
+
+    def answer(obj):
+        response = requests.Response(); response.status_code = 200
+        response._content = _json.dumps(obj).encode(); response.headers['Content-Type'] = 'application/json'
+        return response
+
+    class Session:  # 1.0.19: the upload streams through pyicloud's own three steps
+        cookies = requests.cookies.cookiejar_from_dict({'X-APPLE-WEBAUTH-VALIDATE': 'v=1:t=tok'})
+
         def post(self, url, **kwargs):
+            if url.endswith('/upload/web'):
+                return answer([{'document_id': 'fake-document', 'url': 'https://example.invalid/content'}])
+            if url == 'https://example.invalid/content':
+                body = b''
+                while chunk := kwargs['data'].read(1 << 20):
+                    body += chunk
+                bodies.append(body)
+                return answer({'singleFile': info})
             payloads.append(kwargs['json'])
-            response = requests.Response(); response.status_code = 200; response._content = b'{}'
-            return response
+            return answer({})
     service = DriveService('https://example.invalid/drive', 'https://example.invalid/doc', Session(), {})
-    def send(folder_id, fh, **kwargs):
-        info = {'fileChecksum': 'fake', 'wrappingKey': 'fake', 'referenceChecksum': 'fake', 'size': 6}
-        return service._update_contentws(folder_id, info, 'fake-document', fh, **kwargs)
-    adapter = ICloudDrive(SimpleNamespace(drive=SimpleNamespace(send_file=send)))
+    adapter = ICloudDrive(SimpleNamespace(drive=service))
     p = tmp_path / 'file.txt'; p.write_bytes(b'cloud!')
     os.utime(p, (1600000000.123, 1600000000.123))
     parent = DriveItem('', 'root', 'root', 'z', None, True)
     adapter.upload(parent, p)
     assert payloads[0]['mtime'] == int(p.stat().st_mtime * 1000)
+    assert b'cloud!' in bodies[0] and payloads[0]['path']['path'] == 'file.txt'

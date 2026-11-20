@@ -2,6 +2,13 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **iCloud Drive uploads big files without loading them into memory.** A large video or archive is sent from disk piece by piece; before, the whole file (and a second copy while sending) had to fit in RAM. A file replacing one in iCloud is still read through once before the old version goes to Recently Deleted, so a locked file never costs the iCloud copy.
+- **Renaming or moving a Notes folder on your iPhone or Mac moves its pages too**, at the next sync. Before, notes you hadn't edited stayed under the old folder name until a full read.
+- iCloud Drive: deleting thousands of files at once is counted much faster before the question appears, and a quick check of an unchanged folder no longer rewrites the whole Drive cache file.
+
 ## [1.0.18] - 2026-11-20
 
 ### Fixed

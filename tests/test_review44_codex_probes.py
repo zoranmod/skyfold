@@ -144,7 +144,6 @@ def test_text_edits_do_not_accumulate_identical_note_attachments(notes_env, tmp_
     assert len(list(assets.iterdir())) == count
 
 
-@pytest.mark.xfail(reason='planned after 1.0.18: a folder-only rename is reconciled by the next full Notes read', strict=True)
 def test_folder_only_note_rename_updates_unchanged_children(notes_env):
     sync, remote, root, _ = notes_env
     remote.put("a", "Shopping")

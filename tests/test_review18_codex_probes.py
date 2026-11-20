@@ -115,12 +115,12 @@ def test_quit_during_upload_read_starts_no_cloud_write(env, monkeypatch):
     wk = SyncWorker(Settings()); wk.drive = s
     ctl = SimpleNamespace(worker=wk, tray=SimpleNamespace(hide=lambda: None),
                           thread=SimpleNamespace(quit=lambda: None, wait=lambda _: True), app=SimpleNamespace(quit=lambda: None))
-    original = Path.read_bytes
+    original = de._file_digest  # (1.0.19: a replacement is read through in pieces, not read_bytes)
     def read_then_quit(path):
         data = original(path)
         if path == root / 'a.txt': Controller.quit(ctl)
         return data
-    monkeypatch.setattr(Path, 'read_bytes', read_then_quit)
+    monkeypatch.setattr(de, '_file_digest', read_then_quit)
     try: s.run()
     except de.Cancelled: pass
     assert not d.trashed and not d.uploads, (d.trashed, d.uploads, s.closing.is_set())
