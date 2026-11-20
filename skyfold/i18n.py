@@ -597,6 +597,7 @@ BS: dict[str, str] = {
     "Expand all": "Raširi sve",
     "Upload photos and videos I add to this folder to iCloud Photos": "Šalji u iCloud slike i videe koje dodam u ovaj folder",
     "Uploading {name}…": "Šaljem {name}…",
+    "Uploading {name}": "Šaljem {name}",
     "Upload unconfirmed: {name}. Check iCloud Photos and add it there manually if missing.": "Slanje nije potvrđeno: {name}. Provjeri iCloud slike i dodaj fajl ručno ako ga nema.",
     "Upload failed ({name}): {error}": "Slanje nije uspjelo ({name}): {error}",
     "Already in iCloud Photos: {name}": "Već je u iCloud slikama: {name}",

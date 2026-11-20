@@ -187,8 +187,11 @@ class ICloudRemote:
                 resources.append(RemoteResource("original_video", live.filename, live.size, live.url, True))
         return RemoteAsset(asset.id, asset.filename, date, is_video, resources)
 
-    def upload(self, path: Path) -> UploadReceipt:
-        """Keep the registration receipt. The high-level helper discards it while waiting for indexing."""
+    streams_progress = True  # upload() takes on_bytes
+
+    def upload(self, path: Path, on_bytes: Callable[[int], None] | None = None) -> UploadReceipt:
+        """Keep the registration receipt. The high-level helper discards it while waiting for indexing.
+        on_bytes is told how much of the file has gone (and may stop it by raising)."""
         try:
             library = self.photos.libraries["root"]
             client = library._client
@@ -200,9 +203,17 @@ class ICloudRemote:
             raise UploadRejected(type(exc).__name__) from exc
         if client is None:  # no CloudKit uploader for this library: nothing was sent
             raise UploadRejected("uploads aren't available for this library")
+        uploader = getattr(client, "_uploader", None)
+        real_session = getattr(uploader, "_session", None)
+        if real_session is not None:
+            uploader._session = _CountingSession(real_session, on_bytes)  # only for this one upload
         try:
             result = client.upload_file(str(path), zone_name=zone)
         except Exception as exc:
+            from .engine import Cancelled
+
+            if isinstance(exc, Cancelled):
+                raise  # stopped by the user while sending: nothing was registered
             translated = _translate(exc)
             if isinstance(translated, (AuthRequired, RemoteUnavailable)):
                 raise translated from exc
@@ -222,6 +233,9 @@ class ICloudRemote:
             if isinstance(status, int) and 400 <= status < 500 and status != 409:
                 raise UploadRejected(str(status)) from exc
             raise
+        finally:
+            if real_session is not None:
+                uploader._session = real_session
         return UploadReceipt(result.cplAsset, result.is_duplicate)
 
     def albums(self) -> list[tuple[str, list[str]]]:
@@ -376,3 +390,42 @@ class ICloudRemote:
             raise
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
+
+
+class _CountingReader:
+    """The open photo as pyicloud hands it over, telling how much has been read (= sent)."""
+
+    def __init__(self, raw: Any, on_bytes: Callable[[int], None] | None) -> None:
+        import os
+
+        self._raw, self._on_bytes = raw, on_bytes
+        self._len = os.fstat(raw.fileno()).st_size - raw.tell()
+
+    def __len__(self) -> int:
+        return self._len
+
+    def read(self, n: int = -1) -> bytes:
+        chunk = self._raw.read(n if n is None or n < 0 else max(n, 1 << 18))
+        if chunk and self._on_bytes:
+            self._on_bytes(len(chunk))
+        return chunk
+
+
+class _CountingSession:
+    """pyicloud's session for one Photos upload: the file's bytes are counted on their way and the
+    upload server's connections get a big send buffer; everything else goes to the real session."""
+
+    def __init__(self, real: Any, on_bytes: Callable[[int], None] | None) -> None:
+        self._real, self._on_bytes = real, on_bytes
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+    def post(self, *args: Any, **kwargs: Any) -> Any:
+        data = kwargs.get("data")
+        if data is not None and hasattr(data, "read") and hasattr(data, "fileno"):
+            from .drive_remote import _big_send_buffer
+
+            kwargs["data"] = _CountingReader(data, self._on_bytes)
+            _big_send_buffer(self._real, str(kwargs.get("url") or (args[0] if args else "")))
+        return self._real.post(*args, **kwargs)
