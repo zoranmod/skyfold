@@ -391,6 +391,7 @@ class SyncWorker(QObject):
         self.notes_state.set("root", str(s.notes_dir))
         if self.notes is None or self.notes.root != Path(s.notes_dir):
             self.notes = NotesSyncer(self.notes_state, ICloudNotes(self.api), Path(s.notes_dir), _Bridge(self))
+        self.notes.theme = s.theme
 
     @Slot()
     def sign_out(self) -> None:

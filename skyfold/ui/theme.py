@@ -17,6 +17,8 @@ from tempfile import mkdtemp
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPalette, QPen, QPixmap
 
+from ..oled import OLED
+
 ACCENT = "#075bcd"
 
 LIGHT = {
@@ -67,10 +69,12 @@ def is_dark() -> bool:
         return False
 
 
-THEMES = {"system": "System", "light": "Light", "dark": "Dark"}  # English keys, translated where shown
+THEMES = {"system": "System", "light": "Light", "dark": "Dark", "oled": "OLED"}  # English keys, translated where shown
 
 
 def palette(mode: str = "system") -> dict[str, str]:
+    if mode == "oled":
+        return OLED
     if mode == "light":
         return LIGHT
     if mode == "dark":
@@ -272,4 +276,8 @@ QMenu::item:selected {{ background: {c['hover']}; }}
 QMenu::item:disabled {{ color: {c['muted']}; }}
 QMenu::separator {{ height: 1px; background: {c['border']}; margin: 4px 8px; }}
 QToolTip {{ background: {c['surface']}; color: {c['text']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 4px 8px; }}
-"""
+""" + (f"""
+QDialog QFrame#Card {{ border-color: transparent; background: {c['group']}; }}
+QFrame#BottomBar {{ background: {c['bg']}; }}
+QLabel#DotOn {{ background: {c['accent_text']}; }}
+""" if c is OLED else "")
