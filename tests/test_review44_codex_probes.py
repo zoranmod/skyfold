@@ -173,13 +173,16 @@ def test_majority_of_small_drive_gets_documented_confirmation(drive_env):
 
     sync, remote, root, _ = drive_env
     sync.delete_threshold = Settings().delete_threshold
-    for name in ("a", "b", "c", "d"):
+    # Documented rule (README): more than half of the Drive, from 5 items up, always asks.
+    # Smaller deletions below the limit go to Recently Deleted without asking (by design).
+    names = "abcdefgh"
+    for name in names:
         remote.put(name, name.encode())
     sync.run()
-    for name in ("a", "b", "c"):
+    for name in names[:5]:
         (root / name).unlink()
     result = sync.run()
-    assert set(result.pending_to_cloud) == {"a", "b", "c"} and not result.deleted_cloud
+    assert set(result.pending_to_cloud) == set(names[:5]) and not result.deleted_cloud
 
 
 def test_many_individual_deletions_do_not_require_pairwise_path_checks(drive_env):

@@ -124,7 +124,7 @@ To uninstall, first turn off *Start with Windows* and *Safari bookmarks* in Sett
 
 - Apple doesn't notify third-party apps about changes, so iCloud is **checked at intervals**: Photos every 2 minutes by default (each check only reads what changed), iCloud Drive in full once an hour or when you click **Sync now**. **Changes on the PC are noticed within seconds** (a new photo to upload waits until it has been unchanged for two minutes).
 - **Deletions are never permanent.** PC files go to the Recycle Bin; iCloud items go to "Recently Deleted" (30 days).
-- **Big deletions wait for you.** If more items than your limit (default 5) disappear at once on one side, Skyfold asks before deleting them on the other. For iCloud Drive it also asks when more than half of your files would go. Notes pages and Safari bookmarks follow iCloud without asking.
+- **Big deletions wait for you.** If more items than your limit (default 5) disappear at once on one side, Skyfold asks before deleting them on the other. For iCloud Drive it also asks when more than half of your files would go (from 5 items up). Notes pages and Safari bookmarks follow iCloud without asking.
 - **Deletions in one direction can be turned off** (Settings → Photos / iCloud Drive). For Drive this means the remaining copy syncs back: a file deleted on the PC downloads again, one deleted in iCloud uploads again.
 - **Conflicts keep both copies.** If a Drive file changed on both sides, iCloud's version keeps the name and the PC version is saved as `name (PC conflict …)`.
 
