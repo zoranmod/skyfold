@@ -31,13 +31,13 @@
 - **One photos folder per Apple ID.** If you sign in with another Apple ID, Skyfold asks you to choose a photos folder for it; a folder that belongs to another Apple ID isn't synced. Downloaded photos sync deletions both ways; photos you send are one-way. Skyfold follows renamed and moved photos by their Windows file id; an editor that replaces the file plus a rename before the next check can still look like a deletion.
 - **Albums as folders.** Every album you made in Photos also appears under `Albums\`, as hard links that take **no extra disk space**.
 - **iCloud Drive, two-way.** A full local copy of your Drive, or only the folders you pick. New, changed, deleted, **renamed and moved** files and folders are synced in both directions. If a file changed on both sides, both versions are kept.
-- **Apple Notes export.** Every note becomes a web page with its full-size pictures, scans and attachments, in the same folders as in Notes, plus a `Notes.html` library with your folders, search by title and folder, light and dark theme. One-way (iCloud → PC).
+- **Apple Notes export.** Every note becomes a web page with its full-size pictures, scans and attachments, in the same folders as in Notes, plus a `Notes.html` library with your folders, search by title and folder, light, dark and OLED theme. One-way (iCloud → PC).
 - **Safari bookmarks for Firefox and Chrome.** Your Safari bookmarks from iPhone, iPad or Mac as a bookmarks file that Firefox, Chrome and Edge import, kept up to date, with your folders in Safari's order. Read-only: nothing changes in iCloud.
 - **Find My.** Your devices with battery and last-seen time, a map link, and **Play sound**. (Apple asks for your password again after each PC restart before it shows them.)
 - **iCloud storage** at a glance in the tray panel.
 - **Built to be safe.** Nothing is deleted permanently, big deletions wait for your OK, and a missing or unplugged folder is never read as "delete everything".
 - **Updates itself.** Skyfold tells you when a new version is out, shows what's new, and updates with one click (your settings and files stay as they are).
-- **Portable and light.** Unzip and run. Follows the Windows light/dark theme. English and Bosnian.
+- **Portable and light.** Unzip and run. Follows the Windows light/dark theme, or pick Light, Dark or a pure black OLED theme. English and Bosnian.
 
 > **Skyfold is a public beta.** Two-way iCloud Drive sync is new and has been through many rounds of independent review, but it hasn't met every real-world folder yet. Skyfold always asks before deleting more items than your limit, and nothing it deletes is permanent (Recycle Bin / "Recently Deleted"). Please keep a backup of anything important and [report problems](https://github.com/zoranmod/skyfold/issues).
 
