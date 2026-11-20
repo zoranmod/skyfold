@@ -27,7 +27,8 @@
 ## Features
 
 - **iCloud Photos.** Downloads your whole library (photos, videos, Live Photo videos) to a folder you choose: all in one folder, by year, or by year and month. **Deletions travel both ways:** delete on the iPhone and the PC copy goes to the Recycle Bin; delete on the PC and the photo goes to "Recently Deleted" in iCloud.
-- **Upload from the PC (optional).** Turn on *Upload photos and videos I add to this folder to iCloud Photos* (**Settings → Photos**) and photos and videos in the photos folder that Skyfold didn't download go up to iCloud Photos and appear on your iPhone, **including ones already there when you turn it on**. A file is sent once it has stayed unchanged for two minutes. It becomes a synced photo only after Skyfold has seen it in iCloud and compared it byte for byte. Album folders, hidden files and cloud placeholders are never sent.
+- **Upload from the PC (optional).** Turn on *Upload photos and videos I add to this folder to iCloud Photos* (**Settings → Photos**) and photos and videos in the photos folder that Skyfold didn't download go up to iCloud Photos and appear on your iPhone, **including ones already there when you turn it on**. A file is sent once it has stayed unchanged for two minutes. Sending is **one-way**: the file stays an ordinary file on the PC, deleting it on the PC or on the iPhone doesn't delete it on the other side, and Skyfold doesn't download it back as a second copy. Album folders, hidden files and cloud placeholders are never sent.
+- **One photos folder per Apple ID.** If you sign in with another Apple ID, Skyfold asks you to choose a photos folder for it; a folder that belongs to another Apple ID isn't synced.
 - **Albums as folders.** Every album you made in Photos also appears under `Albums\`, as hard links that take **no extra disk space**.
 - **iCloud Drive, two-way.** A full local copy of your Drive, or only the folders you pick. New, changed, deleted, **renamed and moved** files and folders are synced in both directions. If a file changed on both sides, both versions are kept.
 - **Apple Notes export.** Every note becomes a web page with its full-size pictures, scans and attachments, in the same folders as in Notes, plus a `Notes.html` library with your folders, search by title and folder, light and dark theme. One-way (iCloud → PC).
@@ -141,7 +142,7 @@ To uninstall, first turn off *Start with Windows* and *Safari bookmarks* in Sett
 
 ## Limitations
 
-- **Uploading new photos from the PC is optional and off by default** (Settings → Photos). A Live Photo copied from an iPhone (`IMG_1234.HEIC` + `IMG_1234.MOV`) goes up as a still photo; its video part stays on the PC. Edits to a photo that is already synced aren't uploaded.
+- **Uploading new photos from the PC is optional and off by default** (Settings → Photos). A Live Photo copied from an iPhone (`IMG_1234.HEIC` + `IMG_1234.MOV`) goes up as a still photo; its video part stays on the PC. Edits to a photo that is already synced aren't uploaded. Sent photos aren't synced back and forth: delete them on each side yourself if you want them gone.
 - **Edited photos** are downloaded as originals, without your edits.
 - **Shared albums, the iCloud Shared Photo Library and smart albums** (Favorites, etc.) aren't synced. Photos in the **Hidden** album aren't downloaded, and hiding a photo on the iPhone moves its PC copy to the Recycle Bin.
 - **No online-only placeholders, by design.** iCloud Drive files are real downloads, so you need enough disk space for the folders you choose.
@@ -230,7 +231,7 @@ Skyfold is not affiliated with, endorsed by or sponsored by Apple Inc. Apple, iC
 - **Brisanje slika ide u oba smjera, a Drive se sinhronizuje u oba smjera** (i preimenovanja i premještanja). Obrisani fajlovi idu u Recycle Bin ili u "Nedavno obrisano", pa se mogu vratiti.
 - **Skyfold je javna beta.** Dvosmjerna Drive sinhronizacija je nova: Skyfold uvijek pita prije većeg brisanja, ali čuvaj rezervnu kopiju važnih stvari.
 - **Safari oznake za Firefox i Chrome:** Postavke → Bilješke → Safari oznake. Skyfold drži ažuran fajl `Safari Bookmarks.html` koji uvezeš u Firefox (Ctrl+Shift+O → Uvoz i rezervna kopija → Uvezi oznake iz HTML-a) ili Chrome. Samo čita iz iClouda; jednosmjerno.
-- **Slanje slika s računara (po želji):** Postavke → Fotografije → *Šalji u iCloud slike i videe koje dodam u ovaj folder*. Slike i videi koje ubaciš u folder sa slikama šalju se u iCloud Photos i pojave se na telefonu, uključujući one koji su već u folderu kad je uključiš. Opcija je po defaultu isključena.
+- **Slanje slika s računara (po želji):** Postavke → Fotografije → *Šalji u iCloud slike i videe koje dodam u ovaj folder*. Slike i videi koje ubaciš u folder sa slikama šalju se u iCloud Photos i pojave se na telefonu, uključujući one koji su već u folderu kad je uključiš. Slanje je jednosmjerno: fajl ostaje običan fajl na računaru, a brisanje na jednoj strani ne briše na drugoj. Opcija je po defaultu isključena.
 - **Bilješke se čuvaju kao web stranice** s fotografijama u punoj veličini i bibliotekom s pretragom (Notes.html).
 - **Skyfold se sam ažurira:** javi kad izađe nova verzija, pokaže šta je novo i ažurira se jednim klikom (od verzije 1.0.10).
 - **Program je besplatan i prenosiv.** Raspakuj ga, pokreni `Skyfold.exe` i prijavi se Apple ID-jem.
