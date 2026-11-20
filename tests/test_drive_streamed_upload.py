@@ -29,7 +29,7 @@ class FakeApi:
         file_object.seek(pos)
         return "DOC", "https://upload.example/content"
 
-    def post(self, url, data=None, headers=None, timeout=None, files=None):
+    def post(self, url, data=None, headers=None, timeout=None, files=None, **kw):
         self.headers = headers or {}
         self.length = len(data)
         size = 0

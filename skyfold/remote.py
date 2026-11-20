@@ -405,6 +405,8 @@ class _CountingReader:
         return self._len
 
     def read(self, n: int = -1) -> bytes:
+        if n == 0:
+            return b""
         chunk = self._raw.read(n if n is None or n < 0 else max(n, 1 << 18))
         if chunk and self._on_bytes:
             self._on_bytes(len(chunk))
@@ -427,5 +429,12 @@ class _CountingSession:
             from .drive_remote import _big_send_buffer
 
             kwargs["data"] = _CountingReader(data, self._on_bytes)
+            kwargs["allow_redirects"] = False  # one-shot body: a redirect would replay it empty
             _big_send_buffer(self._real, str(kwargs.get("url") or (args[0] if args else "")))
+            response = self._real.post(*args, **kwargs)
+            if 300 <= int(getattr(response, "status_code", 200) or 200) < 400:
+                raise RuntimeError("iCloud redirected the upload")
+            if self._on_bytes:
+                self._on_bytes(0)  # Stop pressed while iCloud was answering: the photo isn't registered
+            return response
         return self._real.post(*args, **kwargs)

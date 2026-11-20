@@ -282,19 +282,31 @@ class ICloudDrive:
                 st = local.stat()
                 self.drive.send_file(parent.docwsid, fh, zone=parent.zone, mtime=st.st_mtime, ctime=st.st_mtime)
                 return len(data), hashlib.sha256(data).hexdigest()
-            with open(local, "rb") as raw:
+            from .engine import _upload_reader
+
+            # Other programs may read the file meanwhile but not change it: one version, never a mix
+            with _upload_reader(local) as raw:
                 st = os.fstat(raw.fileno())
                 named = _Named(raw, local.name)
                 d = self.drive
                 document_id, content_url = d._get_upload_contentws_url(file_object=named, zone=parent.zone)
                 form = _StreamedForm(raw, local.name, st.st_size, on_bytes)
                 _big_send_buffer(d.session, content_url)
+                # one-shot body: a redirect would replay it empty, so it is never followed
                 resp = d.session.post(content_url, data=form, headers={"Content-Type": form.content_type},
-                                      timeout=(30, 600))
+                                      timeout=(30, 600), allow_redirects=False)
+                if 300 <= int(getattr(resp, "status_code", 200) or 200) < 400:
+                    raise RuntimeError(Text("iCloud redirected the upload; it is tried again later"))
                 d._raise_if_error(resp)
                 form.check_complete()  # the file shrank while it was sent: never taken as sent
-                d._update_contentws(parent.docwsid, resp.json()["singleFile"], document_id, named, parent.zone,
-                                    mtime=st.st_mtime, ctime=st.st_mtime)
+                info = resp.json()["singleFile"]
+                if isinstance(info, dict) and "size" in info and int(info["size"]) != st.st_size:
+                    raise RuntimeError(Text("iCloud received a different size; it is tried again later"))
+                if on_bytes:
+                    on_bytes(0)  # Stop pressed while iCloud was answering: nothing is registered
+                result = d._update_contentws(parent.docwsid, info, document_id, named, parent.zone,
+                                             mtime=st.st_mtime, ctime=st.st_mtime)
+                _check_registered(result)
                 return st.st_size, form.digest()
         except Exception as exc:  # noqa: BLE001
             from .engine import Cancelled
@@ -348,9 +360,9 @@ SEND_BUFFER = 8 << 20  # bytes Windows may have on the way to iCloud at once
 
 
 def _big_send_buffer(session: Any, url: str) -> None:
-    """Connections to the upload server get a big send buffer. Windows gives a program's socket
-    64 KB, and one connection can then carry only 64 KB per round trip to Apple (~0.6 MB/s from
-    Europe), however fast the line is; a browser uses far more. Only that server's connections."""
+    """Connections to the upload server get a fixed 8 MB send buffer (Windows' own send tuning is
+    switched off for them). Measured on a 200 Mbit/s line: one upload went from a flat ~0.5 MB/s to
+    1.4-4 MB/s. Only connections to that upload host (origin) on this session."""
     from urllib.parse import urlsplit
 
     mount = getattr(session, "mount", None)
@@ -374,13 +386,20 @@ except ImportError:  # pragma: no cover - requests is always there with pyicloud
 
 class _BigSendAdapter(_HTTPAdapter):  # type: ignore[misc,valid-type]
     def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
-        import socket
-
-        from urllib3.connection import HTTPConnection
-
-        kwargs["socket_options"] = list(HTTPConnection.default_socket_options) + [
-            (socket.SOL_SOCKET, socket.SO_SNDBUF, SEND_BUFFER)]
+        kwargs["socket_options"] = _send_options()
         super().init_poolmanager(*args, **kwargs)
+
+    def proxy_manager_for(self, proxy: str, **proxy_kwargs: Any) -> Any:
+        proxy_kwargs.setdefault("socket_options", _send_options())  # through a proxy too
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
+
+
+def _send_options() -> list:
+    import socket
+
+    from urllib3.connection import HTTPConnection
+
+    return list(HTTPConnection.default_socket_options) + [(socket.SOL_SOCKET, socket.SO_SNDBUF, SEND_BUFFER)]
 
 
 class _Named:
@@ -422,6 +441,8 @@ class _StreamedForm:
         return self._len
 
     def read(self, n: int = -1) -> bytes:
+        if n == 0:
+            return b""
         n = 1 << 20 if n is None or n < 0 else n
         while self._parts:
             part = self._parts[0]
@@ -449,6 +470,17 @@ class _StreamedForm:
 
     def digest(self) -> str:
         return self._hash.hexdigest()
+
+
+def _check_registered(result: Any) -> None:
+    """update/documents names the new document; an empty or refused answer isn't a saved file."""
+    if not isinstance(result, dict) or "results" not in result:
+        return  # (no answer to look at: pyicloud's own call raised already on an HTTP error)
+    listed = result.get("results")
+    if not isinstance(listed, list) or not listed:
+        raise RuntimeError(Text("iCloud didn't confirm the uploaded file; it is tried again later"))
+    if isinstance(listed[0], dict):
+        _check_item(listed[0], "upload")
 
 
 def _check_first(resp: Any, key: str, what: str) -> None:
