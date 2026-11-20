@@ -134,7 +134,6 @@ def test_known_old_marker_does_not_make_preexisting_photos_new_uploads(photos_en
     assert "a-private.jpg" not in getattr(remote, "uploads", [])
 
 
-@pytest.mark.xfail(strict=True, reason='not applicable: dc4ca0d was never released, so no installation has this layout')
 def test_legacy_mixed_root_with_b_rows_does_not_send_as_private_photos(photos_env):
     s, second, root, _ = photos_env
     s.settings.apple_id = ""  # create the earlier package's marker-only root
@@ -199,7 +198,7 @@ def test_album_mirror_cannot_feed_another_users_library(photos_env, tmp_path):
     assert "private.jpg" not in getattr(second, "uploads", [])
 
 
-@pytest.mark.xfail(strict=True, reason="accepted: 1.0.15 recorded no file ids; a file put at a photo's name while Skyfold was being upgraded is taken for it once")
+@pytest.mark.xfail(strict=True, reason="accepted: 1.0.15 recorded no file ids; an identical copy put at a photo's name while Skyfold was being upgraded is taken for it (the same bytes stay in the renamed original)")
 def test_first_upgrade_pass_does_not_claim_a_replacement_at_tracked_name(photos_env):
     s, remote, root, _ = photos_env
     s.settings.apple_id = ""  # generic 1.0.15 marker
@@ -241,7 +240,6 @@ def test_legacy_keep_survives_a_move_before_first_upgrade_scan(photos_env):
     assert kept.is_file()
 
 
-@pytest.mark.xfail(strict=True, reason='accepted: the file is sent once more and iCloud keeps one copy; nothing is deleted')
 def test_accepted_legacy_upload_is_not_resent_after_source_returns(photos_env):
     s, remote, root, _ = photos_env
     s.settings.apple_id = ""
@@ -262,7 +260,6 @@ def test_accepted_legacy_upload_is_not_resent_after_source_returns(photos_env):
     assert remote.uploads == ["one.jpg"] and p.stat().st_ino == original_id.st_ino
 
 
-@pytest.mark.xfail(strict=True, reason='accepted: the file is sent once more and iCloud keeps one copy; nothing is deleted')
 def test_counted_legacy_digest_does_not_replay_the_original_source(photos_env):
     s, remote, root, _ = photos_env
     s.settings.apple_id = ""

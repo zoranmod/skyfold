@@ -374,6 +374,7 @@ class Syncer:
         self._new_marker = False
         self._held_set: set | None = None
         self._id_index: dict | None = None
+        self._displaced: set = set()
         # Paths the engine itself touched recently, so the folder watcher can ignore them.
         self.own_paths: dict[str, float] = {}
 
@@ -448,6 +449,10 @@ class Syncer:
         self._upload_saw_missing = False
         fids = {k.removeprefix("fid:"): v for k, v in self.state.items("fid:")}
         for row in rows:
+            if f"{row.asset_id}#{row.resource_key}" in self._displaced:
+                missing.append(row)  # (another photo's file was moved over it)
+                self._upload_saw_missing = True
+                continue
             try:
                 st = os.lstat(self._abs(row.rel_path))
             except (FileNotFoundError, NotADirectoryError):
@@ -703,26 +708,39 @@ class Syncer:
         file took the old name); if it is nowhere, the file was replaced in place (an editor's save) and
         the new one is that photo. Returns how many photos were followed."""
         rows = self.state.files()
+        by_key = {f"{r.asset_id}#{r.resource_key}": r for r in rows}
         fids = {k.removeprefix("fid:"): v for k, v in self.state.items("fid:")}
-        owners = {v: k for k, v in fids.items()}
+        owners = {v: k for k, v in fids.items() if k in by_key}
         moves, replaced = [], []
-        for r in rows:
-            fid = fids.get(f"{r.asset_id}#{r.resource_key}")
+        self._displaced = set()
+
+        def id_at(rel):
+            try:
+                st = os.lstat(self._abs(rel))
+            except OSError:
+                return None
+            return f"{st.st_dev}:{st.st_ino}" if st.st_ino else None
+
+        for key, r in by_key.items():
+            fid = fids.get(key)
             if not fid:
                 continue
-            try:
-                st = os.lstat(self._abs(r.rel_path))
-            except OSError:
-                continue
-            here = f"{st.st_dev}:{st.st_ino}"
-            if not st.st_ino or here == fid:
+            here = id_at(r.rel_path)
+            if here is None or here == fid:
                 continue
             dev, _, ino = fid.partition(":")
             where = self._find_by_id([int(dev), int(ino)]) if ino.isdigit() and dev.lstrip("-").isdigit() else None
             if where and where.lower() != r.rel_path.lower():
                 moves.append((r, where))
-            elif where is None and here not in owners:
-                replaced.append((r, here))  # (a file that is another tracked photo's isn't this one's)
+            elif here in owners and owners[here] != key:
+                # another tracked photo's file is here now (moved over this one, e.g. Explorer's Replace):
+                # that photo moved here, and this one's own file is gone
+                self._displaced.add(key)
+                other = by_key[owners[here]]
+                if id_at(other.rel_path) != here and other.rel_path.lower() != r.rel_path.lower():
+                    moves.append((other, r.rel_path))
+            elif where is None:
+                replaced.append((r, here))
         for r, where in moves:
             self.state.move_file(r.asset_id, r.resource_key, where)
         for r, here in replaced:
@@ -760,19 +778,24 @@ class Syncer:
         else:
             library = uuid.uuid4().hex[:16]
             others = [n for n in os.listdir(self.root) if n not in (MARKER, OWNER_FILE)]
-            if others and not self._new_marker and not self.state.asset_ids():
-                # A photos folder of a version before 1.0.16 that this database didn't sync: whose it
-                # was can't be told. It becomes this Apple ID's, but what is in it now is never sent.
+            if others and not self._new_marker:
+                # A photos folder of a version before 1.0.16 (also an upgraded one: in 1.0.15 another
+                # Apple ID could have used it). Files in it that this database doesn't track can't be told
+                # apart: they are never sent - by their file id and by their name.
+                tracked = self.state.paths()
                 held = []
                 for dirname, dirs, files in os.walk(self.root):
                     dirs[:] = [d for d in dirs if not _is_link(Path(dirname) / d)]
                     for name in files:
+                        p = Path(dirname) / name
+                        rel = p.relative_to(self.root).as_posix().lower()
+                        if rel in tracked:
+                            continue
                         try:
-                            st = (Path(dirname) / name).lstat()
+                            st = p.lstat()
                         except OSError:
                             continue
-                        if st.st_ino:
-                            held.append([st.st_dev, st.st_ino])
+                        held.append([st.st_dev, st.st_ino, rel])
                 old = json.loads(self.state.get("upload_legacy:held") or "[]")
                 self.state.set("upload_legacy:held", json.dumps(old + held))
             with open(owner_file, "x", encoding="utf-8") as fh:
@@ -789,8 +812,14 @@ class Syncer:
         self.state.set("library", library)
 
     def _held_ids(self) -> set:
+        """(dev, ino) and ("path", rel) of files that were in an older photos folder when it was taken over."""
         if getattr(self, "_held_set", None) is None:
-            self._held_set = {tuple(x) for x in json.loads(self.state.get("upload_legacy:held") or "[]")}
+            self._held_set = set()
+            for x in json.loads(self.state.get("upload_legacy:held") or "[]"):
+                if x[1]:
+                    self._held_set.add((x[0], x[1]))
+                if len(x) > 2:
+                    self._held_set.add(("path", x[2]))
         return self._held_set
 
     def _protected(self, p: Path, rel: str, key: str | None = None) -> bool:
@@ -821,16 +850,22 @@ class Syncer:
             return None
         if getattr(self, "_id_index", None) is None:
             self._id_index = {}
+            albums = {rel.lower() for rel in self.state.album_links()}
             for dirname, dirs, files in os.walk(self.root):
-                dirs[:] = [d for d in dirs if not _is_link(Path(dirname) / d)]
+                parent = Path(dirname)
+                dirs[:] = [d for d in dirs if not _is_link(parent / d) and not self._nested_library(parent / d)
+                           and not (parent == self.root and d.lower() == ALBUMS_DIR.lower())]
                 for name in files:
-                    p = Path(dirname) / name
+                    p = parent / name
+                    rel = p.relative_to(self.root).as_posix()
+                    if rel.lower() in albums:
+                        continue  # (an album entry is a hard link: same id as its photo)
                     try:
                         st = p.lstat()
                     except OSError:
                         continue
                     if st.st_ino:
-                        self._id_index[(st.st_dev, st.st_ino)] = p.relative_to(self.root).as_posix()
+                        self._id_index[(st.st_dev, st.st_ino)] = rel
         return self._id_index.get(tuple(ident))
 
     def _migrate_upload_records(self) -> None:
@@ -902,7 +937,11 @@ class Syncer:
                     self.state.set("upload_sent:" + record["asset"], "1")
             else:
                 self.state.set("upload_lost:" + record["digest"], "1")
-            if mark_at(record["rel"], by_digest(record["digest"]), "copy" if record.get("duplicate") else "sent"):
+            done = mark_at(record["rel"], by_digest(record["digest"]), "copy" if record.get("duplicate") else "sent")
+            if done == "other":  # not in the folder now (moved away): these bytes are never sent again
+                count = int(self.state.get("upload_legacy:" + record["digest"]) or 0)
+                self.state.set("upload_legacy:" + record["digest"], str(count + 1))
+            if done:
                 self.state.set(key, None)
         for key, value in self.state.items("upload_seen:"):
             aid = key.removeprefix("upload_seen:")
@@ -913,16 +952,12 @@ class Syncer:
                 self.state.set(key, None)
         for key, _ in self.state.items("upload_unlisted:"):
             # sent and matched, not listed yet: it becomes one-way like every upload now
+            # 1.0.15 matched this upload before a full listing showed it: it stays a synced photo, but
+            # if a listing misses it, its PC file is kept rather than recycled
             aid = key.removeprefix("upload_unlisted:")
-            rows = [r for r in self.state.files() if r.asset_id == aid]
-            for r in rows:
-                p = self._abs(r.rel_path)
-                try:
-                    self._mark(os.lstat(p), r.rel_path, r.hash, "sent")
-                except OSError:
-                    pass
-            self.state.remove_asset(aid)
-            self.state.set("upload_sent:" + aid, "1")
+            for r in self.state.files():
+                if r.asset_id == aid:
+                    self.state.set(f"fidsoft:{r.asset_id}#{r.resource_key}", "1")
             self.state.set(key, None)
 
     def _upload_settled(self, rel: str, st: os.stat_result) -> bool:
@@ -1015,7 +1050,7 @@ class Syncer:
                         self.state.set("upload_legacy:" + digest, str(left) if left > 0 else None)
                         self._upload_idle[key] = (signature, now + 600)
                         continue
-                    if st.st_ino and (st.st_dev, st.st_ino) in self._held_ids():
+                    if (st.st_ino and (st.st_dev, st.st_ino) in self._held_ids()) or ("path", key) in self._held_ids():
                         self._upload_idle[key] = (signature, now + 600)
                         continue  # in an older photos folder when it was taken over: whose isn't known
                     if live_video:
@@ -1720,6 +1755,7 @@ class Syncer:
             return True
 
     def _original_is_back(self, rows: list[FileRow]) -> bool:
+        rows = [r for r in rows if f"{r.asset_id}#{r.resource_key}" not in getattr(self, "_displaced", ())]
         """Asked right before a "deleted on this PC" decision is carried out: the photo was missing
         when the folder was scanned - is it there again (Undo in Explorer, an editor's save)?"""
         # "can't be looked at" counts as back: nothing is deleted on an answer that isn't sure
@@ -1766,6 +1802,7 @@ class Syncer:
             self._keep_on_pc(a, [r for r in rows if r.asset_id == a])
 
     def _keep_on_pc(self, asset_id, rows):
+        rows = [r for r in rows if f"{r.asset_id}#{r.resource_key}" not in getattr(self, "_displaced", ())]
         for row in rows:
             p = self._abs(row.rel_path)
             if known_missing(p):

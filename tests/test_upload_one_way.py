@@ -43,7 +43,7 @@ def test_lost_reply_is_recognised_by_contents(env):  # noqa: F811
     assert [q.name for q in root.rglob("*.jpg")] == ["late.jpg"] and remote.uploads == ["late.jpg"]
 
 
-def test_two_way_upload_of_1_0_15_becomes_one_way(env):  # noqa: F811
+def test_matched_1_0_15_upload_stays_synced_but_is_never_recycled(env):  # noqa: F811
     s, remote, root, trashed = env
     remote.add("UP1", "mine.jpg", b"mine")
     s.run()
@@ -51,10 +51,10 @@ def test_two_way_upload_of_1_0_15_becomes_one_way(env):  # noqa: F811
     s.state.set("upload_unlisted:UP1", "1")  # sent with 1.0.15, not in the full listing yet
     s.run()
     p = root / row.rel_path
-    assert not s.state.files() and s.state.get("upload_sent:UP1") and not s.state.get("upload_unlisted:UP1")
-    remote.remove("UP1")
+    assert [r.asset_id for r in s.state.files()] == ["UP1"] and not s.state.get("upload_unlisted:UP1")
+    remote.remove("UP1")  # (or a full listing that misses it)
     s.run(force_full=True)
-    assert p.exists() and not trashed
+    assert p.exists() and not trashed  # kept, not put in the Recycle Bin
 
 
 def test_photos_folder_records_its_account(env, tmp_path):  # noqa: F811
