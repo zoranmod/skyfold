@@ -406,7 +406,7 @@ class Settings:
     full_check_hours: int = 24  # safety-net full read; everyday syncs only read changes
     folder_structure: str = "flat"
     language: str = "en"
-    theme: str = "system"  # system | light | dark
+    theme: str = "system"  # system | light | dark | oled
     drive_enabled: bool = False
     drive_dir: str = field(default_factory=lambda: str(Path.home() / "iCloud Drive"))
     drive_delete_cloud_to_pc: bool = True

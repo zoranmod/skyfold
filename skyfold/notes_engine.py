@@ -30,6 +30,7 @@ from typing import Any, Protocol
 from .config import place_new
 from .engine import Callbacks, Cancelled, SyncError, _is_link, create_marker, known_missing, inside_root, marker_present, now_iso
 from .i18n import t
+from .oled import OLED
 from .safelog import brief, value
 from .remote import AuthRequired, RemoteUnavailable, _translate
 
@@ -572,11 +573,41 @@ def _prefer_vector_sketches() -> None:
 
 
 # Light/dark choice shared by the index and every note page (remembered in the browser).
-THEME_SCRIPT = """<script>(function(){var k='skyfold-theme',r=document.documentElement;
+LEGACY_THEME_SCRIPT = """<script>(function(){var k='skyfold-theme',r=document.documentElement;
 try{var v=localStorage.getItem(k);if(v)r.dataset.theme=v}catch(e){}
 window.sfToggleTheme=function(){var dark=r.dataset.theme?r.dataset.theme==='dark'
 :matchMedia('(prefers-color-scheme: dark)').matches;r.dataset.theme=dark?'light':'dark';
 try{localStorage.setItem(k,r.dataset.theme)}catch(e){}}})();</script>"""
+
+# A file:// page gets its export-time app choice unless the reader selected a browser override.
+THEME_SCRIPT = """<script>(function(){
+const key='skyfold-theme', root=document.documentElement, modes=['light','dark','oled'];
+const style=document.getElementById('skyfold');
+let value=root.dataset.defaultTheme || (style && style.dataset.defaultTheme);
+try{const saved=localStorage.getItem(key);if(modes.includes(saved))value=saved}catch(e){}
+if(modes.includes(value))root.dataset.theme=value;
+const scheme=matchMedia('(prefers-color-scheme: dark)');
+window.sfNextTheme=function(){
+  const current=root.dataset.theme || (scheme.matches?'dark':'light');
+  return modes[(modes.indexOf(current)+1)%modes.length];
+};
+window.sfToggleTheme=function(){root.dataset.theme=window.sfNextTheme();
+  try{localStorage.setItem(key,root.dataset.theme)}catch(e){}
+  window.dispatchEvent(new Event('skyfold-theme-change'));
+};
+})();</script>"""
+
+
+def _export_theme(theme: str) -> str:
+    return theme if theme in ("light", "dark", "oled") else "system"
+
+
+OLED_VARS = (":root[data-theme=oled]{color-scheme:dark;" + ";".join(
+    f"--{name}:{OLED[token]}" for name, token in {
+        "bg": "bg", "card": "group", "group": "group", "hover": "hover", "text": "text",
+        "muted": "muted", "border": "border", "accent": "accent_fg", "accent-soft": "accent_soft",
+        "accent-text": "accent_text", "fill": "accent", "focus": "focus_ring",
+    }.items()) + "}")
 
 THEME_BUTTON = ('<button class="sf-theme" type="button" onclick="sfToggleTheme()" title="{label}" '
                 'aria-label="{label}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" '
@@ -590,13 +621,14 @@ THEME_VARS = """
 --hover:#303944;--text:#f0f3f7;--muted:#b0bac7;--border:#36404d;--accent:#99c2ff;--accent-soft:#243b59}}
 :root[data-theme=dark]{color-scheme:dark;--bg:#191e25;--card:#222932;--hover:#303944;--text:#f0f3f7;--muted:#b0bac7;
 --border:#36404d;--accent:#99c2ff;--accent-soft:#243b59}
+""" + OLED_VARS + """
 .sf-theme{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;
 border:0;border-radius:8px;background:var(--card);color:var(--muted);cursor:pointer}
 .sf-theme:hover{background:var(--hover);color:var(--text)}
 .sf-theme:focus-visible,.sf-nav a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 """
 
-NOTE_STYLE = "2"  # raised when note pages look different: pages Skyfold wrote get the new style in place
+NOTE_STYLE = "3"  # raised when note pages look different: pages Skyfold wrote get the new style in place
 NOTE_CSS = """
 <style id="skyfold" data-style=\"""" + NOTE_STYLE + """\">""" + THEME_VARS + """
 html{background:var(--bg)}
@@ -623,7 +655,8 @@ blockquote{margin:12px 0;padding:4px 16px;border-left:3px solid var(--border);co
 pre,code{background:var(--card);border-radius:6px}pre{padding:12px;overflow:auto}
 hr{border:0;border-top:1px solid var(--border)}
 a{color:var(--accent)}
-::selection{background:var(--accent);color:var(--bg)}
+::selection{background:var(--fill,var(--accent));color:var(--selection-text,var(--bg))}
+:root[data-theme=oled]{--selection-text:var(--accent-text)}
 @media(max-width:700px){body{padding:8px 16px 48px!important}.sf-nav span{display:none}}
 @media print{.sf-nav,.sf-theme{display:none}}
 </style>
@@ -649,7 +682,7 @@ class _PageStyles(HTMLParser):
         if tag == "body":
             self.finished = True
         if not self.finished and tag == "style" and dict(attrs).get("id") == "skyfold":
-            self.start = (self.source_offset(), dict(attrs).get("data-style"))
+            self.start = (self.source_offset(), dict(attrs).get("data-style"), dict(attrs).get("data-default-theme", "system"))
 
     def handle_endtag(self, tag):
         if tag == "head":
@@ -659,7 +692,14 @@ class _PageStyles(HTMLParser):
             self.start = None
 
 
-def _old_style_span(text: str):
+def _note_css(theme: str) -> str:
+    theme = _export_theme(theme)
+    if theme == "system":
+        return NOTE_CSS
+    return NOTE_CSS.replace('id="skyfold"', f'id="skyfold" data-default-theme="{theme}"', 1)
+
+
+def _style_update(text: str, theme: str = "system"):
     parser = _PageStyles(text)
     try:
         parser.feed(text)
@@ -667,30 +707,37 @@ def _old_style_span(text: str):
         return None  # malformed markup is left alone
     if len(parser.styles) != 1:
         return None
-    start, version, end = parser.styles[0]
-    if version == NOTE_STYLE:
+    start, version, previous_theme, end = parser.styles[0]
+    if version == NOTE_STYLE and previous_theme == theme:
         return None
-    return start, text.index(">", end) + 1
+    end = text.index(">", end) + 1
+    replacement = _note_css(theme).strip()
+    # Only replace the exact old companion script written by polish_note_html.
+    # Existing exports can have Windows or Unix line endings.
+    for newline in ("\r\n", "\n"):
+        old = newline + LEGACY_THEME_SCRIPT.replace("\n", newline)
+        if text.startswith(old, end):
+            return start, end + len(old), replacement + newline + THEME_SCRIPT
+    return start, end, replacement
 
 
-def restyle_note_html(page: str) -> str | None:
-    """The page with Skyfold's current style block in place of an older one (None: nothing to do)."""
-    span = _old_style_span(page[:200_000])
-    if span is None:
+def restyle_note_html(page: str, theme: str = "system") -> str | None:
+    """Update our style and its known companion in the generated header."""
+    update = _style_update(page[:200_000], theme)
+    if update is None:
         return None
-    start, end = span
-    return page[:start] + NOTE_CSS.strip() + page[end:]
+    start, end, replacement = update
+    return page[:start] + replacement + page[end:]
 
 
 def polish_note_html(page: str, back_href: str, back_text: str, updated: str,
-                     theme_text: str = "Light / dark") -> str:
-    """Make an exported note pleasant to read: our styles, a sticky "back to all notes" bar with a
-    light/dark switch, and PDFs shown plainly (no viewer toolbar with Draw/Highlight tools)."""
+                     theme_text: str = "Light / dark / OLED", theme: str = "system") -> str:
+    """Style the exported note and add its navigation and theme switch."""
     if 'id="skyfold"' in page:
         return page
     page = re.sub(r'((?:data|src)="[^"#]+\.pdf)(")', r'\1#toolbar=0&navpanes=0&view=FitH\2', page,
                   flags=re.IGNORECASE)
-    head = NOTE_CSS + THEME_SCRIPT
+    head = _note_css(theme) + THEME_SCRIPT
     head_end = page.lower().find("</head>")
     page = page[:head_end] + head + page[head_end:] if head_end >= 0 else head + page
     nav = (f'<div class="sf-nav"><a href="{html.escape(back_href)}">&larr; {html.escape(back_text)}</a>'
@@ -1216,6 +1263,7 @@ class NotesSyncer:
         self.state = state
         self.remote = remote
         self.root = root
+        self.theme = "system"
         self.cb = cb or Callbacks()
         self.cancel_flag = threading.Event()  # this pass (cleared when the next one starts)
         self.closing = threading.Event()  # the app is quitting: never cleared
@@ -1371,7 +1419,7 @@ class NotesSyncer:
                 with page.open("rb") as source:
                     prefix = source.read(200_000)
                     # Latin-1 gives exact byte offsets even for invalid UTF-8. Only CSS is encoded.
-                    span = _old_style_span(prefix.decode("latin-1"))
+                    span = _style_update(prefix.decode("latin-1"), self.theme)
                     if span is None:
                         continue
                     tmp = page.with_name(f"{STAGE_PREFIX}style-{uuid.uuid4().hex}.html")
@@ -1382,10 +1430,10 @@ class NotesSyncer:
                         self._disown(tmp)
                         raise
                     with target_file as target:
-                        start, end = span
+                        start, end, replacement = span
                         original = hashlib.sha256(prefix)
                         target.write(prefix[:start])
-                        target.write(NOTE_CSS.strip().encode("utf-8"))
+                        target.write(replacement.encode("utf-8"))
                         target.write(prefix[end:])
                         for chunk in iter(lambda: source.read(1 << 20), b""):
                             original.update(chunk)
@@ -1414,6 +1462,7 @@ class NotesSyncer:
                 retry = True
         if not retry:
             self.state.set("note_style", NOTE_STYLE)
+            self.state.set("note_theme", self.theme)
         return done
 
     def run(self, full: bool = False) -> NotesResult:
@@ -1432,7 +1481,8 @@ class NotesSyncer:
             self.state.set("cursor", None)
             self.state.set("format", FORMAT)
             self.state.set("note_style", NOTE_STYLE)  # every page is written anew in the current style
-        elif self.state.get("note_style") != NOTE_STYLE:
+            self.state.set("note_theme", self.theme)
+        elif self.state.get("note_style") != NOTE_STYLE or (self.state.get("note_theme") or "system") != self.theme:
             self._restyle_pages()
         stored = self.state.get("cursor")
         cursor = self.remote.cursor()
@@ -1450,7 +1500,7 @@ class NotesSyncer:
                 self.state.set("legacy_index", "1")
                 if not (self.state.get("index_owned") or self.state.get("index_digest")):
                     self.write_index()
-            elif self.state.get("index_layout") != INDEX_LAYOUT and self.state.get("index_owned") == "1":
+            elif (self.state.get("index_layout") != INDEX_LAYOUT or (self.state.get("index_theme") or "system") != self.theme) and self.state.get("index_owned") == "1":
                 self.write_index()  # once after an update with a new Notes.html look (from the database)
             self.state.set("last_sync", now_iso())  # checked, nothing changed: still a check
             return res
@@ -1601,7 +1651,7 @@ class NotesSyncer:
         updated = local_datetime(n.modified)
         page = p.read_text(encoding="utf-8", errors="replace")
         page = pdfs_to_images(page, p.parent, t("Open the original PDF"))
-        p.write_text(polish_note_html(page, back, t("All notes"), updated, t("Light / dark")), encoding="utf-8")
+        p.write_text(polish_note_html(page, back, t("All notes"), updated, t("Light / dark / OLED"), self.theme), encoding="utf-8")
 
     def _publish_page(self, staged: Path, target: Path, nid: str, old: tuple | None, modified=None) -> None:
         """Put a freshly exported page in place. A file there is first moved aside (so nothing saved at
@@ -1716,7 +1766,7 @@ class NotesSyncer:
         rows = sorted(self.state.all().values(), key=lambda r: (r[3] or "", (r[2] or "").lower()))
         data = [{"t": r[2] or t("Untitled"), "f": r[3] or "", "p": r[1], "m": local_datetime(r[4]),
                  "l": bool(r[5])} for r in rows]
-        page = render_index(data, t("Updated {when}", when=local_datetime(datetime.now())))
+        page = render_index(data, t("Updated {when}", when=local_datetime(datetime.now())), self.theme)
         target = self.root / INDEX
         not_ours = SyncError(t("The Notes folder already has a Notes.html that isn't from Skyfold. Choose an empty "
                                "folder for Notes in Settings."))
@@ -1795,14 +1845,15 @@ class NotesSyncer:
         self.state.set("index_digest", written)
         self.state.set("index_owned", "1")
         self.state.set("index_layout", INDEX_LAYOUT)
+        self.state.set("index_theme", self.theme)
 
 
 INDEX_MARK = '<meta name="generator" content="Skyfold notes index">'
-INDEX_LAYOUT = "2"  # raised when Notes.html looks different: an existing one is rewritten once
+INDEX_LAYOUT = "3"  # raised when Notes.html looks different: an existing one is rewritten once
 # Layout by Codex (design proposal for fdb8e84), in the app's own palette. Placeholders are @@name@@
 # (HTML-escaped words) and @@strings@@ / @@data@@ (JSON); no str.format, so CSS/JS braces stay plain.
 INDEX_TEMPLATE = """<!doctype html>
-<html lang="@@lang@@"><head><meta charset="utf-8">""" + INDEX_MARK + """<meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="@@lang@@" data-default-theme="@@default_theme@@"><head><meta charset="utf-8">""" + INDEX_MARK + """<meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>@@title@@ · Skyfold</title>
 @@theme_script@@
@@ -1810,13 +1861,14 @@ INDEX_TEMPLATE = """<!doctype html>
 :root{color-scheme:light;--bg:#fff;--group:#f3f5f8;--hover:#e7ebf0;--border:#dce2e9;--text:#20252b;--muted:#59636f;--accent:#075bcd;--accent-soft:#e7f0ff;--accent-text:#fff;--focus:#075bcd}
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;--bg:#191e25;--group:#222932;--hover:#303944;--border:#36404d;--text:#f0f3f7;--muted:#b0bac7;--accent:#99c2ff;--accent-soft:#243b59;--accent-text:#10223b;--focus:#99c2ff}}
 :root[data-theme=dark]{color-scheme:dark;--bg:#191e25;--group:#222932;--hover:#303944;--border:#36404d;--text:#f0f3f7;--muted:#b0bac7;--accent:#99c2ff;--accent-soft:#243b59;--accent-text:#10223b;--focus:#99c2ff}
+""" + OLED_VARS + """
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:13px/1.5 "Segoe UI Variable Text","Segoe UI Variable","Segoe UI",system-ui,sans-serif}
 button,input{font:inherit;color:inherit}button{cursor:pointer;border:0}a{color:var(--accent)}
 button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
-::selection{background:var(--accent);color:var(--accent-text)}[hidden]{display:none!important}
+::selection{background:var(--fill,var(--accent));color:var(--accent-text)}[hidden]{display:none!important}
 .icon{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
 .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.skip{position:fixed;top:-100px;left:16px;padding:12px;background:var(--accent);color:var(--accent-text);z-index:20;border-radius:8px}.skip:focus{top:12px}
+.skip{position:fixed;top:-100px;left:16px;padding:12px;background:var(--fill,var(--accent));color:var(--accent-text);z-index:20;border-radius:8px}.skip:focus{top:12px}
 .shell{max-width:1200px;margin:auto;padding:0 40px}
 .topbar{min-height:110px;display:flex;align-items:center;justify-content:space-between;gap:20px}
 .brand{display:flex;align-items:center;gap:12px}.brandmark{display:grid;place-items:center;width:44px;height:44px;border-radius:11px;background:var(--accent-soft);color:var(--accent)}.brandmark svg{width:34px;height:34px}
@@ -1954,11 +2006,10 @@ $('totals').textContent=plural(notes.length,S.notes)+' · '+plural(folders.lengt
 $('search-form').onsubmit=e=>e.preventDefault();$('q').oninput=draw;$('clear').onclick=()=>{$('q').value='';draw();$('q').focus()};
 $('collapse-all').onclick=()=>{const close=!!$('collapse-all').dataset.close;for(const f of folders.filter(p=>notes.some(n=>n.f===p&&inFolder(n,selected))))setClosed(f,close);draw();$('collapse-all').focus()};
 $('mobile-folders').onclick=()=>{const open=$('sidebar').classList.toggle('mobile-open');$('mobile-folders').setAttribute('aria-expanded',String(open));if(open)$('folder-nav').querySelector('button').focus()};
-const scheme=matchMedia('(prefers-color-scheme:dark)'),root=document.documentElement;
-function dark(){return root.dataset.theme==='dark'||root.dataset.theme==='light'?root.dataset.theme==='dark':scheme.matches}
-function themeLabel(){const l=dark()?S.toLight:S.toDark;$('theme-toggle').title=l;$('theme-toggle').setAttribute('aria-label',l)}
-window.sfToggleTheme=function(){const next=dark()?'light':'dark';root.dataset.theme=next;try{localStorage.setItem('skyfold-theme',next)}catch(e){}themeLabel()};
-$('theme-toggle').onclick=window.sfToggleTheme;scheme.addEventListener('change',themeLabel);themeLabel();
+function themeLabel(){const l={light:S.toLight,dark:S.toDark,oled:S.toOled}[window.sfNextTheme()];$('theme-toggle').title=l;$('theme-toggle').setAttribute('aria-label',l)}
+$('theme-toggle').onclick=window.sfToggleTheme;
+matchMedia('(prefers-color-scheme:dark)').addEventListener('change',themeLabel);
+window.addEventListener('skyfold-theme-change',themeLabel);themeLabel();
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();$('q').focus()}if(e.key==='Escape'&&document.activeElement===$('q')){$('q').value='';draw()}});
 drawNav();draw();
 </script>
@@ -1966,13 +2017,13 @@ drawNav();draw();
 """
 
 
-def render_index(data: list, updated: str) -> str:
+def render_index(data: list, updated: str, theme: str = "system") -> str:
     """The Notes.html page: the notes' data (title, folder, page, date, locked) and this UI's words."""
     from .i18n import language
 
     words = {
         "title": t("Apple Notes"), "brand_sub": t("Notes on this PC"), "saved": t("Saved to this PC"),
-        "updated": updated, "theme": t("Light / dark"), "folders": t("Folders"), "library": t("Your library"),
+        "updated": updated, "theme": t("Light / dark / OLED"), "folders": t("Folders"), "library": t("Your library"),
         "side_note": t("Your exported notes, ready to read. Changes in Apple Notes appear after the next sync."),
         "intro": t("All your notes from iCloud, kept on this PC."), "search": t("Search notes and folders"),
         "clear": t("Clear search"), "all": t("All notes"), "skip": t("Skip to notes"),
@@ -1983,7 +2034,7 @@ def render_index(data: list, updated: str) -> str:
         "all": t("All notes"), "untitled": t("Untitled"), "locked": t("locked – open it on your iPhone"),
         "collapse": t("Collapse all"), "expand": t("Expand all"), "none": t("No notes found"),
         "tryOther": t("Try another title or folder name."), "showAll": t("Show all notes"),
-        "toDark": t("Switch to dark theme"), "toLight": t("Switch to light theme"),
+        "toOled": t("Switch to OLED theme"), "toDark": t("Switch to dark theme"), "toLight": t("Switch to light theme"),
         "notes": [t("1 note"), t("{n} notes (2-4)"), t("{n} notes")],
         "folderCount": [t("1 folder"), t("{n} folders (2-4)"), t("{n} folders")],
         "slavic": language() == "bs",  # 1 / 2-4 / 5+ forms ("1 bilješka, 3 bilješke, 7 bilješki")
@@ -1995,6 +2046,7 @@ def render_index(data: list, updated: str) -> str:
         return json.dumps(v, ensure_ascii=False).replace("</", "<\\/")
 
     page = INDEX_TEMPLATE.replace("@@theme_script@@", THEME_SCRIPT).replace("@@lang@@", language() or "en")
+    page = page.replace("@@default_theme@@", _export_theme(theme))
     for k, v in words.items():
         page = page.replace(f"@@{k}@@", html.escape(v, quote=True))
     return page.replace("@@strings@@", js(strings)).replace("@@data@@", js(data))

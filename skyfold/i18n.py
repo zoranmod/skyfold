@@ -565,6 +565,9 @@ BS: dict[str, str] = {
     "Theme": "Tema",
     "System": "Sistemska",
     "Light": "Svijetla",
+    "OLED": "OLED (crna)",
+    "Switch to OLED theme": "Prebaci na OLED temu",
+    "Light / dark / OLED": "Svijetlo / tamno / OLED",
     "Dark": "Tamna",
     "Not enough disk space: {need} to download, {free} free on {drive}. "
     "Free up space or choose a folder on another disk in Settings.":

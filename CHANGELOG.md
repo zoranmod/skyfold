@@ -2,6 +2,11 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **OLED theme.** Settings → General → Theme → *OLED* (Bosnian: *OLED (crna)*): a pure black background with Apple's dark system greys for cards and Apple's blue accent. System, Light and Dark look exactly as before. The note pages and Notes.html get it too: their theme switch now cycles light / dark / OLED and remembers the choice; pages follow the app's theme until you pick one there. Pages Skyfold wrote are restyled in place once; pages you changed yourself are left as they are.
+
 ## [1.0.16] - 2026-11-19
 
 ### Changed

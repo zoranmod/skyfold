@@ -27,7 +27,7 @@ from ..config import APP_NAME
 from ..i18n import t
 from ..worker import fmt_time
 from .icons import STATE_COLORS, glyph
-from .theme import state_color
+from .theme import OLED, state_color
 
 log = logging.getLogger(__name__)
 
@@ -142,8 +142,9 @@ class StatusDot(QWidget):
     """Filled circle in the state's colour with a white glyph: the whole sync status at a glance.
     Hover for the full text."""
 
-    def __init__(self) -> None:
+    def __init__(self, palette: dict[str, str]) -> None:
         super().__init__()
+        self.c = palette
         self.setFixedSize(BADGE, BADGE)
         self.state = "idle"
 
@@ -155,12 +156,13 @@ class StatusDot(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(STATE_COLORS.get(self.state, "#22c55e")))
+        fill = state_color(self.c, self.state) if self.c is OLED else STATE_COLORS.get(self.state, "#22c55e")
+        p.setBrush(QColor(fill))
         p.drawEllipse(1, 1, BADGE - 2, BADGE - 2)
         name = {"idle": "check", "syncing": "sync", "paused": "pause", "error": "error",
                 "auth": "error", "offline": "cloud", "setup": "folder", "attention": "error"}.get(self.state, "check")
         g = 16
-        glyph(name, "#ffffff", g).paint(p, QRect((BADGE - g) // 2, (BADGE - g) // 2, g, g))
+        glyph(name, self.c["accent_text"] if self.c is OLED else "#ffffff", g).paint(p, QRect((BADGE - g) // 2, (BADGE - g) // 2, g, g))
 
 
 class StorageRing(QWidget):
@@ -184,7 +186,8 @@ class StorageRing(QWidget):
         p.setPen(QPen(QColor(self.c["track"]), w))
         p.drawEllipse(r)
         full = self.fraction >= 0.9
-        p.setPen(QPen(QColor("#ef4444" if full else self.c["accent"]), w, Qt.SolidLine, Qt.RoundCap))
+        warning = self.c["err"] if self.c is OLED else "#ef4444"
+        p.setPen(QPen(QColor(warning if full else self.c["accent"]), w, Qt.SolidLine, Qt.RoundCap))
         p.drawArc(r, 90 * 16, -int(360 * 16 * self.fraction))
         p.setPen(QColor(self.c["text"]))
         f = p.font()
@@ -589,7 +592,7 @@ class Flyout(QWidget):
         self.gear.setCursor(Qt.PointingHandCursor)
         self.gear.clicked.connect(self.openSettings)
         self.gear.setAccessibleName(t("Settings"))
-        self.dot = StatusDot()
+        self.dot = StatusDot(palette)
         self.storage_ring = StorageRing(palette)
         self.storage_ring.hide()
         head.addWidget(logo)
@@ -810,6 +813,7 @@ class Flyout(QWidget):
         self.c = palette
         self.gear.setIcon(glyph("gear", palette["muted"]))
         self._brand.setPixmap(glyph("cloud", palette["accent_fg"], 20).pixmap(QSize(20, 20)))
+        self.dot.c = palette
         self.storage_ring.c = palette
         self.storage_ring.update()
         self.storage_bar.apply_palette(palette)
