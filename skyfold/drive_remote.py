@@ -288,6 +288,7 @@ class ICloudDrive:
                 d = self.drive
                 document_id, content_url = d._get_upload_contentws_url(file_object=named, zone=parent.zone)
                 form = _StreamedForm(raw, local.name, st.st_size, on_bytes)
+                _big_send_buffer(d.session, content_url)
                 resp = d.session.post(content_url, data=form, headers={"Content-Type": form.content_type},
                                       timeout=(30, 600))
                 d._raise_if_error(resp)
@@ -343,6 +344,45 @@ class ICloudDrive:
             raise _translate(exc) from exc
 
 
+SEND_BUFFER = 8 << 20  # bytes Windows may have on the way to iCloud at once
+
+
+def _big_send_buffer(session: Any, url: str) -> None:
+    """Connections to the upload server get a big send buffer. Windows gives a program's socket
+    64 KB, and one connection can then carry only 64 KB per round trip to Apple (~0.6 MB/s from
+    Europe), however fast the line is; a browser uses far more. Only that server's connections."""
+    from urllib.parse import urlsplit
+
+    mount = getattr(session, "mount", None)
+    adapters = getattr(session, "adapters", None)
+    if mount is None or adapters is None:
+        return
+    parts = urlsplit(url)
+    if parts.scheme != "https" or not parts.netloc:
+        return
+    prefix = f"https://{parts.netloc}/"
+    if isinstance(adapters.get(prefix), _BigSendAdapter):
+        return
+    mount(prefix, _BigSendAdapter())
+
+
+try:
+    from requests.adapters import HTTPAdapter as _HTTPAdapter
+except ImportError:  # pragma: no cover - requests is always there with pyicloud
+    _HTTPAdapter = object  # type: ignore[assignment,misc]
+
+
+class _BigSendAdapter(_HTTPAdapter):  # type: ignore[misc,valid-type]
+    def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
+        import socket
+
+        from urllib3.connection import HTTPConnection
+
+        kwargs["socket_options"] = list(HTTPConnection.default_socket_options) + [
+            (socket.SOL_SOCKET, socket.SO_SNDBUF, SEND_BUFFER)]
+        super().init_poolmanager(*args, **kwargs)
+
+
 class _Named:
     """A file object with only its name (the Drive API reads the name and size from it)."""
 
@@ -389,7 +429,7 @@ class _StreamedForm:
                 if self._left <= 0:
                     self._parts.pop(0)
                     continue
-                chunk = self._raw.read(min(n, self._left))
+                chunk = self._raw.read(min(max(n, 1 << 18), self._left))  # (http.client asks for 8-16 KB)
                 if not chunk:
                     raise OSError("the file got shorter while it was sent")
                 self._left -= len(chunk)

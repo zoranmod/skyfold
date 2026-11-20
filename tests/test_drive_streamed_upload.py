@@ -188,3 +188,61 @@ def test_drive_upload_shows_megabytes_and_stops(drive_env, monkeypatch):
     with pytest.raises(de.Cancelled):
         sync.run()
     assert "film2.mov" not in remote.items
+
+
+def test_upload_connections_get_a_big_send_buffer():
+    """Windows' 64 KB default caps one connection at ~0.6 MB/s to Apple; uploads get 8 MB."""
+    import socket
+
+    session = requests.Session()
+    drive_remote._big_send_buffer(session, "https://p31-docws.icloud.com/ws/upload?x=1")
+    adapter = session.get_adapter("https://p31-docws.icloud.com/ws/upload")
+    assert isinstance(adapter, drive_remote._BigSendAdapter)
+    opts = adapter.poolmanager.connection_pool_kw["socket_options"]
+    assert (socket.SOL_SOCKET, socket.SO_SNDBUF, drive_remote.SEND_BUFFER) in opts
+    assert (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1) in opts  # urllib3's own default kept
+    # other hosts keep the ordinary adapter
+    assert not isinstance(session.get_adapter("https://www.icloud.com/"), drive_remote._BigSendAdapter)
+    drive_remote._big_send_buffer(session, "https://p31-docws.icloud.com/other")
+    assert session.get_adapter("https://p31-docws.icloud.com/x") is adapter  # mounted once
+
+
+def test_big_send_buffer_really_reaches_the_socket():
+    import socket
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from urllib3.connection import HTTPConnection
+
+    sizes = []
+    real_create = socket.create_connection
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200); self.send_header("Content-Length", "0"); self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        session = requests.Session()
+        url = f"http://127.0.0.1:{srv.server_address[1]}/"
+        adapter = drive_remote._BigSendAdapter()
+        session.mount(url, adapter)
+        orig = HTTPConnection._new_conn
+
+        def spy(self):
+            sock = orig(self)
+            sizes.append(sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF))
+            return sock
+
+        HTTPConnection._new_conn = spy
+        try:
+            session.get(url, timeout=5)
+        finally:
+            HTTPConnection._new_conn = orig
+    finally:
+        srv.shutdown()
+    assert sizes and sizes[0] >= drive_remote.SEND_BUFFER
