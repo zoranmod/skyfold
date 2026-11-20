@@ -241,15 +241,25 @@ class DriveSyncer:
             raw = json.loads(self.cache_file.read_text(encoding="utf-8"))
             if raw.get("root") == str(self.root):
                 self.cache = {d["path"]: DriveItem(**d) for d in raw["items"]}
+                self._saved_cache = self._cache_shape()
         except (OSError, ValueError, KeyError, TypeError):
             self.cache = {}
+
+    def _cache_shape(self) -> dict[str, tuple]:
+        """What the saved file holds, to compare (items are values, never shared with the cache)."""
+        return {p: (i.path, i.drivewsid, i.docwsid, i.zone, i.etag, i.is_dir, i.size, i.mtime)
+                for p, i in self.cache.items()}
 
     def _save_cache(self) -> None:
         if not self.cache_file:
             return
+        shape = self._cache_shape()
+        if shape == getattr(self, "_saved_cache", None):
+            return  # nothing changed since it was written (a quick check of a quiet folder)
         try:
             save_text(self.cache_file, json.dumps({"root": str(self.root),
                                                    "items": [asdict(i) for i in self.cache.values()]}))
+            self._saved_cache = shape
         except OSError as exc:
             log.warning("Could not save Drive cache: %s", exc)
 
@@ -2162,18 +2172,27 @@ class DriveSyncer:
         # a quick pass only holds a slice: a deleted folder's files are elsewhere
         everything = self.state.all() if (to_cloud or to_pc) else {}
 
-        def under_any(p: str, tops: set[str]) -> bool:
+        def tops_of(p: str, tops: set[str]) -> list[str]:
+            """The affected entries this path is (or lies inside)."""
+            found = []
             while True:
                 if p in tops:
-                    return True
+                    found.append(p)
                 if "/" not in p:
-                    return False
+                    return found
                 p = p.rsplit("/", 1)[0]
 
         def count(paths: list[str], _tree: dict) -> int:
+            # each file once, with its affected ancestors: one walk, never file x entry pairs
             tops = set(paths)
-            files = {p for p, b in everything.items() if not b.is_dir and under_any(p, tops)}
-            n = len(files) + sum(1 for t in tops if not any(under_any(f, {t}) for f in files))
+            files, covered = 0, set()
+            for p, b in everything.items():
+                if not b.is_dir:
+                    hit = tops_of(p, tops)
+                    if hit:
+                        files += 1
+                        covered.update(hit)
+            n = files + len(tops - covered)  # (an empty folder, or an entry with no file row, counts once)
             total = sum(1 for b in everything.values() if not b.is_dir)
             if n >= 5 and n > total // 2:
                 return threshold + 1  # more than half of everything (5 items or more): always ask

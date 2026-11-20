@@ -186,7 +186,6 @@ def test_majority_of_small_drive_gets_documented_confirmation(drive_env):
     assert set(result.pending_to_cloud) == set(names[:5]) and not result.deleted_cloud
 
 
-@pytest.mark.xfail(reason='planned after 1.0.18: speed only, the result is right', strict=True)
 def test_many_individual_deletions_do_not_require_pairwise_path_checks(drive_env):
     sync, remote, root, _ = drive_env
     n = 160
@@ -199,11 +198,10 @@ def test_many_individual_deletions_do_not_require_pairwise_path_checks(drive_env
         result = sync.run()
     assert len(result.pending_to_cloud) == n
     checks = sum(s.callcount for s in profile.getstats()
-                 if getattr(s.code, "co_name", "") == "under_any")
+                 if getattr(s.code, "co_name", "") in ("under_any", "tops_of"))
     assert checks < 10 * n, f"{checks} ancestry checks for {n} files at the root"
 
 
-@pytest.mark.xfail(reason='planned after 1.0.18: speed only, the result is right', strict=True)
 def test_unchanged_quick_pass_does_not_rewrite_entire_drive_cache(drive_env, tmp_path, monkeypatch):
     sync, remote, root, _ = drive_env
     cache = tmp_path / "drive-cache.json"
