@@ -2,7 +2,7 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.18] - 2026-11-20
 
 ### Fixed
 - **iCloud Drive: a retried replacement no longer removes a newer save from another device.** If replacing a file in iCloud was interrupted (connection lost, PC restarted) and a Mac or iPhone saved a new version meanwhile, the retry moved that new version to Recently Deleted too. Now both are kept: iCloud's version keeps the name, the PC version becomes a `(PC conflict …)` copy.
