@@ -69,7 +69,8 @@ def test_response_is_released_when_transfer_stops(tmp_path):
 def test_release_assets_are_bound_to_the_selected_tag():
     data = release_json()
     data["assets"][1]["browser_download_url"] = DL.replace("v9.9.9", "v9.9.8") + up.ZIP_NAME + ".sha256"
-    assert up.latest_release(lambda *_: SimpleNamespace(json=lambda: data)) is None
+    with pytest.raises(up.IncompleteRelease):  # refused, and since 1.0.18 not reported as "latest" either
+        up.latest_release(lambda *_: SimpleNamespace(json=lambda: data))
 
 
 def test_release_metadata_fails_closed_on_invalid_schema():

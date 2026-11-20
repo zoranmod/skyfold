@@ -182,6 +182,7 @@ class DriveState:
             self._db.execute("COMMIT")
 
 
+SKIPPED_REMOTE = "skipped_remote"  # iCloud items the PC never shows (JSON list of paths)
 PENDING_MOVE = "move_pending"  # renames/moves in iCloud started and not known to be settled, by item id
 
 
@@ -670,6 +671,8 @@ class DriveSyncer:
         prev_before = self._prev
         if hasattr(self.remote, "incomplete"):
             self.remote.incomplete = set()
+        if hasattr(self.remote, "skipped"):
+            self.remote.skipped = set()
         res = DriveResult()
         base = self.state.all()  # (after the folder check above)
         everything_known = dict(base)  # before a quick pass narrows `base` to a few folders
@@ -719,7 +722,8 @@ class DriveSyncer:
             remote = {p: r for p, r in remote.items() if p in dirs or _parent(p) in dirs}
         # Names the PC side never looks at (temp files, desktop.ini, …) are left alone in iCloud too:
         # otherwise a downloaded "x.tmp" would look deleted on the PC and be trashed in iCloud.
-        self._unsynced_remote = sorted(p for p in remote if _ignored_path(p))  # never deleted with a folder
+        self._unsynced_remote = sorted({p for p in remote if _ignored_path(p)}
+                                       | self._skipped_remote(scope, remote))  # never deleted with a folder
         remote = {p: r for p, r in remote.items() if not _ignored_path(p)}
         base = {p: b for p, b in base.items() if not _ignored_path(p)}
         if self.folders is not None:  # only the chosen folders: everything else is left alone
@@ -838,7 +842,11 @@ class DriveSyncer:
                         self._conflict(path, r, res, downloads)
                     continue
                 if b.pending:  # a replacement upload that didn't finish: the PC version still has to go up
-                    if settled:
+                    if b.etag is not None and r.etag != b.etag:
+                        # the version this upload replaced went to Recently Deleted; what is there now was
+                        # saved by another device meanwhile: keep both, as for any other conflict
+                        self._conflict(path, r, res, downloads)
+                    elif settled:
                         uploads.append(path)
                     continue
                 # iCloud's version tag differs from the synced one (or isn't known yet, after our own
@@ -1286,6 +1294,25 @@ class DriveSyncer:
     def _under_local_shell(self, paths: set[str]) -> bool:
         tops = [k[len("shell:pc:"):].lower() for k in self.state.meta_items("shell:pc:")]
         return any(p.lower() == t or p.lower().startswith(t + "/") for p in paths for t in tops)
+
+    def _skipped_remote(self, scope: list[DriveItem] | None, remote: dict[str, DriveItem]) -> set[str]:
+        """iCloud items in listed folders that the PC never shows (hidden ones, names with a slash).
+        Remembered between passes: a quick pass that only knows a folder by its rows still keeps it."""
+        try:
+            before = set(json.loads(self.state.get_meta(SKIPPED_REMOTE) or "[]"))
+        except (ValueError, TypeError):
+            before = set()
+        known = before
+        now = set(getattr(self.remote, "skipped", set()) or ())
+        if scope is None:
+            partly = set(getattr(self.remote, "incomplete", set()) or ())
+            known = {p for p in known if _parent(p) in partly} | now
+        else:
+            dirs = {f.path for f in scope} | {p for p, r in remote.items() if r.is_dir}
+            known = {p for p in known if _parent(p) not in dirs} | now
+        if known != before:
+            self.state.set_meta(SKIPPED_REMOTE, json.dumps(sorted(known)) if known else None)
+        return known
 
     def _keep_unsynced_remote(self, to_cloud: list[str], remote: dict[str, DriveItem],
                               base: dict[str, Base]) -> list[str]:
@@ -2149,7 +2176,7 @@ class DriveSyncer:
             n = len(files) + sum(1 for t in tops if not any(under_any(f, {t}) for f in files))
             total = sum(1 for b in everything.values() if not b.is_dir)
             if n >= 5 and n > total // 2:
-                return threshold + 1  # more than half of everything: always ask
+                return threshold + 1  # more than half of everything (5 items or more): always ask
             return n
 
         if to_cloud:
@@ -2247,15 +2274,19 @@ class DriveSyncer:
             return
         total_bytes = sum(i.size for i in items)
         # Needed: what the downloads add to the disk (a file that replaces one, or only gets compared
-        # with one, adds little or nothing) plus room for the temporary files of one batch.
+        # with one, adds little or nothing) plus room for the temporary files of one batch. A new
+        # file's temporary copy becomes the file itself, so it is counted once.
         growth = 0
+        beside: list[int] = []  # files that exist already: their new copy is made next to them
         for i in items:
             try:
                 have = self._abs(i.path).stat().st_size
             except OSError:
-                have = 0
-            growth += max(0, (i.size or 0) - have)
-        staging = sum(sorted(((i.size or 0) for i in items), reverse=True)[:WORKERS])
+                have = None
+            growth += max(0, (i.size or 0) - (have or 0))
+            if have is not None:
+                beside.append(i.size or 0)
+        staging = sum(sorted(beside, reverse=True)[:WORKERS])
         check_free_space(self.root, growth + staging)
         total = total_bytes or len(items)
         done = 0
@@ -2522,7 +2553,9 @@ class DriveSyncer:
                 if existing is not None:
                     # Replacing a file: move the old iCloud version to Recently Deleted first.
                     # Mark the row "pending" so a failed upload is retried, never mistaken for a deletion.
-                    self.state.put(Base(path, False, None, existing.size, lo.mtime, lo.size, True))
+                    # The tag of the version replaced is kept: another version found there later is
+                    # someone else's save, not this one, and is never trashed by the retry.
+                    self.state.put(Base(path, False, existing.etag, existing.size, lo.mtime, lo.size, True))
                     self.remote.trash(existing)
                     self._check_cancel()  # (the row stays "pending": the upload is done next time)
                 self.remote.upload(parent, self._abs(path), data)

@@ -498,6 +498,9 @@ BS: dict[str, str] = {
     "iCloud Drive": "iCloud Drive",
     "iCloud Drive synced": "iCloud Drive sinhronizovan",
     "iCloud Drive: finished with {n} errors. Will retry.": "iCloud Drive: završeno uz {n} grešaka. Pokušaću ponovo.",
+    "Notes: finished with {n} errors. Will retry.": "Bilješke: završeno uz {n} grešaka. Pokušaću ponovo.",
+    "Skyfold {version} is published, but its download isn't complete yet. Try again later.":
+        "Skyfold {version} je objavljen, ali preuzimanje još nije spremno. Pokušaj ponovo kasnije.",
     "{n} min": "{n} min",
     "Off · click to turn on": "Isključeno · klikni da uključiš",
     "checked {when}": "provjereno {when}",
@@ -673,9 +676,9 @@ BS: dict[str, str] = {
     "Show all notes": "Prikaži sve bilješke",
     "Switch to dark theme": "Prebaci na tamnu temu",
     "Switch to light theme": "Prebaci na svijetlu temu",
-    "1 note": "1 bilješka",
+    "{n} note": "{n} bilješka",  # 1, and 21, 31, 101 … in Bosnian
     "{n} notes (2-4)": "{n} bilješke",
-    "1 folder": "1 folder",
+    "{n} folder": "{n} folder",  # 1, and 21, 31, 101 … in Bosnian
     "{n} folders (2-4)": "{n} foldera",
     "{n} folders": "{n} foldera",
     "The location opens in Google Maps in your browser. Lost device? Use iCloud.com for Lost Mode or erasing.":

@@ -791,9 +791,12 @@ class SyncWorker(QObject):
     def _run_notes(self, full: bool, problems: list[str]) -> bool:
         assert self.notes is not None
         try:
-            self.notes.run(full=full)
+            res = self.notes.run(full=full)
         except Exception as exc:  # noqa: BLE001
             return self._handle(exc, problems, t("Notes"))
+        # A note that couldn't be downloaded (now, or again) is missing from the folder: never "in sync"
+        if res is not None and (getattr(res, "errors", 0) or getattr(res, "held", False)):
+            problems.append(t("Notes: finished with {n} errors. Will retry.", n=max(1, res.errors)))
         return True
 
     def _run_drive(self, problems: list[str], changed: set[str] | None = None) -> bool:

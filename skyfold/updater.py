@@ -150,6 +150,10 @@ def _close(r) -> None:
             pass
 
 
+class IncompleteRelease(RuntimeError):
+    """A newer release is published without its own download files (yet)."""
+
+
 def latest_release(get=_get) -> Release | None:
     """The latest published release, or None when it isn't a complete Skyfold release: its zip and
     checksum must be exactly this release's own files (same tag), anything else is refused. When
@@ -209,6 +213,9 @@ def _latest_from_api(get) -> Release | None:
         base = f"{DOWNLOADS}{tag}/"
         zip_url, sha_url = assets.get(ZIP_NAME), assets.get(ZIP_NAME + ".sha256")
         if zip_url != base + ZIP_NAME or sha_url != base + ZIP_NAME + ".sha256":
+            if is_newer(version):  # newer, but not complete (still uploading, or broken): never "latest"
+                raise IncompleteRelease(t("Skyfold {version} is published, but its download isn't complete yet. "
+                                          "Try again later.", version=version))
             return None  # only this release's own files
         page = data.get("html_url")
         if not isinstance(page, str) or not page.startswith(f"https://github.com/{REPO}/releases/"):

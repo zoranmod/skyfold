@@ -122,6 +122,7 @@ class ICloudDrive:
         self._api = api
         self._drive: Any = None
         self.incomplete: set[str] = set()  # folders iCloud answered with fewer items than it holds
+        self.skipped: set[str] = set()  # items listed but not synced (hidden, a slash in the name)
 
     @property
     def drive(self) -> Any:
@@ -193,11 +194,14 @@ class ICloudDrive:
                                 root.zone = folder.get("zone", root.zone)
                                 root.etag = folder.get("etag")
                             for it in folder.get("items", []):
-                                if it.get("hidden") or it.get("isHidden"):
-                                    continue
                                 name = item_name(it)
+                                if it.get("hidden") or it.get("isHidden"):
+                                    # never shown on the PC, so never deleted with its folder either
+                                    self.skipped.add(f"{base}/{name}" if base else name)
+                                    continue
                                 if "/" in name or "\\" in name:
                                     log.info("Left in iCloud, name has a slash: %r", name)
+                                    self.skipped.add(f"{base}/{name}" if base else name)
                                     continue
                                 path = str(PurePosixPath(base) / name) if base else name
                                 is_dir = str(it.get("type", "")).upper() in ("FOLDER", "APP_LIBRARY")
@@ -277,7 +281,8 @@ class ICloudDrive:
 
     def mkdir(self, parent: DriveItem, name: str) -> None:
         try:
-            self.drive.create_folders(parent.drivewsid, name)
+            resp = self.drive.create_folders(parent.drivewsid, name)
+            _check_first(resp, "folders", "folder creation")
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
 
@@ -309,9 +314,17 @@ class ICloudDrive:
 
     def trash(self, item: DriveItem) -> None:
         try:
-            self.drive.move_items_to_trash(item.drivewsid, item.etag)
+            resp = self.drive.move_items_to_trash(item.drivewsid, item.etag)
+            _check_first(resp, "items", "deletion")
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
+
+
+def _check_first(resp: Any, key: str, what: str) -> None:
+    """The answer for a one-item request, when Apple sent one (an empty answer is taken as done)."""
+    listed = resp.get(key) if isinstance(resp, dict) else None
+    if isinstance(listed, list) and listed and isinstance(listed[0], dict):
+        _check_item(listed[0], what)
 
 
 def _check_item(item: dict[str, Any], what: str) -> None:

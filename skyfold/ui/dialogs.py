@@ -711,7 +711,11 @@ class SettingsDialog(_Dialog):
     def _row(text: str, w: QWidget) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(12)
-        row.addWidget(QLabel(text), 1, Qt.AlignVCenter)
+        label = QLabel(text)
+        label.setBuddy(w)  # the label names the control (screen readers, Alt+letter)
+        if not w.accessibleName():
+            w.setAccessibleName(text)
+        row.addWidget(label, 1, Qt.AlignVCenter)
         w.setFixedWidth(220)
         row.addWidget(w, 0, Qt.AlignVCenter)
         return row
@@ -736,6 +740,8 @@ class SettingsDialog(_Dialog):
         edit = _field(QLineEdit(value))
         browse = QPushButton(t("Change…"))
         browse.clicked.connect(lambda: self._browse(edit, title))
+        edit.setAccessibleName(title)  # every "Change…" looks the same: a screen reader says which folder
+        browse.setAccessibleName(title)
         row.addWidget(edit, 1)
         row.addWidget(browse)
         parent.addLayout(row)
