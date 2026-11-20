@@ -273,3 +273,51 @@ def test_incomplete_newer_release_does_not_tell_user_they_are_current(qapp, monk
     controller = NS(flyout=NS(set_update=lambda version: None))
     app.Controller.check_updates(controller, manual=True)
     assert messages and all("latest version" not in str(m).lower() for m in messages), messages
+
+
+def test_refused_folder_creation_retries_after_write_access_returns(drive_env, monkeypatch):
+    sync, remote, root, _ = drive_env
+    sync.run()
+    folder = root / "Invoices"
+    folder.mkdir()
+    refusal = {"folders": [{"status": "PERMISSION_DENIED", "errorCode": "PERMISSION_DENIED"}]}
+    adapter = ICloudDrive(NS(drive=NS(create_folders=lambda *args: refusal)))
+    with monkeypatch.context() as patch:
+        patch.setattr(remote, "mkdir", adapter.mkdir)
+        first = sync.run()
+    # With the refusal lifted, two ordinary full passes must converge.
+    sync.run()
+    sync.run()
+    assert folder.is_dir() and "Invoices" in remote.items, (first.errors, folder.exists(), remote.items)
+
+
+def test_drive_restart_after_interrupted_upload_preserves_both_versions(drive_env, monkeypatch, tmp_path):
+    sync, remote, root, _ = drive_env
+    remote.put("report.txt", b"first version")
+    sync.run()
+    write(root, "report.txt", b"PC revision")
+    def disconnected(*args):
+        raise RemoteUnavailable("connection lost")
+    with monkeypatch.context() as patch:
+        patch.setattr(remote, "upload", disconnected)
+        with pytest.raises(RemoteUnavailable):
+            sync.run()
+    sync.state._db.close()
+    remote.put("report.txt", b"Mac revision while the PC was off")
+    restarted = de.DriveSyncer(de.DriveState(tmp_path / "d.db"), remote, root, sync.delete_threshold)
+    restarted.run()
+    active = {p.read_bytes() for p in root.glob("*.txt")}
+    active.update(item["data"] for item in remote.items.values() if not item["dir"])
+    assert {b"PC revision", b"Mac revision while the PC was off"} <= active
+
+
+def test_note_asset_cleanup_after_delete_keeps_personal_files(notes_env, tmp_path):
+    sync, remote, root, assets = photo_note(notes_env, tmp_path)
+    private_images = list(assets.iterdir())
+    personal = assets / "my-copy.txt"
+    personal.write_bytes(b"keep this")
+    remote.delete("n1")
+    sync.run()
+    assert not (root / "Notes/Travel receipt.html").exists()
+    assert personal.read_bytes() == b"keep this"
+    assert all(not p.exists() for p in private_images)
