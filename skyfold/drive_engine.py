@@ -2548,7 +2548,13 @@ class DriveSyncer:
             lo = local[path]
             try:
                 self._check_inside(self._abs(path))
-                data = self._abs(path).read_bytes()  # locked or unreadable: fail before touching iCloud
+                # Locked or unreadable: fail before touching iCloud. A replacement trashes the old iCloud
+                # version first, so the whole file is read through once (in pieces) before that.
+                if existing is not None:
+                    _file_digest(self._abs(path))
+                else:
+                    with open(self._abs(path), "rb") as fh:
+                        fh.read(1)
                 self._check_cancel()  # reading can take a while: stop here, before iCloud is touched
                 if existing is not None:
                     # Replacing a file: move the old iCloud version to Recently Deleted first.
@@ -2558,10 +2564,13 @@ class DriveSyncer:
                     self.state.put(Base(path, False, existing.etag, existing.size, lo.mtime, lo.size, True))
                     self.remote.trash(existing)
                     self._check_cancel()  # (the row stays "pending": the upload is done next time)
-                self.remote.upload(parent, self._abs(path), data)
+                sent = self.remote.upload(parent, self._abs(path))  # streamed: never the whole file in memory
+                if isinstance(sent, tuple) and len(sent) == 2:
+                    size, digest = sent  # exactly what was sent
+                else:
+                    size, digest = _file_digest(self._abs(path))
                 # the tag iCloud gives it isn't known yet; what it must contain is
-                self.state.put(Base(path, False, None, len(data), lo.mtime, lo.size, False,
-                                    hashlib.sha256(data).hexdigest()))
+                self.state.put(Base(path, False, None, size, lo.mtime, lo.size, False, digest))
                 res.uploaded += 1
                 res.last_up = res.last_up or str(self._abs(path))
                 res.up_files.append(path)
@@ -2570,6 +2579,15 @@ class DriveSyncer:
             except Exception as exc:  # noqa: BLE001
                 res.errors += 1
                 self.cb.activity("error", t("Upload failed ({name}): {error}", name=path, error=brief(exc)))
+
+
+def _file_digest(p: Path) -> tuple[int, str]:
+    h, n = hashlib.sha256(), 0
+    with open(p, "rb") as fh:
+        while chunk := fh.read(1 << 20):
+            h.update(chunk)
+            n += len(chunk)
+    return n, h.hexdigest()
 
 
 _BAD_CHARS = set('<>:"|?*\\') | {chr(c) for c in range(32)}

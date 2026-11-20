@@ -6,6 +6,7 @@ Folders are fetched in batches (one request per up to 50 folders) to keep that c
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import os
@@ -268,14 +269,29 @@ class ICloudDrive:
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
 
-    def upload(self, parent: DriveItem, local: Path, data: bytes | None = None) -> None:
+    def upload(self, parent: DriveItem, local: Path, data: bytes | None = None) -> tuple[int, str]:
+        """Sends the file; returns (size, sha256) of exactly the bytes sent. Without `data` the file
+        is streamed from disk: a big video never has to fit in memory."""
         try:
-            if data is None:
-                data = local.read_bytes()
-            fh = io.BytesIO(data)
-            fh.name = local.name  # the Drive API takes the file name from the file object
-            st = local.stat()
-            self.drive.send_file(parent.docwsid, fh, zone=parent.zone, mtime=st.st_mtime, ctime=st.st_mtime)
+            if data is not None:
+                fh: Any = io.BytesIO(data)
+                fh.name = local.name  # the Drive API takes the file name from the file object
+                st = local.stat()
+                self.drive.send_file(parent.docwsid, fh, zone=parent.zone, mtime=st.st_mtime, ctime=st.st_mtime)
+                return len(data), hashlib.sha256(data).hexdigest()
+            with open(local, "rb") as raw:
+                st = os.fstat(raw.fileno())
+                named = _Named(raw, local.name)
+                d = self.drive
+                document_id, content_url = d._get_upload_contentws_url(file_object=named, zone=parent.zone)
+                form = _StreamedForm(raw, local.name, st.st_size)
+                resp = d.session.post(content_url, data=form, headers={"Content-Type": form.content_type},
+                                      timeout=(30, 600))
+                d._raise_if_error(resp)
+                form.check_complete()  # the file shrank while it was sent: never taken as sent
+                d._update_contentws(parent.docwsid, resp.json()["singleFile"], document_id, named, parent.zone,
+                                    mtime=st.st_mtime, ctime=st.st_mtime)
+                return st.st_size, form.digest()
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
 
@@ -318,6 +334,71 @@ class ICloudDrive:
             _check_first(resp, "items", "deletion")
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
+
+
+class _Named:
+    """A file object with only its name (the Drive API reads the name and size from it)."""
+
+    def __init__(self, raw: Any, name: str) -> None:
+        self._raw, self.name = raw, name
+
+    def tell(self) -> int:
+        return self._raw.tell()
+
+    def seek(self, pos: int, whence: int = 0) -> int:
+        return self._raw.seek(pos, whence)
+
+
+class _StreamedForm:
+    """The multipart body requests would build for files={name: file}, read from disk piece by
+    piece (requests streams a body that has read() and a length). The bytes sent are hashed on
+    the way, so what is recorded is exactly what iCloud got."""
+
+    def __init__(self, raw: Any, name: str, size: int) -> None:
+        from urllib3.fields import RequestField
+        from urllib3.filepost import choose_boundary, encode_multipart_formdata
+
+        field = RequestField(name=name, data=b"", filename=name)
+        field.make_multipart(content_type=None)
+        boundary = choose_boundary()
+        body, self.content_type = encode_multipart_formdata([field], boundary=boundary)
+        tail = b"\r\n--" + boundary.encode() + b"--\r\n"
+        assert body.endswith(tail)
+        self._parts = [body[:-len(tail)], None, tail]  # None: the file itself
+        self._raw, self._size, self._left = raw, size, size
+        self._raw.seek(0)
+        self._hash = hashlib.sha256()
+        self._len = len(body) + size
+
+    def __len__(self) -> int:
+        return self._len
+
+    def read(self, n: int = -1) -> bytes:
+        n = 1 << 20 if n is None or n < 0 else n
+        while self._parts:
+            part = self._parts[0]
+            if part is None:
+                if self._left <= 0:
+                    self._parts.pop(0)
+                    continue
+                chunk = self._raw.read(min(n, self._left))
+                if not chunk:
+                    raise OSError("the file got shorter while it was sent")
+                self._left -= len(chunk)
+                self._hash.update(chunk)
+                return chunk
+            if part:
+                self._parts[0] = part[n:]
+                return part[:n]
+            self._parts.pop(0)
+        return b""
+
+    def check_complete(self) -> None:
+        if self._left or self._raw.read(1):
+            raise OSError("the file changed size while it was sent")
+
+    def digest(self) -> str:
+        return self._hash.hexdigest()
 
 
 def _check_first(resp: Any, key: str, what: str) -> None:

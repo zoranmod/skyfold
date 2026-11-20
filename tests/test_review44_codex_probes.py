@@ -96,7 +96,6 @@ def test_only_new_download_needs_room_for_one_copy(drive_env, monkeypatch):
     assert (root / "recording.mov").stat().st_size == size
 
 
-@pytest.mark.xfail(reason="planned after 1.0.18: streamed Drive uploads (pyicloud's send_file has to stream first)", strict=True)
 def test_large_drive_upload_does_not_allocate_a_file_sized_buffer(drive_env, monkeypatch):
     sync, remote, root, _ = drive_env
     sync.run()
