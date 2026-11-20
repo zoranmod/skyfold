@@ -269,7 +269,10 @@ class ICloudDrive:
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
 
-    def upload(self, parent: DriveItem, local: Path, data: bytes | None = None) -> tuple[int, str]:
+    streams_progress = True  # upload() takes on_bytes
+
+    def upload(self, parent: DriveItem, local: Path, data: bytes | None = None,
+               on_bytes: Callable[[int], None] | None = None) -> tuple[int, str]:
         """Sends the file; returns (size, sha256) of exactly the bytes sent. Without `data` the file
         is streamed from disk: a big video never has to fit in memory."""
         try:
@@ -284,7 +287,7 @@ class ICloudDrive:
                 named = _Named(raw, local.name)
                 d = self.drive
                 document_id, content_url = d._get_upload_contentws_url(file_object=named, zone=parent.zone)
-                form = _StreamedForm(raw, local.name, st.st_size)
+                form = _StreamedForm(raw, local.name, st.st_size, on_bytes)
                 resp = d.session.post(content_url, data=form, headers={"Content-Type": form.content_type},
                                       timeout=(30, 600))
                 d._raise_if_error(resp)
@@ -293,6 +296,10 @@ class ICloudDrive:
                                     mtime=st.st_mtime, ctime=st.st_mtime)
                 return st.st_size, form.digest()
         except Exception as exc:  # noqa: BLE001
+            from .engine import Cancelled
+
+            if isinstance(exc, Cancelled):
+                raise  # the user stopped it: not a network problem
             raise _translate(exc) from exc
 
     def mkdir(self, parent: DriveItem, name: str) -> None:
@@ -354,7 +361,7 @@ class _StreamedForm:
     piece (requests streams a body that has read() and a length). The bytes sent are hashed on
     the way, so what is recorded is exactly what iCloud got."""
 
-    def __init__(self, raw: Any, name: str, size: int) -> None:
+    def __init__(self, raw: Any, name: str, size: int, on_bytes: Callable[[int], None] | None = None) -> None:
         from urllib3.fields import RequestField
         from urllib3.filepost import choose_boundary, encode_multipart_formdata
 
@@ -369,6 +376,7 @@ class _StreamedForm:
         self._raw.seek(0)
         self._hash = hashlib.sha256()
         self._len = len(body) + size
+        self._on_bytes = on_bytes
 
     def __len__(self) -> int:
         return self._len
@@ -386,6 +394,8 @@ class _StreamedForm:
                     raise OSError("the file got shorter while it was sent")
                 self._left -= len(chunk)
                 self._hash.update(chunk)
+                if self._on_bytes:
+                    self._on_bytes(len(chunk))  # (read as the connection takes it: what is sent)
                 return chunk
             if part:
                 self._parts[0] = part[n:]

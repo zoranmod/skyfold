@@ -9,6 +9,7 @@ from urllib3 import filepost
 
 from skyfold import drive_remote
 from skyfold.drive_remote import DriveItem, ICloudDrive
+from tests.test_drive import env as drive_env  # noqa: F401  (fixture)
 
 
 class FakeApi:
@@ -138,3 +139,52 @@ def test_real_requests_sends_the_same_body_over_http(tmp_path, monkeypatch):
     (te1, streamed), (te2, reference) = got["bodies"]
     ref_boundary = reference.split(b"\r\n", 1)[0][2:]
     assert te1 is None and streamed == reference.replace(ref_boundary, b"B0UNDARY")
+
+
+def test_streamed_form_reports_every_byte_sent(tmp_path):
+    f = tmp_path / "big.bin"
+    f.write_bytes(b"z" * 300_000)
+    seen = []
+    with open(f, "rb") as raw:
+        form = drive_remote._StreamedForm(raw, f.name, 300_000, seen.append)
+        while form.read(8192):
+            pass
+    assert sum(seen) == 300_000
+
+
+def test_drive_upload_shows_megabytes_and_stops(drive_env, monkeypatch):
+    from skyfold import drive_engine as de
+    sync, remote, root, _ = drive_env
+    sync.run()
+    (root / "film.mov").write_bytes(b"m" * 4_000_000)
+    import os, time as _t
+    old = _t.time() - 600
+    os.utime(root / "film.mov", (old, old))
+    texts = []
+    sync.cb.progress = lambda done, total, text: texts.append((done, total, text))
+    remote.streams_progress = True
+    real = remote.upload
+
+    def upload(parent, local, data=None, on_bytes=None):
+        for _ in range(8):
+            on_bytes(500_000)
+        return real(parent, local)
+
+    monkeypatch.setattr(remote, "upload", upload)
+    monkeypatch.setattr(de.time, "monotonic", iter(range(0, 10_000, 1)).__next__)
+    sync.run()
+    assert any(d == 4_000_000 and "MB" in text for d, total, text in texts), texts[-3:]
+    # Stop in the middle: the upload stops at its next piece, nothing is recorded as sent
+    (root / "film2.mov").write_bytes(b"n" * 4_000_000)
+    os.utime(root / "film2.mov", (old, old))
+
+    def stopped_midway(parent, local, data=None, on_bytes=None):
+        on_bytes(500_000)
+        sync.cancel_flag.set()  # the Stop button
+        on_bytes(500_000)
+        raise AssertionError("not stopped")
+
+    monkeypatch.setattr(remote, "upload", stopped_midway)
+    with pytest.raises(de.Cancelled):
+        sync.run()
+    assert "film2.mov" not in remote.items

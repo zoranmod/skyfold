@@ -2555,9 +2555,25 @@ class DriveSyncer:
 
     def _uploads(self, paths: list[str], remote: dict[str, DriveItem], base: dict[str, Base],
                  local: dict[str, Local], res: DriveResult) -> None:
+        from .ui_text import Rate
+
+        rate = Rate()
+        total = sum(local[p].size for p in paths if p in local) or 0
+        sent_before = 0  # bytes of the files already sent in this batch
+        shown = [0.0]
+
+        def show(i: int, now_bytes: int, force: bool = False) -> None:
+            clock = time.monotonic()
+            if not force and clock - shown[0] < 0.5:
+                return
+            shown[0] = clock
+            rate.add(now_bytes, i)
+            self.cb.progress(now_bytes, total or 1, transfer_text(t("Drive: uploading "), i, len(paths),
+                                                                  now_bytes, total, rate))
+
         for n, path in enumerate(paths, 1):
             self._check_cancel()
-            self.cb.progress(n - 1, len(paths), t("Drive: uploading {i} of {n}", i=n, n=len(paths)))
+            show(n, sent_before, force=True)  # (the file being sent: "uploading 1 of 1 files")
             parent_path = str(PurePosixPath(path).parent) if "/" in path else ""
             parent = remote.get(parent_path)
             if parent is None or not parent.is_dir:
@@ -2583,7 +2599,15 @@ class DriveSyncer:
                     self.state.put(Base(path, False, existing.etag, existing.size, lo.mtime, lo.size, True))
                     self.remote.trash(existing)
                     self._check_cancel()  # (the row stays "pending": the upload is done next time)
-                sent = self.remote.upload(parent, self._abs(path))  # streamed: never the whole file in memory
+                if getattr(self.remote, "streams_progress", False):
+                    def on_bytes(k: int, _n=n, _base=sent_before, _got=[0]) -> None:
+                        if self._stopped():
+                            raise Cancelled()  # Stop works in the middle of a big upload too
+                        _got[0] += k
+                        show(_n, _base + _got[0])
+                    sent = self.remote.upload(parent, self._abs(path), on_bytes=on_bytes)  # streamed from disk
+                else:
+                    sent = self.remote.upload(parent, self._abs(path))
                 if isinstance(sent, tuple) and len(sent) == 2:
                     size, digest = sent  # exactly what was sent
                 else:
@@ -2593,6 +2617,7 @@ class DriveSyncer:
                 res.uploaded += 1
                 res.last_up = res.last_up or str(self._abs(path))
                 res.up_files.append(path)
+                sent_before += lo.size
             except (AuthRequired, RemoteUnavailable, Cancelled):
                 raise
             except Exception as exc:  # noqa: BLE001
