@@ -1303,6 +1303,84 @@ class NotesSyncer:
 
         recycle(p)
 
+    # attachments ----------------------------------------------------------------------
+    _ASSET_REF = re.compile(r"""[^"'\s()<>]*_assets[\\/][^"'\s()<>]*""")
+
+    def _page_assets(self, rel: str | None) -> dict[str, list[int]]:
+        """The attachment files a page of ours shows: path under the notes folder -> [size, mtime_ns]."""
+        from urllib.parse import unquote
+
+        out: dict[str, list[int]] = {}
+        if not rel:
+            return out
+        page = self.root / rel
+        try:
+            text = page.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return out
+        top = (self.root / ASSETS).resolve()
+        for ref in set(self._ASSET_REF.findall(text)):
+            ref = unquote(ref.split("#", 1)[0].split("?", 1)[0]).replace("\\", "/")
+            if ref.startswith(("http:", "https:", "data:")):
+                continue
+            try:
+                f = (page.parent / ref.removeprefix("file:///")).resolve()
+                f.relative_to(top)
+                st = os.lstat(f)
+            except (OSError, ValueError):
+                continue
+            if stat.S_ISREG(st.st_mode):
+                out[f.relative_to(self.root.resolve()).as_posix()] = [st.st_size, st.st_mtime_ns]
+        return out
+
+    def _known_assets(self, nid: str, rel: str | None) -> dict[str, list[int]]:
+        """What an earlier export of this note put in _assets: written down since 1.0.18, else read
+        from its own page (which has to be ours, checked before it is removed or replaced)."""
+        try:
+            got = json.loads(self.state.get(f"assets:{nid}") or "null")
+        except ValueError:
+            got = None
+        if isinstance(got, dict):
+            return got
+        if rel and (self.root / rel).suffix.lower() == ".html":
+            try:
+                if _is_our_page(self.root / rel, strict=True):
+                    return self._page_assets(rel)
+            except OSError:
+                pass
+        return {}
+
+    def _retire_assets(self, nid: str, files: dict[str, list[int]], keep: dict[str, list[int]]) -> None:
+        """Attachments an export of ours made and nothing shows any more (the note was locked,
+        deleted, or exported again with fresh copies) go to the Recycle Bin, like its page. Only
+        files exactly as the export left them: one changed or added by you stays where it is."""
+        left: dict[str, list[int]] = {}
+        for rel, (size, mtime_ns) in files.items():
+            if rel in keep:
+                continue
+            p = self.root / rel
+            try:
+                st = os.lstat(p)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                left[rel] = [size, mtime_ns]  # can't be looked at now: tried again next time
+                continue
+            if not stat.S_ISREG(st.st_mode) or (st.st_size, st.st_mtime_ns) != (size, mtime_ns):
+                continue  # not what the export made any more: yours now, left alone
+            try:
+                self._trash(p)
+            except OSError as exc:
+                log.info("Notes: an old attachment couldn't be removed now: %s", brief(exc))
+                left[rel] = [size, mtime_ns]
+                continue
+            try:
+                p.parent.rmdir()  # the note's own folder, when nothing else is in it
+            except OSError:
+                pass
+        mine = {**left, **keep}
+        self.state.set(f"assets:{nid}", json.dumps(mine) if mine else None)
+
     def _own(self, p: Path, kind: str) -> None:
         """Write down a private file before it is created: only files on this list are ever tidied up."""
         self.state.set("tmp:" + p.relative_to(self.root).as_posix(), kind)
@@ -1518,8 +1596,11 @@ class NotesSyncer:
             seen.add(n.id)
             old = known.get(n.id)
             if n.deleted:
-                if old and self._remove(old, res):
-                    self.state.drop(n.id)
+                if old:
+                    files = self._known_assets(n.id, old[1])
+                    if self._remove(old, res):
+                        self._retire_assets(n.id, files, {})
+                        self.state.drop(n.id)
                 continue
             if not res.full and self.state.get(f"missing:{n.id}"):
                 self.state.set(f"missing:{n.id}", None)  # seen alive: an earlier absence doesn't count
@@ -1527,8 +1608,11 @@ class NotesSyncer:
             modified = n.modified.isoformat() if n.modified else None
             if n.locked:
                 keep = None
+                files = self._known_assets(n.id, old[1] if old else None)
                 if old and old[1] and not self._remove(old, res):
                     keep = old[1]  # couldn't remove the readable copy yet: remember it, try again next time
+                elif files:
+                    self._retire_assets(n.id, files, {})  # its pictures are as private as its text
                 self.state.put(n.id, keep, n.title, folder, None if keep else modified, True)
                 continue
             if old and old[4] == modified and old[1] and (self.root / old[1]).exists() and old[3] == folder \
@@ -1539,6 +1623,7 @@ class NotesSyncer:
                 continue
             self.cb.progress(i, len(notes), t("Downloading note {i} of {n}", i=i, n=len(notes)))
             rel = self._path_for(n, folder, old, taken)
+            before = self._known_assets(n.id, old[1] if old else None)
             try:
                 out_dir = (self.root / rel).parent
                 if not inside_root(self.root, out_dir):
@@ -1581,6 +1666,7 @@ class NotesSyncer:
                 if known_missing(self.root / old[1]) or self._remove(old, res, count=False):
                     self.state.set(f"obsolete:{old[1]}", None)  # renamed or moved: the old file is gone
             self.state.put(n.id, rel, n.title, folder, modified, False)
+            self._retire_assets(n.id, before, self._page_assets(rel))  # copies the new page doesn't show
             taken.add(rel.lower())
             res.exported += 1
             last_page = rel
@@ -1598,7 +1684,9 @@ class NotesSyncer:
                 res.errors += 1  # the cursor isn't advanced; the next full read decides again
             else:
                 for nid in gone:
+                    files = self._known_assets(nid, known[nid][1])
                     if self._remove(known[nid], res):
+                        self._retire_assets(nid, files, {})
                         self.state.drop(nid)
                         self.state.set(f"missing:{nid}", None)
         if not res.more and not res.errors and (res.full or self.state.get("orphan_sweep") != "1"):
@@ -2035,8 +2123,8 @@ def render_index(data: list, updated: str, theme: str = "system") -> str:
         "collapse": t("Collapse all"), "expand": t("Expand all"), "none": t("No notes found"),
         "tryOther": t("Try another title or folder name."), "showAll": t("Show all notes"),
         "toOled": t("Switch to OLED theme"), "toDark": t("Switch to dark theme"), "toLight": t("Switch to light theme"),
-        "notes": [t("1 note"), t("{n} notes (2-4)"), t("{n} notes")],
-        "folderCount": [t("1 folder"), t("{n} folders (2-4)"), t("{n} folders")],
+        "notes": [t("{n} note"), t("{n} notes (2-4)"), t("{n} notes")],
+        "folderCount": [t("{n} folder"), t("{n} folders (2-4)"), t("{n} folders")],
         "slavic": language() == "bs",  # 1 / 2-4 / 5+ forms ("1 bilješka, 3 bilješke, 7 bilješki")
     }
     if not strings["slavic"]:

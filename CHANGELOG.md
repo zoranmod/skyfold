@@ -2,6 +2,21 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **iCloud Drive: a retried replacement no longer removes a newer save from another device.** If replacing a file in iCloud was interrupted (connection lost, PC restarted) and a Mac or iPhone saved a new version meanwhile, the retry moved that new version to Recently Deleted too. Now both are kept: iCloud's version keeps the name, the PC version becomes a `(PC conflict …)` copy.
+- **iCloud Drive: deleting a folder on the PC keeps iCloud items you never saw on it.** Items iCloud marks as hidden (and names Windows can't show) stay in iCloud; only the synced files go to Recently Deleted.
+- **iCloud Drive: a deletion or a new folder that iCloud refuses is no longer taken as done.** It is reported and tried again; before, a refused new folder could even be removed from the PC.
+- **iCloud Drive: downloading new files needs less free space.** A new file was counted twice when checking the free space.
+- **Notes: pictures of a locked or deleted note go to the Recycle Bin with its page.** Before, the page went, but its pictures stayed readable in `_assets`. Pictures you changed or added yourself stay where they are.
+- **Notes: editing a note no longer piles up copies of its pictures.** The copies an earlier export made go to the Recycle Bin once the new page is in place.
+- **Notes: a note that couldn't be downloaded is shown in the status** instead of "Everything is in sync".
+- Bosnian Notes.html shows "21 bilješka" (not "1 bilješka") for 21, 31, 101 … notes and folders.
+- *Check for updates* no longer says "You have the latest version" when a newer release is published but its download isn't complete yet.
+- Screen readers name every control in Settings, and say which folder each *Change…* button is for.
+- README: the iCloud Drive "more than half" question applies from 5 items up (as the app always did).
+
 ## [1.0.17] - 2026-11-20
 
 ### Added

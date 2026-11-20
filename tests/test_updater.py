@@ -36,7 +36,9 @@ def test_only_releases_with_skyfolds_own_files_are_used():
     assert rel.version == "9.9.9" and rel.zip_url == DL + up.ZIP_NAME and rel.notes == "**New**"
     foreign = release_json(assets=[{"name": up.ZIP_NAME, "browser_download_url": "https://evil.example/x.zip"},
                                    {"name": up.ZIP_NAME + ".sha256", "browser_download_url": DL + "x"}])
-    assert up.latest_release(lambda url, **_: SimpleNamespace(json=lambda: foreign)) is None
+    # refused, and never reported as "you have the latest version" either (1.0.18)
+    with pytest.raises(up.IncompleteRelease):
+        up.latest_release(lambda url, **_: SimpleNamespace(json=lambda: foreign))
     assert up.latest_release(lambda url, **_: SimpleNamespace(json=lambda: release_json(prerelease=True))) is None
 
 

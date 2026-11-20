@@ -2274,15 +2274,19 @@ class DriveSyncer:
             return
         total_bytes = sum(i.size for i in items)
         # Needed: what the downloads add to the disk (a file that replaces one, or only gets compared
-        # with one, adds little or nothing) plus room for the temporary files of one batch.
+        # with one, adds little or nothing) plus room for the temporary files of one batch. A new
+        # file's temporary copy becomes the file itself, so it is counted once.
         growth = 0
+        beside: list[int] = []  # files that exist already: their new copy is made next to them
         for i in items:
             try:
                 have = self._abs(i.path).stat().st_size
             except OSError:
-                have = 0
-            growth += max(0, (i.size or 0) - have)
-        staging = sum(sorted(((i.size or 0) for i in items), reverse=True)[:WORKERS])
+                have = None
+            growth += max(0, (i.size or 0) - (have or 0))
+            if have is not None:
+                beside.append(i.size or 0)
+        staging = sum(sorted(beside, reverse=True)[:WORKERS])
         check_free_space(self.root, growth + staging)
         total = total_bytes or len(items)
         done = 0
