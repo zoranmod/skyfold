@@ -38,7 +38,7 @@ def test_hand_edited_sizes_are_kept_in_range(tmp_path, monkeypatch):
     for raw, kept in ((500, 64), (-3, 0), (16, 16)):
         f.write_text(json.dumps({"upload_buffer_mb": raw}), encoding="utf-8")
         assert Settings.load().upload_buffer_mb == kept
-    assert Settings().upload_buffer_mb == 8
+    assert Settings().upload_buffer_mb == 0  # automatic by default (measured faster, 1.0.20)
 
 
 def test_speed_is_logged_per_upload(caplog, monkeypatch):

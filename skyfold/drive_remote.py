@@ -372,7 +372,7 @@ class ICloudDrive:
             raise _translate(exc) from exc
 
 
-SEND_BUFFER = 8 << 20  # bytes Windows may have on the way to iCloud at once
+SEND_BUFFER = 0  # fixed send buffer for upload connections in bytes; 0 = Windows sizes it (the setting)
 
 
 def _big_send_buffer(session: Any, url: str) -> None:

@@ -186,7 +186,8 @@ def test_zero_length_read_never_consumes_payload(tmp_path, wrapper):
         assert raw.tell() == 0 and not counted
 
 
-def test_send_buffer_applies_to_the_https_proxy_tunnel():
+def test_send_buffer_applies_to_the_https_proxy_tunnel(monkeypatch):
+    monkeypatch.setattr(drive_remote, "SEND_BUFFER", 8 << 20)  # (the fixed setting; 1.0.20 default is automatic)
     url = "https://upload.example/content"
     with requests.Session() as session:
         drive_remote._big_send_buffer(session, url)

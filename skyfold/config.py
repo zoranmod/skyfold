@@ -403,7 +403,7 @@ class Settings:
     photos_dir_confirmed: bool = False  # set once the user picked the gallery folder
     poll_minutes: int = 2
     speed_limit_mb: int = 0  # download limit in MB/s; 0 = no limit
-    upload_buffer_mb: int = 8  # send buffer per upload connection in MB; 0 = Windows decides (automatic)
+    upload_buffer_mb: int = 0  # send buffer per upload connection in MB; 0 = Windows decides (automatic)
     full_check_hours: int = 24  # safety-net full read; everyday syncs only read changes
     folder_structure: str = "flat"
     language: str = "en"

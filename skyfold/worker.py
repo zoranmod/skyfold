@@ -99,9 +99,9 @@ def _apply_upload_buffer(settings) -> None:
     from . import drive_remote
 
     try:
-        mb = int(getattr(settings, "upload_buffer_mb", 8))
+        mb = int(getattr(settings, "upload_buffer_mb", 0))
     except (TypeError, ValueError):
-        mb = 8
+        mb = 0
     drive_remote.SEND_BUFFER = max(0, min(mb, 64)) << 20
 
 
