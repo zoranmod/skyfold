@@ -164,7 +164,8 @@ def test_slow_drive_runs_in_background_while_photos_sync(qt, monkeypatch, tmp_pa
         where = nl.join(f"--- {names.get(ident, 'Qt thread ' + str(ident))}{nl}"
                         + "".join(traceback.format_stack(frame)[-12:])
                         for ident, frame in sys._current_frames().items()
-                        if "watchdog" not in "".join(traceback.format_stack(frame)))
+                        if not any(idle in "".join(traceback.format_stack(frame)[-3:])
+                                   for idle in ("ReadDirectoryChangesExW", "queue.py", "pytest_pyfunc_call")))
         raise AssertionError(f"drive_running={w.drive_running()} states={states[-15:]}{nl}{where}")
     assert (tmp_path / "Drive/Docs/a.txt").read_bytes() == b"a"
 
