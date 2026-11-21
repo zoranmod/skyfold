@@ -7,6 +7,7 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 ### Changed
 - **iCloud Drive uploads big files without loading them into memory.** A large video or archive is sent from disk piece by piece; before, the whole file (and a second copy while sending) had to fit in RAM. A file replacing one in iCloud is still read through once before the old version goes to Recently Deleted, so a locked file never costs the iCloud copy.
 - **Renaming or moving a Notes folder on your iPhone or Mac moves its pages too**, at the next sync. Before, notes you hadn't edited stayed under the old folder name until a full read.
+- **New iCloud Drive files go up three at a time.** Apple limits each upload connection, so many files together now go several times faster. A file that replaces one in iCloud still goes alone, after them.
 - **iCloud Drive uploads are much faster on fast connections.** Windows gives a program only a 64 KB send buffer, which held one upload to about 0.6 MB/s however fast the line was; uploads to iCloud now get 8 MB, like a browser.
 - While a file is being uploaded to iCloud Drive, other programs can read it but not change it (as for Photos uploads), so iCloud never gets a mix of two versions. Skyfold also checks that iCloud received the whole file and confirmed it, and *Stop* pressed while iCloud is answering keeps the file from being registered.
 - **Photos uploads show their progress too** (MB sent, speed, time left), get the same bigger send buffer, and *Stop* stops a big video in the middle.

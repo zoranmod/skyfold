@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 ROOT_ID = "FOLDER::com.apple.CloudDocs::root"
 BATCH = 50
 WORKERS = 6  # requests to Apple at the same time (listing folders, downloading files)
+UPLOAD_WORKERS = 3  # new files sent at the same time (Apple limits each upload connection)
 
 
 class MacPackage(Exception):

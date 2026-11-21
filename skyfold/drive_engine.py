@@ -33,7 +33,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from .config import save_text
-from .drive_remote import WORKERS, DriveItem, DriveRemote, MacPackage, is_transient
+from .drive_remote import UPLOAD_WORKERS, WORKERS, DriveItem, DriveRemote, MacPackage, is_transient
 from .engine import (Callbacks, Cancelled, SyncError, THROTTLE, check_free_space, create_marker, known_missing, inside_root,
                      marker_present, now_iso, transfer_text)
 from .i18n import t
@@ -2555,75 +2555,143 @@ class DriveSyncer:
 
     def _uploads(self, paths: list[str], remote: dict[str, DriveItem], base: dict[str, Base],
                  local: dict[str, Local], res: DriveResult) -> None:
+        """New files go up several at a time (each upload is one connection, and Apple limits each
+        connection); a file replacing one in iCloud goes alone, after them, because its old
+        version is moved to Recently Deleted first. Only this thread writes the database."""
         from .ui_text import Rate
 
         rate = Rate()
         total = sum(local[p].size for p in paths if p in local) or 0
-        sent_before = 0  # bytes of the files already sent in this batch
+        lock = threading.Lock()
+        sent = [0]  # bytes sent in this batch (all uploads together)
+        finished = [0]  # files done (sent or failed)
         shown = [0.0]
+        abort = threading.Event()  # one upload stopped the batch: the others stop at their next piece
 
-        def show(i: int, now_bytes: int, force: bool = False) -> None:
+        def show(force: bool = False) -> None:  # (this thread only)
             clock = time.monotonic()
             if not force and clock - shown[0] < 0.5:
                 return
             shown[0] = clock
-            rate.add(now_bytes, i)
-            self.cb.progress(now_bytes, total or 1, transfer_text(t("Drive: uploading "), i, len(paths),
-                                                                  now_bytes, total, rate))
+            with lock:
+                now_bytes, done_files = sent[0], finished[0]
+            rate.add(now_bytes, done_files)
+            self.cb.progress(now_bytes, total or 1, transfer_text(
+                t("Drive: uploading "), min(done_files + 1, len(paths)), len(paths), now_bytes, total, rate))
 
-        for n, path in enumerate(paths, 1):
-            self._check_cancel()
-            show(n, sent_before, force=True)  # (the file being sent: "uploading 1 of 1 files")
+        def counter() -> Callable[[int], None]:
+            def on_bytes(k: int) -> None:  # (called from the upload threads)
+                if self._stopped() or abort.is_set():
+                    raise Cancelled()  # Stop works in the middle of a big upload too
+                with lock:
+                    sent[0] += k
+            return on_bytes
+
+        def send(path: str, parent: DriveItem) -> tuple[int, str]:
+            if getattr(self.remote, "streams_progress", False):
+                got = self.remote.upload(parent, self._abs(path), on_bytes=counter())  # streamed from disk
+            else:
+                got = self.remote.upload(parent, self._abs(path))
+            if isinstance(got, tuple) and len(got) == 2:
+                return got  # exactly what was sent
+            return _file_digest(self._abs(path))
+
+        def recorded(path: str, lo: Local, got: tuple[int, str]) -> None:
+            size, digest = got
+            # the tag iCloud gives it isn't known yet; what it must contain is
+            self.state.put(Base(path, False, None, size, lo.mtime, lo.size, False, digest))
+            res.uploaded += 1
+            res.last_up = res.last_up or str(self._abs(path))
+            res.up_files.append(path)
+
+        def failed(path: str, exc: Exception) -> None:
+            res.errors += 1
+            self.cb.activity("error", t("Upload failed ({name}): {error}", name=path, error=brief(exc)))
+
+        fresh: list[tuple[str, DriveItem]] = []
+        replacing: list[tuple[str, DriveItem, DriveItem]] = []
+        for path in paths:
             parent_path = str(PurePosixPath(path).parent) if "/" in path else ""
             parent = remote.get(parent_path)
             if parent is None or not parent.is_dir:
                 res.followup = True  # parent folder is created this round; the file follows next run
+                with lock:
+                    finished[0] += 1
                 continue
             existing = remote.get(path)
+            if existing is None:
+                fresh.append((path, parent))
+            else:
+                replacing.append((path, parent, existing))
+
+        # new files: a few at a time
+        self._check_cancel()
+        show(force=True)
+        if fresh:
+            def send_new(path: str, parent: DriveItem) -> tuple[int, str]:
+                if self._stopped() or abort.is_set():
+                    raise Cancelled()
+                self._check_inside(self._abs(path))
+                with open(self._abs(path), "rb") as fh:  # locked or unreadable: nothing is sent
+                    fh.read(1)
+                return send(path, parent)
+
+            pool = ThreadPoolExecutor(UPLOAD_WORKERS)
+            try:
+                futures = {pool.submit(send_new, path, parent): path for path, parent in fresh}
+                waiting = set(futures)
+                while waiting:
+                    done, waiting = wait(waiting, timeout=0.5, return_when=FIRST_COMPLETED)
+                    for f in done:
+                        path = futures[f]
+                        with lock:
+                            finished[0] += 1
+                        try:
+                            got = f.result()
+                        except (AuthRequired, RemoteUnavailable, Cancelled):
+                            abort.set()
+                            raise
+                        except Exception as exc:  # noqa: BLE001
+                            failed(path, exc)
+                        else:
+                            recorded(path, local[path], got)
+                    show()
+                    if self._stopped():
+                        abort.set()
+                        raise Cancelled()
+            except BaseException:
+                abort.set()  # the uploads still running stop at their next piece, unregistered
+                raise
+            finally:
+                pool.shutdown(wait=True, cancel_futures=True)
+
+        # replacements: one at a time
+        for path, parent, existing in replacing:
+            self._check_cancel()
+            show(force=True)
             lo = local[path]
             try:
                 self._check_inside(self._abs(path))
                 # Locked or unreadable: fail before touching iCloud. A replacement trashes the old iCloud
                 # version first, so the whole file is read through once (in pieces) before that.
-                if existing is not None:
-                    _file_digest(self._abs(path))
-                else:
-                    with open(self._abs(path), "rb") as fh:
-                        fh.read(1)
+                _file_digest(self._abs(path))
                 self._check_cancel()  # reading can take a while: stop here, before iCloud is touched
-                if existing is not None:
-                    # Replacing a file: move the old iCloud version to Recently Deleted first.
-                    # Mark the row "pending" so a failed upload is retried, never mistaken for a deletion.
-                    # The tag of the version replaced is kept: another version found there later is
-                    # someone else's save, not this one, and is never trashed by the retry.
-                    self.state.put(Base(path, False, existing.etag, existing.size, lo.mtime, lo.size, True))
-                    self.remote.trash(existing)
-                    self._check_cancel()  # (the row stays "pending": the upload is done next time)
-                if getattr(self.remote, "streams_progress", False):
-                    def on_bytes(k: int, _n=n, _base=sent_before, _got=[0]) -> None:
-                        if self._stopped():
-                            raise Cancelled()  # Stop works in the middle of a big upload too
-                        _got[0] += k
-                        show(_n, _base + _got[0])
-                    sent = self.remote.upload(parent, self._abs(path), on_bytes=on_bytes)  # streamed from disk
-                else:
-                    sent = self.remote.upload(parent, self._abs(path))
-                if isinstance(sent, tuple) and len(sent) == 2:
-                    size, digest = sent  # exactly what was sent
-                else:
-                    size, digest = _file_digest(self._abs(path))
-                # the tag iCloud gives it isn't known yet; what it must contain is
-                self.state.put(Base(path, False, None, size, lo.mtime, lo.size, False, digest))
-                res.uploaded += 1
-                res.last_up = res.last_up or str(self._abs(path))
-                res.up_files.append(path)
-                sent_before += lo.size
+                # Replacing a file: move the old iCloud version to Recently Deleted first.
+                # Mark the row "pending" so a failed upload is retried, never mistaken for a deletion.
+                # The tag of the version replaced is kept: another version found there later is
+                # someone else's save, not this one, and is never trashed by the retry.
+                self.state.put(Base(path, False, existing.etag, existing.size, lo.mtime, lo.size, True))
+                self.remote.trash(existing)
+                self._check_cancel()  # (the row stays "pending": the upload is done next time)
+                recorded(path, lo, send(path, parent))
             except (AuthRequired, RemoteUnavailable, Cancelled):
                 raise
             except Exception as exc:  # noqa: BLE001
-                res.errors += 1
-                self.cb.activity("error", t("Upload failed ({name}): {error}", name=path, error=brief(exc)))
-
+                failed(path, exc)
+            finally:
+                with lock:
+                    finished[0] += 1
+        show(force=True)
 
 def _file_digest(p: Path) -> tuple[int, str]:
     h, n = hashlib.sha256(), 0
