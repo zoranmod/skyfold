@@ -142,6 +142,17 @@ def test_slow_drive_runs_in_background_while_photos_sync(qt, monkeypatch, tmp_pa
 
     drive.walk = walk
     monkeypatch.setattr(wk, "ICloudDrive", lambda _api: drive)
+    calls = []  # who set which state (for the timeout message below)
+    real_set = w._set_state
+
+    def traced(state, text, service="app"):
+        import traceback as _tb
+
+        caller = _tb.extract_stack(limit=3)[0]
+        calls.append((threading.current_thread().name, service, state, text[:20], caller.name, caller.lineno))
+        real_set(state, text, service)
+
+    w._set_state = traced
     w.settings.drive_enabled = True
     w.settings.drive_dir = str(tmp_path / "Drive")
     th.start()
@@ -165,7 +176,7 @@ def test_slow_drive_runs_in_background_while_photos_sync(qt, monkeypatch, tmp_pa
                         + "".join(traceback.format_stack(frame)[-12:])
                         for ident, frame in sys._current_frames().items()
                         if "ReadDirectoryChangesExW" not in "".join(traceback.format_stack(frame)[-2:]))
-        raise AssertionError(f"drive_running={w.drive_running()} states={states[-15:]}{nl}{where}")
+        raise AssertionError(f"drive_running={w.drive_running()} calls={calls[-12:]}{nl}{where}")
     assert (tmp_path / "Drive/Docs/a.txt").read_bytes() == b"a"
 
 
