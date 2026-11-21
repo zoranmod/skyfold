@@ -474,14 +474,19 @@ class _StreamedForm:
 
 
 def _check_registered(result: Any) -> None:
-    """update/documents names the new document; an empty or refused answer isn't a saved file."""
+    """update/documents answers {"status": {...}, "results": [{"status": {"status_code": 0,
+    "error_message": ""}, "document": {...}}]}: the new document is the confirmation. (Its status
+    is an object, not the "OK" string of the other Drive calls, so _check_item doesn't fit.)"""
     if not isinstance(result, dict) or "results" not in result:
         return  # (no answer to look at: pyicloud's own call raised already on an HTTP error)
     listed = result.get("results")
-    if not isinstance(listed, list) or not listed:
-        raise RuntimeError(Text("iCloud didn't confirm the uploaded file; it is tried again later"))
-    if isinstance(listed[0], dict):
-        _check_item(listed[0], "upload")
+    first = listed[0] if isinstance(listed, list) and listed and isinstance(listed[0], dict) else None
+    if first is not None and isinstance(first.get("document"), dict):
+        return  # saved
+    status = (first or {}).get("status")
+    if isinstance(status, dict) and status.get("status_code"):
+        raise RuntimeError(Text(f"iCloud refused the upload: {code(str(status.get('status_code')))}"))
+    raise RuntimeError(Text("iCloud didn't confirm the uploaded file; it is tried again later"))
 
 
 def _check_first(resp: Any, key: str, what: str) -> None:

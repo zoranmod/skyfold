@@ -246,3 +246,42 @@ def test_big_send_buffer_really_reaches_the_socket():
     finally:
         srv.shutdown()
     assert sizes and sizes[0] >= drive_remote.SEND_BUFFER
+
+
+# The update/documents answer as Apple sends it (shape as in rclone's DocumentUpdateResponse):
+# "status" is an object whose field is called error_message even when nothing went wrong.
+APPLE_SAVED = {
+    "status": {"status_code": 0, "error_message": ""},
+    "results": [{"status": {"status_code": 0, "error_message": ""}, "operation_id": None,
+                 "document": {"status": {"status_code": 0, "error_message": ""}, "document_id": "D1",
+                              "item_id": "I1", "etag": "1a", "name": "movie", "extension": "mkv",
+                              "size": 5, "type": "FILE", "zone": "com.apple.CloudDocs"}}],
+}
+
+
+def test_apples_real_confirmation_is_taken_as_saved(tmp_path):
+    f = tmp_path / "movie.mkv"
+    f.write_bytes(b"movie")
+    api = FakeApi()
+    real_update = api._update_contentws
+
+    def update(*args, **kw):
+        real_update(*args, **kw)
+        return APPLE_SAVED
+
+    api._update_contentws = update
+    assert adapter(api).upload(PARENT, f)[0] == 5  # (1.0.19 beta took "error_message" for a refusal)
+
+
+@pytest.mark.parametrize("answer", [
+    {"results": []},
+    {"results": [{"status": {"status_code": 2, "error_message": "x"}}]},
+    {"results": [{"status": {"status_code": 0, "error_message": ""}}]},  # no document: not confirmed
+])
+def test_unconfirmed_upload_is_not_taken_as_saved(tmp_path, answer):
+    f = tmp_path / "movie.mkv"
+    f.write_bytes(b"movie")
+    api = FakeApi()
+    api._update_contentws = lambda *a, **k: answer
+    with pytest.raises(Exception):
+        adapter(api).upload(PARENT, f)
