@@ -259,14 +259,16 @@ def test_locked_file_does_not_remove_icloud_copy(env25, monkeypatch):
     s.run()
     write(root, "db.sqlite", b"edited, now locked", age=30)
 
-    real = Path.read_bytes
+    import builtins
 
-    def locked(self):
-        if self.name == "db.sqlite":
-            raise PermissionError(13, "The process cannot access the file because it is being used", str(self))
-        return real(self)
+    real = builtins.open
 
-    monkeypatch.setattr(Path, "read_bytes", locked)
+    def locked(file, *args, **kwargs):  # (1.0.19: uploads read the file through open(), streamed)
+        if str(file).endswith("db.sqlite"):
+            raise PermissionError(13, "The process cannot access the file because it is being used", str(file))
+        return real(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", locked)
     s.run()
     assert "db.sqlite" in d.items, "iCloud copy trashed although the PC file couldn't be read"
 

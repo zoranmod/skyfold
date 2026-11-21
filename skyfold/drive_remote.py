@@ -6,6 +6,7 @@ Folders are fetched in batches (one request per up to 50 folders) to keep that c
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import os
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 ROOT_ID = "FOLDER::com.apple.CloudDocs::root"
 BATCH = 50
 WORKERS = 6  # requests to Apple at the same time (listing folders, downloading files)
+UPLOAD_WORKERS = 3  # new files sent at the same time (Apple limits each upload connection)
 
 
 class MacPackage(Exception):
@@ -68,9 +70,13 @@ def is_transient(exc: BaseException) -> bool:
     import requests
     from pyicloud.exceptions import PyiCloudAPIResponseException, PyiCloudConnectionException
 
-    if isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
-                        requests.exceptions.ChunkedEncodingError, PyiCloudConnectionException)):
-        return True
+    seen = 0
+    cur: BaseException | None = exc
+    while cur is not None and seen < 8:  # pyicloud wraps a broken reply in its own error
+        if isinstance(cur, (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
+                            requests.exceptions.ChunkedEncodingError, PyiCloudConnectionException)):
+            return True
+        cur, seen = cur.__cause__ or cur.__context__, seen + 1
     if isinstance(exc, PyiCloudAPIResponseException):
         try:
             code = int(exc.code or 0)
@@ -268,15 +274,58 @@ class ICloudDrive:
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
 
-    def upload(self, parent: DriveItem, local: Path, data: bytes | None = None) -> None:
+    streams_progress = True  # upload() takes on_bytes
+    takes_handle = True  # and the file already opened (locked) by the caller
+
+    def upload(self, parent: DriveItem, local: Path, data: bytes | None = None,
+               on_bytes: Callable[[int], None] | None = None, handle: Any = None) -> tuple:
+        """Sends the file; returns (size, sha256, etag) of exactly the bytes sent and the version
+        iCloud gave them (etag None when its answer didn't say). Without `data` the file is
+        streamed from disk: a big video never has to fit in memory. handle: the file already
+        opened with _upload_reader (a replacement locks it before the old version is trashed)."""
         try:
-            if data is None:
-                data = local.read_bytes()
-            fh = io.BytesIO(data)
-            fh.name = local.name  # the Drive API takes the file name from the file object
-            st = local.stat()
-            self.drive.send_file(parent.docwsid, fh, zone=parent.zone, mtime=st.st_mtime, ctime=st.st_mtime)
+            if data is not None:
+                fh: Any = io.BytesIO(data)
+                fh.name = local.name  # the Drive API takes the file name from the file object
+                st = local.stat()
+                self.drive.send_file(parent.docwsid, fh, zone=parent.zone, mtime=st.st_mtime, ctime=st.st_mtime)
+                return len(data), hashlib.sha256(data).hexdigest(), None
+            from contextlib import nullcontext
+
+            from .engine import _upload_reader
+
+            # Other programs may read the file meanwhile but not change it: one version, never a mix
+            with (nullcontext(handle) if handle is not None else _upload_reader(local)) as raw:
+                raw.seek(0)
+                st = os.fstat(raw.fileno())
+                named = _Named(raw, local.name)
+                d = self.drive
+                document_id, content_url = d._get_upload_contentws_url(file_object=named, zone=parent.zone)
+                form = _StreamedForm(raw, local.name, st.st_size, on_bytes)
+                _big_send_buffer(d.session, content_url)
+                # one-shot body: a redirect would replay it empty, so it is never followed. It goes on
+                # its own connection, never waiting for (or holding up) the other iCloud requests.
+                resp = _unlocked_post(d.session, content_url, data=form,
+                                      headers={"Content-Type": form.content_type},
+                                      timeout=(30, 600), allow_redirects=False)
+                if 300 <= int(getattr(resp, "status_code", 200) or 200) < 400:
+                    raise RuntimeError(Text("iCloud redirected the upload; it is tried again later"))
+                d._raise_if_error(resp)
+                form.check_complete()  # the file shrank while it was sent: never taken as sent
+                info = resp.json()["singleFile"]
+                if isinstance(info, dict) and "size" in info and int(info["size"]) != st.st_size:
+                    raise RuntimeError(Text("iCloud received a different size; it is tried again later"))
+                # Stop pressed while iCloud answered, or while this waited for its turn: not registered
+                with _before_send(d.session, (lambda: on_bytes(0)) if on_bytes else None):
+                    result = d._update_contentws(parent.docwsid, info, document_id, named, parent.zone,
+                                                 mtime=st.st_mtime, ctime=st.st_mtime)
+                etag = _check_registered(result, local.name)
+                return st.st_size, form.digest(), etag
         except Exception as exc:  # noqa: BLE001
+            from .engine import Cancelled
+
+            if isinstance(exc, Cancelled):
+                raise  # the user stopped it: not a network problem
             raise _translate(exc) from exc
 
     def mkdir(self, parent: DriveItem, name: str) -> None:
@@ -318,6 +367,174 @@ class ICloudDrive:
             _check_first(resp, "items", "deletion")
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
+
+
+SEND_BUFFER = 8 << 20  # bytes Windows may have on the way to iCloud at once
+
+
+def _big_send_buffer(session: Any, url: str) -> None:
+    """Connections to the upload server get a fixed 8 MB send buffer (Windows' own send tuning is
+    switched off for them). Measured on a 200 Mbit/s line: one upload went from a flat ~0.5 MB/s to
+    1.4-4 MB/s. Only connections to that upload host (origin) on this session."""
+    from urllib.parse import urlsplit
+
+    mount = getattr(session, "mount", None)
+    adapters = getattr(session, "adapters", None)
+    if mount is None or adapters is None:
+        return
+    parts = urlsplit(url)
+    if parts.scheme != "https" or not parts.netloc:
+        return
+    prefix = f"https://{parts.netloc}/"
+    if isinstance(adapters.get(prefix), _BigSendAdapter):
+        return
+    mount(prefix, _BigSendAdapter())
+
+
+try:
+    from requests.adapters import HTTPAdapter as _HTTPAdapter
+except ImportError:  # pragma: no cover - requests is always there with pyicloud
+    _HTTPAdapter = object  # type: ignore[assignment,misc]
+
+
+class _BigSendAdapter(_HTTPAdapter):  # type: ignore[misc,valid-type]
+    def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
+        kwargs["socket_options"] = _send_options()
+        super().init_poolmanager(*args, **kwargs)
+
+    def proxy_manager_for(self, proxy: str, **proxy_kwargs: Any) -> Any:
+        proxy_kwargs.setdefault("socket_options", _send_options())  # through a proxy too
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
+
+
+def _send_options() -> list:
+    import socket
+
+    from urllib3.connection import HTTPConnection
+
+    return list(HTTPConnection.default_socket_options) + [(socket.SOL_SOCKET, socket.SO_SNDBUF, SEND_BUFFER)]
+
+
+class _Named:
+    """A file object with only its name (the Drive API reads the name and size from it)."""
+
+    def __init__(self, raw: Any, name: str) -> None:
+        self._raw, self.name = raw, name
+
+    def tell(self) -> int:
+        return self._raw.tell()
+
+    def seek(self, pos: int, whence: int = 0) -> int:
+        return self._raw.seek(pos, whence)
+
+
+class _StreamedForm:
+    """The multipart body requests would build for files={name: file}, read from disk piece by
+    piece (requests streams a body that has read() and a length). The bytes sent are hashed on
+    the way, so what is recorded is exactly what iCloud got."""
+
+    def __init__(self, raw: Any, name: str, size: int, on_bytes: Callable[[int], None] | None = None) -> None:
+        from urllib3.fields import RequestField
+        from urllib3.filepost import choose_boundary, encode_multipart_formdata
+
+        field = RequestField(name=name, data=b"", filename=name)
+        field.make_multipart(content_type=None)
+        boundary = choose_boundary()
+        body, self.content_type = encode_multipart_formdata([field], boundary=boundary)
+        tail = b"\r\n--" + boundary.encode() + b"--\r\n"
+        assert body.endswith(tail)
+        self._parts = [body[:-len(tail)], None, tail]  # None: the file itself
+        self._raw, self._size, self._left = raw, size, size
+        self._raw.seek(0)
+        self._hash = hashlib.sha256()
+        self._len = len(body) + size
+        self._on_bytes = on_bytes
+
+    def __len__(self) -> int:
+        return self._len
+
+    def read(self, n: int = -1) -> bytes:
+        if n == 0:
+            return b""
+        n = 1 << 20 if n is None or n < 0 else n
+        while self._parts:
+            part = self._parts[0]
+            if part is None:
+                if self._left <= 0:
+                    self._parts.pop(0)
+                    continue
+                chunk = self._raw.read(min(max(n, 1 << 18), self._left))  # (http.client asks for 8-16 KB)
+                if not chunk:
+                    raise OSError("the file got shorter while it was sent")
+                self._left -= len(chunk)
+                self._hash.update(chunk)
+                if self._on_bytes:
+                    self._on_bytes(len(chunk))  # (read as the connection takes it: what is sent)
+                return chunk
+            if part:
+                self._parts[0] = part[n:]
+                return part[:n]
+            self._parts.pop(0)
+        return b""
+
+    def check_complete(self) -> None:
+        if self._left or self._raw.read(1):
+            raise OSError("the file changed size while it was sent")
+
+    def digest(self) -> str:
+        return self._hash.hexdigest()
+
+
+def _check_registered(result: Any, name: str | None = None) -> str | None:
+    """update/documents answers {"status": {...}, "results": [{"status": {"status_code": 0,
+    "error_message": ""}, "document": {...}}]}: the new document is the confirmation (its status is
+    an object, not the "OK" string of the other Drive calls). Returns the document's version tag."""
+    listed = result.get("results") if isinstance(result, dict) else None
+    first = listed[0] if isinstance(listed, list) and listed and isinstance(listed[0], dict) else None
+    doc = (first or {}).get("document")
+    if isinstance(doc, dict):
+        given = doc.get("name")
+        if name and isinstance(given, str):
+            ext = doc.get("extension")
+            given = f"{given}.{ext}" if isinstance(ext, str) and ext else given
+            if given.lower() != name.lower():
+                return None  # saved under another name (the name was taken meanwhile): no version for ours
+        etag = doc.get("etag")
+        return etag if isinstance(etag, str) and etag else None
+    status = (first or (result if isinstance(result, dict) else {})).get("status")
+    if isinstance(status, dict) and status.get("status_code"):
+        raise RuntimeError(Text(f"iCloud refused the upload: {code(str(status.get('status_code')))}"))
+    raise RuntimeError(Text("iCloud didn't confirm the uploaded file; it is tried again later"))
+
+
+def _unlocked_post(session: Any, url: str, **kwargs: Any) -> Any:
+    """A file body to a reserved upload URL: past the lock that keeps the other iCloud requests in
+    turn (the session's own pipeline still runs), so uploads run side by side and a long one never
+    holds up Photos or Notes."""
+    if getattr(session, "_skyfold_locked", False):
+        return type(session).request(session, "POST", url, **kwargs)
+    return session.post(url, **kwargs)
+
+
+class _before_send:
+    """Runs check() right before the next request leaves, once it has its turn on the session
+    (Stop pressed while it waited still keeps it from being sent)."""
+
+    def __init__(self, session: Any, check: Callable[[], None] | None) -> None:
+        self._local = getattr(session, "_skyfold_before_send", None)
+        self._check = check
+
+    def __enter__(self) -> None:
+        if self._check is None:
+            return
+        if self._local is None:
+            self._check()
+        else:
+            self._local.check = self._check
+
+    def __exit__(self, *exc: Any) -> None:
+        if self._local is not None:
+            self._local.check = None
 
 
 def _check_first(resp: Any, key: str, what: str) -> None:

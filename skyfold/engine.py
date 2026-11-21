@@ -322,17 +322,34 @@ def duration_text(seconds: float) -> str:
     return t("about {h} h {m} min", h=h, m=m) if m and h < 10 else t("about {h} h", h=h)
 
 
-def transfer_text(prefix: str, i: int, n: int, done: int, total: int, rate) -> str:
-    """'Drive: 3.413 of 9.935 files · 30,5 of 59,0 GB · 2,1 MB/s · about 1 h 20 min left'."""
+def transfer_text(prefix: str, i: int, n: int, done: int, total: int, rate, first: str | None = None) -> str:
+    """'Drive: 3.413 of 9.935 files · 30,5 of 59,0 GB · 2,1 MB/s · about 1 h 20 min left'.
+    first: another opening part (uploads say how many files are done, as several go at once)."""
     from .ui_text import count_text, size_text
 
-    parts = [t("{prefix}{i} of {n} files", prefix=prefix, i=count_text(i), n=count_text(n))]
+    parts = [first or t("{prefix}{i} of {n} files", prefix=prefix, i=count_text(i), n=count_text(n))]
     if total > 0:
         parts.append(t("{done} of {total}", done=size_text(done), total=size_text(total)))
     bps, _fps = rate.speed()
     if bps > 0:
         parts.append(t("{speed}/s", speed=size_text(int(bps))))
     left = rate.seconds_left(total - done, n - i)
+    if left is not None:
+        parts.append(t("{time} left", time=duration_text(left)))
+    return " · ".join(parts)
+
+
+def upload_text(name: str, done: int, total: int, rate) -> str:
+    """'Uploading IMG_0412.MOV · 120.0 MB of 600.0 MB · 2.1 MB/s · about 4 min left'."""
+    from .ui_text import size_text
+
+    parts = [t("Uploading {name}", name=name)]
+    if total > 0:
+        parts.append(t("{done} of {total}", done=size_text(done), total=size_text(total)))
+    bps, _fps = rate.speed()
+    if bps > 0:
+        parts.append(t("{speed}/s", speed=size_text(int(bps))))
+    left = rate.seconds_left(total - done, 0)
     if left is not None:
         parts.append(t("{time} left", time=duration_text(left)))
     return " · ".join(parts)
@@ -403,6 +420,24 @@ class Syncer:
     def _check_cancel(self) -> None:
         if self.cancel_flag.is_set() or self.closing.is_set():
             raise Cancelled()
+
+    def _upload_progress(self, path: Path, total: int) -> Callable[[int], None]:
+        """Shows how much of a photo or video has gone, the speed and the time left (like
+        downloads); Stop works in the middle of a big video too."""
+        from .ui_text import Rate
+
+        rate, sent, shown = Rate(), [0], [0.0]
+
+        def on_bytes(k: int) -> None:
+            self._check_cancel()
+            sent[0] += k
+            now = time.monotonic()
+            if now - shown[0] < 0.5 and sent[0] < total:
+                return
+            shown[0] = now
+            rate.add(sent[0], 0)
+            self.cb.progress(sent[0], max(total, 1), upload_text(path.name, sent[0], total, rate))
+        return on_bytes
 
     def _rel_for(self, asset: RemoteAsset, res: RemoteResource) -> str:
         local = asset.date.astimezone()
@@ -1067,7 +1102,10 @@ class Syncer:
                     attempts += 1
                     self.cb.status(t("Uploading {name}…", name=path.name))
                     try:
-                        receipt = self.remote.upload(path)
+                        if getattr(self.remote, "streams_progress", False):
+                            receipt = self.remote.upload(path, on_bytes=self._upload_progress(path, st.st_size))
+                        else:
+                            receipt = self.remote.upload(path)
                     except (AuthRequired, RemoteUnavailable, UploadRejected) as exc:
                         if not isinstance(exc, UploadRejected):
                             raise

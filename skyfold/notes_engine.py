@@ -1564,6 +1564,10 @@ class NotesSyncer:
             self._restyle_pages()
         stored = self.state.get("cursor")
         cursor = self.remote.cursor()
+        if stored and not full and self.state.get("folder_paths") is None and self.state.all():
+            # updated from 1.0.18 (no folder map yet): a folder renamed since (even one 1.0.18 already
+            # polled) can only be seen by reading all notes once
+            full = True
         if stored == cursor and not full:
             if self.state.get("orphan_sweep") != "1":  # one-time tidy-up, works offline from the database
                 self._remove_leftover_pages(res)
@@ -1584,8 +1588,23 @@ class NotesSyncer:
             return res
         res.full = full or not stored
         self.cb.status(t("Reading Apple Notes…"))
+        folders = self._folder_paths()
+        try:
+            before = json.loads(self.state.get("folder_paths") or "null")
+        except ValueError:
+            before = None
+        if not res.full and before is None and self.state.all():
+            # updated from 1.0.18 (no folder map yet): a folder renamed since can only be seen by
+            # reading all notes once
+            res.full = True
+        elif not res.full and isinstance(before, dict):
+            renamed = {path for fid, path in before.items() if folders.get(fid) != path}
+            if renamed & {r[3] for r in self.state.all().values()}:
+                # a folder got another name or place: its notes didn't change, so only a full read
+                # lists them; their pages move with it
+                log.info("Notes: a folder was renamed or moved; reading all notes")
+                res.full = True
         notes = self.remote.changes(None if res.full else stored)
-        folders = self._folder_paths() if notes or res.full else {}
         known = self.state.all()
         seen: set[str] = set()
         taken = {r[1].lower() for r in known.values() if r[1]}
@@ -1695,6 +1714,7 @@ class NotesSyncer:
         self.write_index()
         if not res.errors and not res.more and not res.held:
             self.state.set("cursor", cursor)
+            self.state.set("folder_paths", json.dumps(folders, sort_keys=True))
         self.state.set("last_sync", now_iso())
         if res.exported:
             # click: the note itself when it's just one, otherwise the list of all notes
