@@ -267,6 +267,14 @@ BS: dict[str, str] = {
     "No limit": "Bez ograničenja",
     "{n} MB/s": "{n} MB/s",
     "Download speed limit": "Ograničenje brzine preuzimanja",
+    "Upload send buffer": "Buffer za slanje",
+    "iCloud Photos can't be reached right now": "iCloud Photos trenutno nije dostupan",
+    "iCloud Photos is busy; uploads continue later": "iCloud Photos je zauzet; slanje se nastavlja kasnije",
+    "Uploads to iCloud Photos wait: {error}": "Slanje u iCloud Photos čeka: {error}",
+    "Uploads to iCloud Photos aren't available for this account right now":
+        "Slanje u iCloud Photos trenutno nije dostupno za ovaj nalog",
+    "Automatic (recommended)": "Automatski (preporučeno)",
+    "Fixed 8 MB": "Fiksno 8 MB",
     "Keeps some of your connection free while Skyfold downloads, for example during video calls.":
         "Ostavlja dio interneta slobodnim dok Skyfold preuzima, npr. tokom video poziva.",
     "Click for details": "Klikni za detalje",
@@ -599,6 +607,7 @@ BS: dict[str, str] = {
     "Upload photos and videos I add to this folder to iCloud Photos": "Šalji u iCloud slike i videe koje dodam u ovaj folder",
     "Uploading {name}…": "Šaljem {name}…",
     "Uploading {name}": "Šaljem {name}",
+    "{n} files": "{n} fajlova",
     "Upload unconfirmed: {name}. Check iCloud Photos and add it there manually if missing.": "Slanje nije potvrđeno: {name}. Provjeri iCloud slike i dodaj fajl ručno ako ga nema.",
     "Upload failed ({name}): {error}": "Slanje nije uspjelo ({name}): {error}",
     "Already in iCloud Photos: {name}": "Već je u iCloud slikama: {name}",

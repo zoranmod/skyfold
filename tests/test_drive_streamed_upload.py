@@ -193,9 +193,11 @@ def test_drive_upload_shows_megabytes_and_stops(drive_env, monkeypatch):
     assert "film2.mov" not in remote.items
 
 
-def test_upload_connections_get_a_big_send_buffer():
-    """Windows' 64 KB default caps one connection at ~0.6 MB/s to Apple; uploads get 8 MB."""
+def test_upload_connections_get_a_big_send_buffer(monkeypatch):
+    """With the fixed 8 MB setting, upload connections get that buffer (1.0.20: automatic by default)."""
     import socket
+
+    monkeypatch.setattr(drive_remote, "SEND_BUFFER", 8 << 20)
 
     session = requests.Session()
     drive_remote._big_send_buffer(session, "https://p31-docws.icloud.com/ws/upload?x=1")

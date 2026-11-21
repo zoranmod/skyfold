@@ -186,7 +186,8 @@ def test_zero_length_read_never_consumes_payload(tmp_path, wrapper):
         assert raw.tell() == 0 and not counted
 
 
-def test_send_buffer_applies_to_the_https_proxy_tunnel():
+def test_send_buffer_applies_to_the_https_proxy_tunnel(monkeypatch):
+    monkeypatch.setattr(drive_remote, "SEND_BUFFER", 8 << 20)  # (the fixed setting; 1.0.20 default is automatic)
     url = "https://upload.example/content"
     with requests.Session() as session:
         drive_remote._big_send_buffer(session, url)
@@ -203,12 +204,16 @@ def test_photos_restores_exact_session_when_upload_exits(tmp_path, exception):
     remote, uploader = remote_with(session)
 
     def progress(n):
-        assert uploader._session is not session
+        # 1.0.20: each upload works on its own copy of the uploader; the shared one is never changed
+        assert uploader._session is session
         if exception:
             raise exception()
 
     if exception:
-        with pytest.raises(exception):
+        from skyfold.remote import UploadRejected
+
+        # (1.0.20: an error before registration means "not saved": reported as a refusal, retried later)
+        with pytest.raises(UploadRejected if exception is RuntimeError else exception):
             remote.upload(path, on_bytes=progress)
     else:
         assert remote.upload(path, on_bytes=progress).asset_id == "ASSET1"

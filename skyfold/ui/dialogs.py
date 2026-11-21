@@ -800,6 +800,11 @@ class SettingsDialog(_Dialog):
             self.limit.addItem(t("No limit") if not mb else t("{n} MB/s", n=mb), mb)
         self.limit.setCurrentIndex(max(0, self.limit.findData(self.s.speed_limit_mb)))
         sync.addLayout(self._row(t("Download speed limit"), self.limit))
+        self.upbuf = Combo()
+        self.upbuf.addItem(t("Automatic (recommended)"), 0)
+        self.upbuf.addItem(t("Fixed 8 MB"), 8)
+        self.upbuf.setCurrentIndex(max(0, self.upbuf.findData(self.s.upload_buffer_mb)))
+        sync.addLayout(self._row(t("Upload send buffer"), self.upbuf))
         sync.addWidget(_label(t("Keeps some of your connection free while Skyfold downloads, for example during "
                                 "video calls."), "Hint", True))
         self.threshold = Spin(1, 10000, self.s.delete_threshold)
@@ -1185,6 +1190,8 @@ class SettingsDialog(_Dialog):
         s.folder_structure = self.structure.currentData()
         s.poll_minutes = self.poll.currentData()
         s.speed_limit_mb = self.limit.currentData()
+        if self.upbuf.findData(s.upload_buffer_mb) >= 0 or self.upbuf.currentData() != 0:
+            s.upload_buffer_mb = self.upbuf.currentData()  # (a hand-set size stays unless you change it)
         s.include_videos = self.videos.isChecked()
         s.include_live_video = self.live.isChecked()
         s.albums_as_folders = self.albums.isChecked()

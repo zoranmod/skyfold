@@ -454,8 +454,11 @@ def test_auth_and_unavailable_stop_pass_and_allow_retry(photos_env, monkeypatch,
         raise error("synthetic")
     with monkeypatch.context() as m:
         m.setattr(remote, "upload", fail)
-        with pytest.raises(error):
-            s.run()
+        if error is photos.RemoteUnavailable:
+            s.run()  # 1.0.20: uploads wait for the next pass; the incoming part of the pass goes on
+        else:
+            with pytest.raises(error):
+                s.run()
     s.run()
     assert remote.uploads == [path.name]
 

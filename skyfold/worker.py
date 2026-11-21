@@ -93,6 +93,18 @@ class _Watcher:
             self.observer = None
 
 
+
+def _apply_upload_buffer(settings) -> None:
+    """Send buffer for upload connections: a size in MB, or 0 for Windows' own (automatic) tuning."""
+    from . import drive_remote
+
+    try:
+        mb = int(getattr(settings, "upload_buffer_mb", 0))
+    except (TypeError, ValueError):
+        mb = 0
+    drive_remote.SEND_BUFFER = max(0, min(mb, 64)) << 20
+
+
 class SyncWorker(QObject):
     stateChanged = Signal(str, str)  # state, text  (idle|syncing|paused|error|auth|offline|setup)
     progress = Signal(object, object, str)  # done, total (may exceed 2^31), text
@@ -112,6 +124,7 @@ class SyncWorker(QObject):
         from .engine import THROTTLE
 
         THROTTLE.rate = max(0, int(self.settings.speed_limit_mb or 0)) * 1_000_000
+        _apply_upload_buffer(self.settings)
         self.state: State | None = None
         self.drive_state: DriveState | None = None
         self.api: Any = None
@@ -429,6 +442,7 @@ class SyncWorker(QObject):
         from .engine import THROTTLE
 
         THROTTLE.rate = max(0, int(self.settings.speed_limit_mb or 0)) * 1_000_000
+        _apply_upload_buffer(self.settings)
         if settings.drive_folders != old_folders and self.drive is not None and self.drive_running():
             self.drive.cancel_flag.set()  # the running pass still uses the old choice
         if settings.drive_folders != old_folders and self.drive_state and not reset_drive:
