@@ -2,7 +2,7 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.20] - 2026-11-21
 
 ### Changed
 - **Photos and videos go up to iCloud Photos two at a time**, each on its own connection, like new iCloud Drive files. Each file stays locked against changes while it is sent, and every decision about it is still made in one place.
