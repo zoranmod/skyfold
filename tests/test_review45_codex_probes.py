@@ -203,7 +203,8 @@ def test_photos_restores_exact_session_when_upload_exits(tmp_path, exception):
     remote, uploader = remote_with(session)
 
     def progress(n):
-        assert uploader._session is not session
+        # 1.0.20: each upload works on its own copy of the uploader; the shared one is never changed
+        assert uploader._session is session
         if exception:
             raise exception()
 

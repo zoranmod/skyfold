@@ -205,10 +205,17 @@ class ICloudRemote:
             raise UploadRejected("uploads aren't available for this library")
         uploader = getattr(client, "_uploader", None)
         real_session = getattr(uploader, "_session", None)
-        if real_session is not None:
-            uploader._session = _CountingSession(real_session, on_bytes)  # only for this one upload
         try:
-            result = client.upload_file(str(path), zone_name=zone)
+            if real_session is not None:
+                # This upload's own copy of the uploader (it holds only its settings), with its own
+                # counting session: uploads running side by side never share or swap one.
+                import copy
+
+                own = copy.copy(uploader)
+                own._session = _CountingSession(real_session, on_bytes)
+                result = own.upload(str(path), zone_name=zone)
+            else:
+                result = client.upload_file(str(path), zone_name=zone)
         except Exception as exc:
             from .engine import Cancelled
 
@@ -233,9 +240,6 @@ class ICloudRemote:
             if isinstance(status, int) and 400 <= status < 500 and status != 409:
                 raise UploadRejected(str(status)) from exc
             raise
-        finally:
-            if real_session is not None:
-                uploader._session = real_session
         return UploadReceipt(result.cplAsset, result.is_duplicate)
 
     def albums(self) -> list[tuple[str, list[str]]]:
@@ -436,7 +440,13 @@ class _CountingSession:
             url = str(kwargs.pop("url", None) or (args[0] if args else ""))
             _big_send_buffer(self._real, url)
             # its own connection: never waits for (or holds up) the other iCloud requests
+            import time
+
+            from .drive_remote import _log_speed
+
+            began = time.monotonic()
             response = _unlocked_post(self._real, url, **kwargs)
+            _log_speed("Photos", reader.read_total, time.monotonic() - began)
             if 300 <= int(getattr(response, "status_code", 200) or 200) < 400:
                 raise RuntimeError("iCloud redirected the upload")
             try:

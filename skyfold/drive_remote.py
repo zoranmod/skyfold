@@ -305,9 +305,11 @@ class ICloudDrive:
                 _big_send_buffer(d.session, content_url)
                 # one-shot body: a redirect would replay it empty, so it is never followed. It goes on
                 # its own connection, never waiting for (or holding up) the other iCloud requests.
+                began = time.monotonic()
                 resp = _unlocked_post(d.session, content_url, data=form,
                                       headers={"Content-Type": form.content_type},
                                       timeout=(30, 600), allow_redirects=False)
+                _log_speed("Drive", st.st_size, time.monotonic() - began)
                 if 300 <= int(getattr(resp, "status_code", 200) or 200) < 400:
                     raise RuntimeError(Text("iCloud redirected the upload; it is tried again later"))
                 d._raise_if_error(resp)
@@ -386,9 +388,10 @@ def _big_send_buffer(session: Any, url: str) -> None:
     if parts.scheme != "https" or not parts.netloc:
         return
     prefix = f"https://{parts.netloc}/"
-    if isinstance(adapters.get(prefix), _BigSendAdapter):
+    current = adapters.get(prefix)
+    if isinstance(current, _BigSendAdapter) and current.buffer == SEND_BUFFER:
         return
-    mount(prefix, _BigSendAdapter())
+    mount(prefix, _BigSendAdapter())  # (a changed setting: new connections with the new size)
 
 
 try:
@@ -398,21 +401,31 @@ except ImportError:  # pragma: no cover - requests is always there with pyicloud
 
 
 class _BigSendAdapter(_HTTPAdapter):  # type: ignore[misc,valid-type]
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.buffer = SEND_BUFFER  # (before the pool is made: init_poolmanager runs in the base init)
+        super().__init__(*args, **kwargs)
+
     def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
-        kwargs["socket_options"] = _send_options()
+        kwargs["socket_options"] = _send_options(self.buffer)
         super().init_poolmanager(*args, **kwargs)
 
     def proxy_manager_for(self, proxy: str, **proxy_kwargs: Any) -> Any:
-        proxy_kwargs.setdefault("socket_options", _send_options())  # through a proxy too
+        proxy_kwargs.setdefault("socket_options", _send_options(self.buffer))  # through a proxy too
         return super().proxy_manager_for(proxy, **proxy_kwargs)
 
 
-def _send_options() -> list:
+def _send_options(size: int | None = None) -> list:
+    """urllib3's usual socket options, plus a fixed send buffer unless the size is 0 (automatic:
+    Windows sizes it while sending)."""
     import socket
 
     from urllib3.connection import HTTPConnection
 
-    return list(HTTPConnection.default_socket_options) + [(socket.SOL_SOCKET, socket.SO_SNDBUF, SEND_BUFFER)]
+    size = SEND_BUFFER if size is None else size
+    options = list(HTTPConnection.default_socket_options)
+    if size > 0:
+        options.append((socket.SOL_SOCKET, socket.SO_SNDBUF, size))
+    return options
 
 
 class _Named:
@@ -505,6 +518,14 @@ def _check_registered(result: Any, name: str | None = None) -> str | None:
     if isinstance(status, dict) and status.get("status_code"):
         raise RuntimeError(Text(f"iCloud refused the upload: {code(str(status.get('status_code')))}"))
     raise RuntimeError(Text("iCloud didn't confirm the uploaded file; it is tried again later"))
+
+
+def _log_speed(service: str, size: int, seconds: float) -> None:
+    """One line per upload in the log: how fast it went, with which send buffer (to compare)."""
+    if size >= 1 << 20 and seconds > 0:
+        buf = f"{SEND_BUFFER >> 20} MB" if SEND_BUFFER > 0 else "automatic"
+        log.info("%s: upload of %.1f MB took %.1f s (%.2f MB/s, send buffer %s)",
+                 service, size / 1e6, seconds, size / 1e6 / seconds, buf)
 
 
 def _unlocked_post(session: Any, url: str, **kwargs: Any) -> Any:

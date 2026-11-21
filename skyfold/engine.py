@@ -653,6 +653,7 @@ class Syncer:
     UPLOAD_EXT = {".heic", ".heif", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff", ".webp", ".dng",
                   ".mov", ".mp4", ".m4v"}
     UPLOAD_MAX = 100  # per pass; the rest follows next time
+    PHOTO_UPLOAD_WORKERS = 2  # photos and videos sent at the same time (Apple limits each connection)
     UPLOAD_SETTLE = 120  # seconds a file must stay unchanged first (still being copied otherwise)
 
     # The upload is one-way: a file sent from this PC stays an ordinary file here (deleting or renaming
@@ -1049,24 +1050,129 @@ class Syncer:
                 self.state.set(key, None)
 
     def upload_new(self) -> int:
-        """Send new photos and videos in the folder to iCloud Photos (one-way, see above)."""
-        attempts = sent = 0
+        """Send new photos and videos in the folder to iCloud Photos (one-way, see above).
+
+        Up to PHOTO_UPLOAD_WORKERS go at a time, each on its own connection. Everything that decides
+        what a file is (marks, retries, receipts) happens on this thread; the upload threads only
+        send. Each file stays locked against writers from the check until its upload is over."""
+        from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+        from contextlib import ExitStack
+
+        from .ui_text import Rate
+
+        attempts = 0
+        sent = [0]
         now = time.monotonic()
         self._upload_idle = {k: v for k, v in self._upload_idle.items() if v[1] > now}
         tracked_ids = self.state.asset_ids()
-        for rel, path, live_video in self._upload_candidates():
-            self._check_cancel()
-            key = rel.lower()
+        streaming = getattr(self.remote, "streams_progress", False)
+        workers = self.PHOTO_UPLOAD_WORKERS if streaming else 1
+        lock = threading.Lock()
+        abort = threading.Event()  # one upload stopped the batch: the others stop at their next piece
+        flight: dict = {}  # future -> job
+        moving: dict[int, list] = {}  # job id -> [bytes sent, size, name]
+        rate, shown, sent_bytes = Rate(), [0.0], [0]
+
+        def show(force: bool = False) -> None:  # (this thread only)
+            clock = time.monotonic()
+            if not force and clock - shown[0] < 0.5:
+                return
+            shown[0] = clock
+            with lock:
+                parts = list(moving.values())
+                total_sent = sent_bytes[0]
+            if not parts:
+                return
+            done, size = sum(p[0] for p in parts), sum(p[1] for p in parts)
+            rate.add(total_sent, 0)
+            name = parts[0][2] if len(parts) == 1 else t("{n} files", n=len(parts))
+            self.cb.progress(done, max(size, 1), upload_text(name, done, size, rate))
+
+        def counter(jid: int) -> Callable[[int], None]:
+            def on_bytes(k: int) -> None:  # (from an upload thread)
+                if self.cancel_flag.is_set() or self.closing.is_set() or abort.is_set():
+                    raise Cancelled()  # Stop works in the middle of a big video too
+                with lock:
+                    moving[jid][0] += k
+                    sent_bytes[0] += k
+            return on_bytes
+
+        def send(job: dict):
+            if streaming:
+                return self.remote.upload(job["path"], on_bytes=counter(job["id"]))
+            return self.remote.upload(job["path"])
+
+        def finish(job: dict, f) -> None:
+            """What came of one upload, on this thread."""
+            path, rel, key, st, digest = job["path"], job["rel"], job["key"], job["st"], job["digest"]
             try:
-                with _upload_reader(path) as stream:
+                try:
+                    receipt = f.result() if f is not None else job["result"]()
+                except (AuthRequired, RemoteUnavailable, UploadRejected) as exc:
+                    if not isinstance(exc, UploadRejected):
+                        abort.set()
+                        raise
+                    retry = job["retry"]
+                    self.state.set("upload_retry:" + key, json.dumps([digest, time.time() + 3600]))
+                    if not retry or json.loads(retry)[0] != digest:
+                        self.cb.activity("error", t("Upload failed ({name}): {error}", name=path.name, error=brief(exc)))
+                    return
+                except Cancelled:
+                    abort.set()
+                    raise
+                except Exception:  # noqa: BLE001 - the photo may have arrived before the reply was lost
+                    receipt = None
+                show(force=True)
+                self.state.set("upload_retry:" + key, None)
+                self._mark(st, rel, digest, "copy" if receipt and receipt.is_duplicate else "sent")
+                if receipt and receipt.asset_id:
+                    if receipt.asset_id not in tracked_ids:
+                        self.state.set("upload_sent:" + receipt.asset_id, "1")  # never downloaded back
+                else:
+                    # any item in iCloud with these bytes is this file's (or the same picture): one-way
+                    self.state.set("upload_lost:" + digest, "1")
+                if receipt is None or (not receipt.asset_id and not receipt.is_duplicate):
+                    self.cb.activity("error", t("Upload unconfirmed: {name}. Check iCloud Photos and add it there manually if missing.", name=path.name))
+                elif receipt.is_duplicate:
+                    self.cb.activity("info", t("Already in iCloud Photos: {name}", name=path.name))
+                else:
+                    sent[0] += 1
+                    self.cb.activity("upload", t("Uploaded to iCloud Photos: {name}", name=rel), str(path))
+            finally:
+                with lock:
+                    moving.pop(job["id"], None)
+                job["hold"].close()  # the file can be changed again
+
+        def take(done) -> None:
+            for f in done:
+                finish(flight.pop(f), f)
+
+        pool = ThreadPoolExecutor(workers) if workers > 1 else None
+        try:
+            for rel, path, live_video in self._upload_candidates():
+                self._check_cancel()
+                while pool is not None and len(flight) >= workers:  # room for one more
+                    done, _ = wait(list(flight), timeout=0.5, return_when=FIRST_COMPLETED)
+                    take(done)
+                    show()
+                    self._check_cancel()
+                if attempts >= self.UPLOAD_MAX:
+                    break
+                key = rel.lower()
+                hold = ExitStack()
+                try:
+                    stream = hold.enter_context(_upload_reader(path))
                     if not _upload_member(path) or not inside_root(self.root, path):
+                        hold.close()
                         continue
                     st = os.fstat(stream.fileno())
                     if not self._upload_settled(rel, st):
+                        hold.close()
                         continue
                     signature = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
                     idle = self._upload_idle.get(key)
                     if idle and idle[0] == signature:
+                        hold.close()
                         continue  # bounded delay only; the bytes are read again before anything is sent
                     digest = hashlib.file_digest(stream, "sha256").hexdigest()
                     mark = self._marked(st, rel)
@@ -1074,6 +1180,7 @@ class Syncer:
                         if mark[0] != digest:
                             self._mark(st, rel, digest, mark[1])  # readable now: bound to its contents
                         self._upload_idle[key] = (signature, now + 600)
+                        hold.close()
                         continue  # (renamed or moved: the same file; edited: new contents, sent)
                     left = self.state.get("upload_legacy:" + digest)
                     if left:
@@ -1084,59 +1191,66 @@ class Syncer:
                             left = 0
                         self.state.set("upload_legacy:" + digest, str(left) if left > 0 else None)
                         self._upload_idle[key] = (signature, now + 600)
+                        hold.close()
                         continue
                     if (st.st_ino and (st.st_dev, st.st_ino) in self._held_ids()) or ("path", key) in self._held_ids():
                         self._upload_idle[key] = (signature, now + 600)
+                        hold.close()
                         continue  # in an older photos folder when it was taken over: whose isn't known
                     if live_video:
                         # The single-file upload can't make a Live Photo pair; on its own it would be a
                         # separate video. It stays on this PC, also after its photo is gone.
                         self._mark(st, rel, digest, "live")
                         self._upload_idle[key] = (signature, now + 600)
+                        hold.close()
                         continue
                     retry = self.state.get("upload_retry:" + key)
                     if retry:
                         previous, after = json.loads(retry)
                         if previous == digest and time.time() < after:
+                            hold.close()
                             continue
-                    attempts += 1
-                    self.cb.status(t("Uploading {name}…", name=path.name))
+                except OSError:
+                    hold.close()
+                    continue  # inaccessible or open for writing; no bytes sent
+                attempts += 1
+                self.cb.status(t("Uploading {name}…", name=path.name))
+                job = {"id": attempts, "rel": rel, "path": path, "key": key, "st": st, "digest": digest,
+                       "retry": retry, "hold": hold}
+                with lock:
+                    moving[job["id"]] = [0, st.st_size, path.name]
+                if pool is None:
+                    def run(job=job):
+                        return send(job)
+                    job["result"] = run
+                    finish(job, None)
+                else:
+                    flight[pool.submit(send, job)] = job
+            while flight:
+                done, _ = wait(list(flight), timeout=0.5, return_when=FIRST_COMPLETED)
+                take(done)
+                show()
+                if self.cancel_flag.is_set() or self.closing.is_set():
+                    abort.set()
+                    raise Cancelled()
+        except BaseException:
+            abort.set()  # uploads still running stop at their next piece, unregistered
+            if pool is not None:
+                pool.shutdown(wait=True, cancel_futures=True)
+            for f, job in list(flight.items()):  # (iCloud may have confirmed some meanwhile)
+                flight.pop(f)
+                if f.done() and not f.cancelled() and f.exception() is None:
                     try:
-                        if getattr(self.remote, "streams_progress", False):
-                            receipt = self.remote.upload(path, on_bytes=self._upload_progress(path, st.st_size))
-                        else:
-                            receipt = self.remote.upload(path)
-                    except (AuthRequired, RemoteUnavailable, UploadRejected) as exc:
-                        if not isinstance(exc, UploadRejected):
-                            raise
-                        self.state.set("upload_retry:" + key, json.dumps([digest, time.time() + 3600]))
-                        if not retry or json.loads(retry)[0] != digest:
-                            self.cb.activity("error", t("Upload failed ({name}): {error}", name=path.name, error=brief(exc)))
-                        continue
-                    except Cancelled:
-                        raise
-                    except Exception:  # noqa: BLE001 - the photo may have arrived before the reply was lost
-                        receipt = None
-                    self.state.set("upload_retry:" + key, None)
-                    self._mark(st, rel, digest, "copy" if receipt and receipt.is_duplicate else "sent")
-                    if receipt and receipt.asset_id:
-                        if receipt.asset_id not in tracked_ids:
-                            self.state.set("upload_sent:" + receipt.asset_id, "1")  # never downloaded back
-                    else:
-                        # any item in iCloud with these bytes is this file's (or the same picture): one-way
-                        self.state.set("upload_lost:" + digest, "1")
-                    if receipt is None or (not receipt.asset_id and not receipt.is_duplicate):
-                        self.cb.activity("error", t("Upload unconfirmed: {name}. Check iCloud Photos and add it there manually if missing.", name=path.name))
-                    elif receipt.is_duplicate:
-                        self.cb.activity("info", t("Already in iCloud Photos: {name}", name=path.name))
-                    else:
-                        sent += 1
-                        self.cb.activity("upload", t("Uploaded to iCloud Photos: {name}", name=rel), str(path))
-            except OSError:
-                continue  # inaccessible or open for writing; no bytes sent
-            if attempts >= self.UPLOAD_MAX:
-                break
-        return sent
+                        finish(job, f)
+                    except Exception:  # noqa: BLE001
+                        pass
+                else:
+                    job["hold"].close()
+            raise
+        finally:
+            if pool is not None:
+                pool.shutdown(wait=True, cancel_futures=True)
+        return sent[0]
 
     def _confirm_moves(self, maybe: dict[tuple[str, str], list[str]]) -> tuple[dict[tuple[str, str], str], set]:
         """Which of the look-alike files really are the missing photos? iCloud's copy of each missing

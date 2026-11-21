@@ -2,6 +2,12 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **Photos and videos go up to iCloud Photos two at a time**, each on its own connection, like new iCloud Drive files. Each file stays locked against changes while it is sent, and every decision about it is still made in one place.
+- **Settings → Upload send buffer:** *8 MB* (default) or *Automatic (Windows)*. The log now records the speed of every upload over 1 MB with the buffer it used, so the two can be compared on your connection.
+
 ## [1.0.19] - 2026-11-21
 
 ### Changed

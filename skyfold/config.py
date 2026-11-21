@@ -403,6 +403,7 @@ class Settings:
     photos_dir_confirmed: bool = False  # set once the user picked the gallery folder
     poll_minutes: int = 2
     speed_limit_mb: int = 0  # download limit in MB/s; 0 = no limit
+    upload_buffer_mb: int = 8  # send buffer per upload connection in MB; 0 = Windows decides (automatic)
     full_check_hours: int = 24  # safety-net full read; everyday syncs only read changes
     folder_structure: str = "flat"
     language: str = "en"
@@ -465,6 +466,8 @@ class Settings:
             clean["poll_minutes"] = min(max(1, clean["poll_minutes"]), 24 * 60)
         if "delete_threshold" in clean:
             clean["delete_threshold"] = max(1, clean["delete_threshold"])
+        if "upload_buffer_mb" in clean:
+            clean["upload_buffer_mb"] = min(max(0, clean["upload_buffer_mb"]), 64)
         return cls(**clean)  # anything of the wrong type falls back to its default
 
     def save(self) -> None:
