@@ -1115,6 +1115,8 @@ class Syncer:
                         raise
                     retry = job["retry"]
                     self.state.set("upload_retry:" + key, json.dumps([digest, time.time() + 3600]))
+                    if st.st_ino:
+                        self.state.set(f"upload_retry:#{st.st_dev}:{st.st_ino}", json.dumps([digest, time.time() + 3600]))
                     if not retry or json.loads(retry)[0] != digest:
                         self.cb.activity("error", t("Upload failed ({name}): {error}", name=path.name, error=brief(exc)))
                     return
@@ -1125,6 +1127,8 @@ class Syncer:
                     receipt = None
                 show(force=True)
                 self.state.set("upload_retry:" + key, None)
+                if st.st_ino:
+                    self.state.set(f"upload_retry:#{st.st_dev}:{st.st_ino}", None)
                 self._mark(st, rel, digest, "copy" if receipt and receipt.is_duplicate else "sent")
                 if receipt and receipt.asset_id:
                     if receipt.asset_id not in tracked_ids:
@@ -1211,7 +1215,10 @@ class Syncer:
                         self._upload_idle[key] = (signature, now + 600)
                         hold.close()
                         continue
+                    ident_key = f"#{st.st_dev}:{st.st_ino}" if st.st_ino else None
                     retry = self.state.get("upload_retry:" + key)
+                    if ident_key and not retry:
+                        retry = self.state.get("upload_retry:" + ident_key)  # (another name, same file)
                     if retry:
                         previous, after = json.loads(retry)
                         if previous == digest and time.time() < after:
@@ -1220,6 +1227,9 @@ class Syncer:
                 except OSError:
                     hold.close()
                     continue  # inaccessible or open for writing; no bytes sent
+                except BaseException:
+                    hold.close()  # (Stop while it was read: unlocked now, before waiting for the others)
+                    raise
                 attempts += 1
                 self.cb.status(t("Uploading {name}…", name=path.name))
                 job = {"id": attempts, "rel": rel, "path": path, "key": key, "st": st, "digest": digest,
@@ -1329,7 +1339,17 @@ class Syncer:
             self.cb.activity("info", t("Followed {n} files moved inside the folder", n=moved))
         if getattr(self.settings, "photos_upload", False) and not self._upload_saw_missing and not self.held:
             # (only when nothing is missing: a new-looking file might be a photo moved or renamed)
-            self.upload_new()
+            try:
+                self.upload_new()
+            except RemoteUnavailable as exc:
+                # Uploads wait for the next pass; what's new in iCloud still comes down now (a real
+                # outage stops the reading below on its own).
+                told = str(exc)
+                if told != getattr(self, "_upload_wait_told", None):
+                    self._upload_wait_told = told
+                    self.cb.activity("info", t("Uploads to iCloud Photos wait: {error}", error=brief(exc)))
+            else:
+                self._upload_wait_told = None
 
         cursor = self.remote.cursor()
         stored = self.state.get("cursor")

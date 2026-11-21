@@ -197,13 +197,19 @@ class ICloudRemote:
             client = library._client
             zone = library.zone_id["zoneName"]
         except Exception as exc:  # noqa: BLE001
+            from .drive_remote import is_transient
+
             translated = _translate(exc)
             if isinstance(translated, (AuthRequired, RemoteUnavailable)):
                 raise translated from exc
+            if is_transient(exc):  # (finding the library failed on the way: nothing about the file)
+                raise RemoteUnavailable(t("iCloud Photos can't be reached right now")) from exc
             raise UploadRejected(type(exc).__name__) from exc
-        if client is None:  # no CloudKit uploader for this library: nothing was sent
-            raise UploadRejected("uploads aren't available for this library")
-        uploader = getattr(client, "_uploader", None)
+        uploader = getattr(client, "_uploader", None) if client is not None else None
+        if client is None or (uploader is None and hasattr(client, "_uploader")):
+            # This account's service list has no upload service right now: nothing was sent, and
+            # nothing about the files is decided (they go when the service is back).
+            raise UploadsUnavailable(t("Uploads to iCloud Photos aren't available for this account right now"))
         real_session = getattr(uploader, "_session", None)
         counting: _CountingSession | None = None
         try:
@@ -243,8 +249,12 @@ class ICloudRemote:
                     http = int(getattr(exc, "code", None) or 0)
                 except (TypeError, ValueError):
                     http = 0
-                if http in (429, 503):  # registration refused as a whole (busy): not saved, next pass
+                if _never_connected(exc) or http in (403, 408, 429, 503):
+                    # the registration never reached iCloud, or was refused as a whole (no access,
+                    # timed out waiting for it, busy): not saved; the batch waits for the next pass
                     raise RemoteUnavailable(t("iCloud Photos is busy; uploads continue later")) from exc
+                if 400 <= http < 500 and http != 409:
+                    raise UploadRejected(str(http)) from exc  # the request was refused: not saved
                 if isinstance(status, int) and status >= 400 and status != 409:
                     raise UploadRejected(str(status)) from exc  # refused for this file: not saved
                 raise  # registration sent and its answer lost: the photo may be there
@@ -415,6 +425,33 @@ class ICloudRemote:
             raise _translate(exc) from exc
 
 
+class UploadsUnavailable(RemoteUnavailable):
+    """The account offers no Photos upload service right now (a read-only service list)."""
+
+
+def _never_connected(exc: BaseException) -> bool:
+    """The request provably never reached the server: the connection itself couldn't be made.
+    (A timeout or break while waiting for the answer is not that: the server may have it.)"""
+    import requests
+
+    try:
+        from urllib3.exceptions import NameResolutionError, NewConnectionError
+    except ImportError:  # pragma: no cover
+        NameResolutionError = NewConnectionError = ()  # type: ignore[assignment,misc]
+    cur: BaseException | None = exc
+    for _ in range(8):
+        if cur is None:
+            return False
+        if isinstance(cur, (requests.exceptions.ConnectTimeout, NewConnectionError, NameResolutionError)):
+            return True
+        reason = getattr(cur, "reason", None)  # (urllib3's MaxRetryError keeps the cause here)
+        if isinstance(reason, (NewConnectionError, NameResolutionError)):
+            return True
+        nested = cur.args[0] if getattr(cur, "args", None) and isinstance(cur.args[0], BaseException) else None
+        cur = cur.__cause__ or cur.__context__ or nested
+    return False
+
+
 class _CountingReader:
     """The open photo as pyicloud hands it over, telling how much has been read (= sent)."""
 
@@ -440,7 +477,7 @@ class _CountingReader:
 
 class _CountingSession:
     """pyicloud's session for one Photos upload: the file's bytes are counted on their way and the
-    upload server's connections get a big send buffer; everything else goes to the real session."""
+    upload server's connections get the send buffer setting; everything else goes to the real session."""
 
     def __init__(self, real: Any, on_bytes: Callable[[int], None] | None) -> None:
         self._real, self._on_bytes = real, on_bytes

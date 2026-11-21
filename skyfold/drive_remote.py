@@ -376,9 +376,9 @@ SEND_BUFFER = 0  # fixed send buffer for upload connections in bytes; 0 = Window
 
 
 def _big_send_buffer(session: Any, url: str) -> None:
-    """Connections to the upload server get a fixed 8 MB send buffer (Windows' own send tuning is
-    switched off for them). Measured on a 200 Mbit/s line: one upload went from a flat ~0.5 MB/s to
-    1.4-4 MB/s. Only connections to that upload host (origin) on this session."""
+    """Connections to the upload server get the send buffer setting: automatic (Windows sizes it
+    while sending; the default, measured fastest) or a fixed size. Only connections to that upload
+    host (origin) on this session; a changed setting applies to new connections."""
     from urllib.parse import urlsplit
 
     mount = getattr(session, "mount", None)

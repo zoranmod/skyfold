@@ -270,6 +270,9 @@ BS: dict[str, str] = {
     "Upload send buffer": "Buffer za slanje",
     "iCloud Photos can't be reached right now": "iCloud Photos trenutno nije dostupan",
     "iCloud Photos is busy; uploads continue later": "iCloud Photos je zauzet; slanje se nastavlja kasnije",
+    "Uploads to iCloud Photos wait: {error}": "Slanje u iCloud Photos čeka: {error}",
+    "Uploads to iCloud Photos aren't available for this account right now":
+        "Slanje u iCloud Photos trenutno nije dostupno za ovaj nalog",
     "Automatic (recommended)": "Automatski (preporučeno)",
     "Fixed 8 MB": "Fiksno 8 MB",
     "Keeps some of your connection free while Skyfold downloads, for example during video calls.":

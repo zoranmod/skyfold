@@ -7,6 +7,7 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 ### Changed
 - **Photos and videos go up to iCloud Photos two at a time**, each on its own connection, like new iCloud Drive files. Each file stays locked against changes while it is sent, and every decision about it is still made in one place.
 - **A photo iCloud refused is sent again.** Before (also in 1.0.19), a refusal from iCloud (busy, or this file refused) could be taken for a lost reply, and the photo was never sent again. Now only a registration whose answer really got lost counts as maybe sent. A broken connection stops the other uploads and they continue on the next check; Stop pressed while a video is read sends nothing; one video under two names (hard links) goes once.
+- **When uploads to iCloud Photos have to wait** (iCloud busy, no access, the upload service missing for the account, a connection that couldn't be made), photos from your iPhone still come down in the same check, and the waiting files go up on the next check without being marked as sent.
 - **Upload send buffer is automatic now** (Settings → Upload send buffer; *Fixed 8 MB* stays available). Windows sizes it while sending. Measured on a 200 Mbit/s line, 3–3.7 GB videos one after another: automatic 13.1 MB/s, fixed 8 MB 11.0 and 3.5 MB/s. The log records the speed of every upload over 1 MB with the buffer it used.
 
 ## [1.0.19] - 2026-11-21
