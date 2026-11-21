@@ -853,9 +853,13 @@ class DriveSyncer:
                     continue
                 if b.pending:  # a replacement upload that didn't finish: the PC version still has to go up
                     if b.etag is not None and r.etag != b.etag:
-                        # the version this upload replaced went to Recently Deleted; what is there now was
-                        # saved by another device meanwhile: keep both, as for any other conflict
-                        self._conflict(path, r, res, downloads)
+                        # The version this upload replaced went to Recently Deleted; what is there now is
+                        # either this upload (its reply got lost) or another device's save. Same size:
+                        # downloaded and compared (identical = ours); otherwise both are kept.
+                        if r.size == lo.size:
+                            downloads.append(r)
+                        else:
+                            self._conflict(path, r, res, downloads)
                     elif settled:
                         uploads.append(path)
                     continue
@@ -992,7 +996,8 @@ class DriveSyncer:
         to_cloud = self._keep_unsynced_remote(to_cloud, remote, base)
         self._deletions(to_cloud, to_pc, remote, base, res)
         known_now = self.state.all() if res.pending_to_cloud else {}
-        shapes = {p: self._cloud_shape(p, remote, known_now) for p in res.pending_to_cloud}
+        ordered = sorted(remote) if res.pending_to_cloud else []
+        shapes = {p: self._cloud_shape(p, remote, known_now, ordered=ordered) for p in res.pending_to_cloud}
         pc_shapes = {p: self._pc_shape(p) for p in res.pending_to_pc}
         if scope is None:  # approvals only count for deletions still waiting, on the side and items asked about
             self.approved = {p for p in self.approved
@@ -1995,14 +2000,20 @@ class DriveSyncer:
         return out
 
     def _cloud_shape(self, p: str, d: dict[str, DriveItem], known: dict[str, Base],
-                     verify: bool = False) -> dict | None:
+                     verify: bool = False, ordered: list[str] | None = None) -> dict | None:
         """Which items (and versions) are at p and below in iCloud: what a deletion there would remove.
         None when that can't be told for some item (no identity; no version tag and the content can't
         be shown to be what was synced). verify: untagged files are downloaded and compared."""
         item = d.get(p)
         if item is None:
             return {p: ("absent",)}
-        keys = [p] + ([q for q in d if q.startswith(p + "/")] if item.is_dir else [])
+        if item.is_dir and ordered is not None:  # (sorted paths: only this folder's part is looked at)
+            import bisect
+
+            below = ordered[bisect.bisect_left(ordered, p + "/"):bisect.bisect_left(ordered, p + "0")]
+        else:
+            below = [q for q in d if q.startswith(p + "/")] if item.is_dir else []
+        keys = [p] + below
         out: dict[str, tuple] = {}
         for q in keys:
             r = d[q]
@@ -2558,6 +2569,9 @@ class DriveSyncer:
         """New files go up several at a time (each upload is one connection, and Apple limits each
         connection); a file replacing one in iCloud goes alone, after them, because its old
         version is moved to Recently Deleted first. Only this thread writes the database."""
+        if not paths:
+            return
+        from .engine import _upload_reader
         from .ui_text import Rate
 
         rate = Rate()
@@ -2579,27 +2593,32 @@ class DriveSyncer:
             self.cb.progress(now_bytes, total or 1, transfer_text(
                 t("Drive: uploading "), min(done_files + 1, len(paths)), len(paths), now_bytes, total, rate))
 
-        def counter() -> Callable[[int], None]:
-            def on_bytes(k: int) -> None:  # (called from the upload threads)
+        def counter(here: bool) -> Callable[[int], None]:
+            def on_bytes(k: int) -> None:  # (from an upload thread, or this one for a replacement)
                 if self._stopped() or abort.is_set():
                     raise Cancelled()  # Stop works in the middle of a big upload too
                 with lock:
                     sent[0] += k
+                if here:
+                    show()
             return on_bytes
 
-        def send(path: str, parent: DriveItem) -> tuple[int, str]:
+        def send(path: str, parent: DriveItem, here: bool, handle=None) -> tuple:
             if getattr(self.remote, "streams_progress", False):
-                got = self.remote.upload(parent, self._abs(path), on_bytes=counter())  # streamed from disk
+                extra = {"handle": handle} if handle is not None and getattr(self.remote, "takes_handle", False) else {}
+                got = self.remote.upload(parent, self._abs(path), on_bytes=counter(here), **extra)
             else:
                 got = self.remote.upload(parent, self._abs(path))
-            if isinstance(got, tuple) and len(got) == 2:
-                return got  # exactly what was sent
+            if isinstance(got, tuple) and len(got) in (2, 3):
+                return got  # exactly what was sent (and its version in iCloud, when told)
             return _file_digest(self._abs(path))
 
-        def recorded(path: str, lo: Local, got: tuple[int, str]) -> None:
-            size, digest = got
-            # the tag iCloud gives it isn't known yet; what it must contain is
-            self.state.put(Base(path, False, None, size, lo.mtime, lo.size, False, digest))
+        def recorded(path: str, lo: Local, got: tuple) -> None:
+            size, digest = got[0], got[1]
+            etag = got[2] if len(got) > 2 else None
+            # The version iCloud named in its confirmation, when it named one: the next pass then
+            # knows the file without downloading it to look. Without it, what it must contain.
+            self.state.put(Base(path, False, etag, size, lo.mtime, lo.size, False, digest))
             res.uploaded += 1
             res.last_up = res.last_up or str(self._abs(path))
             res.up_files.append(path)
@@ -2628,39 +2647,57 @@ class DriveSyncer:
         self._check_cancel()
         show(force=True)
         if fresh:
-            def send_new(path: str, parent: DriveItem) -> tuple[int, str]:
+            def send_new(path: str, parent: DriveItem) -> tuple:
                 if self._stopped() or abort.is_set():
                     raise Cancelled()
                 self._check_inside(self._abs(path))
                 with open(self._abs(path), "rb") as fh:  # locked or unreadable: nothing is sent
                     fh.read(1)
-                return send(path, parent)
+                return send(path, parent, False)
 
             pool = ThreadPoolExecutor(UPLOAD_WORKERS)
+            futures = {pool.submit(send_new, path, parent): path for path, parent in fresh}
+            taken: set = set()
+
+            def take(f) -> None:
+                """A finished upload's outcome, on this thread. A network failure stops the batch."""
+                taken.add(f)
+                path = futures[f]
+                with lock:
+                    finished[0] += 1
+                try:
+                    got = f.result()
+                except (AuthRequired, RemoteUnavailable, Cancelled):
+                    abort.set()
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    if is_transient(exc):
+                        abort.set()  # the connection is gone: the others stop, replacements wait
+                        raise
+                    failed(path, exc)
+                else:
+                    recorded(path, local[path], got)
+
             try:
-                futures = {pool.submit(send_new, path, parent): path for path, parent in fresh}
                 waiting = set(futures)
                 while waiting:
                     done, waiting = wait(waiting, timeout=0.5, return_when=FIRST_COMPLETED)
                     for f in done:
-                        path = futures[f]
-                        with lock:
-                            finished[0] += 1
-                        try:
-                            got = f.result()
-                        except (AuthRequired, RemoteUnavailable, Cancelled):
-                            abort.set()
-                            raise
-                        except Exception as exc:  # noqa: BLE001
-                            failed(path, exc)
-                        else:
-                            recorded(path, local[path], got)
+                        take(f)
                     show()
                     if self._stopped():
                         abort.set()
                         raise Cancelled()
             except BaseException:
                 abort.set()  # the uploads still running stop at their next piece, unregistered
+                pool.shutdown(wait=True, cancel_futures=True)
+                # ones iCloud confirmed meanwhile are written down all the same
+                for f in futures:
+                    if f not in taken and f.done() and not f.cancelled() and f.exception() is None:
+                        try:
+                            recorded(futures[f], local[futures[f]], f.result())
+                        except Exception:  # noqa: BLE001
+                            pass
                 raise
             finally:
                 pool.shutdown(wait=True, cancel_futures=True)
@@ -2672,21 +2709,27 @@ class DriveSyncer:
             lo = local[path]
             try:
                 self._check_inside(self._abs(path))
-                # Locked or unreadable: fail before touching iCloud. A replacement trashes the old iCloud
-                # version first, so the whole file is read through once (in pieces) before that.
-                _file_digest(self._abs(path))
-                self._check_cancel()  # reading can take a while: stop here, before iCloud is touched
-                # Replacing a file: move the old iCloud version to Recently Deleted first.
-                # Mark the row "pending" so a failed upload is retried, never mistaken for a deletion.
-                # The tag of the version replaced is kept: another version found there later is
-                # someone else's save, not this one, and is never trashed by the retry.
-                self.state.put(Base(path, False, existing.etag, existing.size, lo.mtime, lo.size, True))
-                self.remote.trash(existing)
-                self._check_cancel()  # (the row stays "pending": the upload is done next time)
-                recorded(path, lo, send(path, parent))
+                # Locked against writers before anything happens in iCloud, and read through once (in
+                # pieces) from that same handle: a file another program is still writing, or one that
+                # can't be read, never costs the iCloud version. The upload streams from it too.
+                with _upload_reader(self._abs(path)) as fh:
+                    while fh.read(1 << 20):
+                        self._check_cancel()
+                    fh.seek(0)
+                    self._check_cancel()
+                    # Replacing a file: move the old iCloud version to Recently Deleted first. Mark the row
+                    # "pending" so a failed upload is retried, never mistaken for a deletion. The tag of
+                    # the version replaced is kept: another version found there later is someone else's
+                    # save (or this upload, when its reply got lost: compared then), never trashed.
+                    self.state.put(Base(path, False, existing.etag, existing.size, lo.mtime, lo.size, True))
+                    self.remote.trash(existing)
+                    self._check_cancel()  # (the row stays "pending": the upload is done next time)
+                    recorded(path, lo, send(path, parent, True, handle=fh))
             except (AuthRequired, RemoteUnavailable, Cancelled):
                 raise
             except Exception as exc:  # noqa: BLE001
+                if is_transient(exc):
+                    raise
                 failed(path, exc)
             finally:
                 with lock:

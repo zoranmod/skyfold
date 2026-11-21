@@ -32,7 +32,7 @@ def test_same_size_edit_does_not_publish_a_mixed_version(tmp_path):
                 pass  # holding a Windows deny-write handle is also a valid fix
 
     try:
-        _, digest = adapter(api).upload(PARENT, path, on_bytes=edit_after_first_chunk)
+        _, digest = adapter(api).upload(PARENT, path, on_bytes=edit_after_first_chunk)[:2]
     except Exception:
         assert api.updated is None
         return

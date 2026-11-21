@@ -271,30 +271,38 @@ class ICloudDrive:
             raise _translate(exc) from exc
 
     streams_progress = True  # upload() takes on_bytes
+    takes_handle = True  # and the file already opened (locked) by the caller
 
     def upload(self, parent: DriveItem, local: Path, data: bytes | None = None,
-               on_bytes: Callable[[int], None] | None = None) -> tuple[int, str]:
-        """Sends the file; returns (size, sha256) of exactly the bytes sent. Without `data` the file
-        is streamed from disk: a big video never has to fit in memory."""
+               on_bytes: Callable[[int], None] | None = None, handle: Any = None) -> tuple:
+        """Sends the file; returns (size, sha256, etag) of exactly the bytes sent and the version
+        iCloud gave them (etag None when its answer didn't say). Without `data` the file is
+        streamed from disk: a big video never has to fit in memory. handle: the file already
+        opened with _upload_reader (a replacement locks it before the old version is trashed)."""
         try:
             if data is not None:
                 fh: Any = io.BytesIO(data)
                 fh.name = local.name  # the Drive API takes the file name from the file object
                 st = local.stat()
                 self.drive.send_file(parent.docwsid, fh, zone=parent.zone, mtime=st.st_mtime, ctime=st.st_mtime)
-                return len(data), hashlib.sha256(data).hexdigest()
+                return len(data), hashlib.sha256(data).hexdigest(), None
+            from contextlib import nullcontext
+
             from .engine import _upload_reader
 
             # Other programs may read the file meanwhile but not change it: one version, never a mix
-            with _upload_reader(local) as raw:
+            with (nullcontext(handle) if handle is not None else _upload_reader(local)) as raw:
+                raw.seek(0)
                 st = os.fstat(raw.fileno())
                 named = _Named(raw, local.name)
                 d = self.drive
                 document_id, content_url = d._get_upload_contentws_url(file_object=named, zone=parent.zone)
                 form = _StreamedForm(raw, local.name, st.st_size, on_bytes)
                 _big_send_buffer(d.session, content_url)
-                # one-shot body: a redirect would replay it empty, so it is never followed
-                resp = d.session.post(content_url, data=form, headers={"Content-Type": form.content_type},
+                # one-shot body: a redirect would replay it empty, so it is never followed. It goes on
+                # its own connection, never waiting for (or holding up) the other iCloud requests.
+                resp = _unlocked_post(d.session, content_url, data=form,
+                                      headers={"Content-Type": form.content_type},
                                       timeout=(30, 600), allow_redirects=False)
                 if 300 <= int(getattr(resp, "status_code", 200) or 200) < 400:
                     raise RuntimeError(Text("iCloud redirected the upload; it is tried again later"))
@@ -303,12 +311,12 @@ class ICloudDrive:
                 info = resp.json()["singleFile"]
                 if isinstance(info, dict) and "size" in info and int(info["size"]) != st.st_size:
                     raise RuntimeError(Text("iCloud received a different size; it is tried again later"))
-                if on_bytes:
-                    on_bytes(0)  # Stop pressed while iCloud was answering: nothing is registered
-                result = d._update_contentws(parent.docwsid, info, document_id, named, parent.zone,
-                                             mtime=st.st_mtime, ctime=st.st_mtime)
-                _check_registered(result)
-                return st.st_size, form.digest()
+                # Stop pressed while iCloud answered, or while this waited for its turn: not registered
+                with _before_send(d.session, (lambda: on_bytes(0)) if on_bytes else None):
+                    result = d._update_contentws(parent.docwsid, info, document_id, named, parent.zone,
+                                                 mtime=st.st_mtime, ctime=st.st_mtime)
+                etag = _check_registered(result)
+                return st.st_size, form.digest(), etag
         except Exception as exc:  # noqa: BLE001
             from .engine import Cancelled
 
@@ -473,20 +481,52 @@ class _StreamedForm:
         return self._hash.hexdigest()
 
 
-def _check_registered(result: Any) -> None:
+def _check_registered(result: Any) -> str | None:
     """update/documents answers {"status": {...}, "results": [{"status": {"status_code": 0,
-    "error_message": ""}, "document": {...}}]}: the new document is the confirmation. (Its status
-    is an object, not the "OK" string of the other Drive calls, so _check_item doesn't fit.)"""
-    if not isinstance(result, dict) or "results" not in result:
-        return  # (no answer to look at: pyicloud's own call raised already on an HTTP error)
-    listed = result.get("results")
+    "error_message": ""}, "document": {...}}]}: the new document is the confirmation (its status is
+    an object, not the "OK" string of the other Drive calls). Returns the document's version tag."""
+    if result is None:
+        return None  # (test doubles without an answer)
+    listed = result.get("results") if isinstance(result, dict) else None
     first = listed[0] if isinstance(listed, list) and listed and isinstance(listed[0], dict) else None
-    if first is not None and isinstance(first.get("document"), dict):
-        return  # saved
-    status = (first or {}).get("status")
+    doc = (first or {}).get("document")
+    if isinstance(doc, dict):
+        etag = doc.get("etag")
+        return etag if isinstance(etag, str) and etag else None
+    status = (first or (result if isinstance(result, dict) else {})).get("status")
     if isinstance(status, dict) and status.get("status_code"):
         raise RuntimeError(Text(f"iCloud refused the upload: {code(str(status.get('status_code')))}"))
     raise RuntimeError(Text("iCloud didn't confirm the uploaded file; it is tried again later"))
+
+
+def _unlocked_post(session: Any, url: str, **kwargs: Any) -> Any:
+    """A file body to a reserved upload URL: past the lock that keeps the other iCloud requests in
+    turn (the session's own pipeline still runs), so uploads run side by side and a long one never
+    holds up Photos or Notes."""
+    if getattr(session, "_skyfold_locked", False):
+        return type(session).request(session, "POST", url, **kwargs)
+    return session.post(url, **kwargs)
+
+
+class _before_send:
+    """Runs check() right before the next request leaves, once it has its turn on the session
+    (Stop pressed while it waited still keeps it from being sent)."""
+
+    def __init__(self, session: Any, check: Callable[[], None] | None) -> None:
+        self._local = getattr(session, "_skyfold_before_send", None)
+        self._check = check
+
+    def __enter__(self) -> None:
+        if self._check is None:
+            return
+        if self._local is None:
+            self._check()
+        else:
+            self._local.check = self._check
+
+    def __exit__(self, *exc: Any) -> None:
+        if self._local is not None:
+            self._local.check = None
 
 
 def _check_first(resp: Any, key: str, what: str) -> None:

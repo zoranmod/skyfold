@@ -5,14 +5,19 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 ## [Unreleased]
 
 ### Changed
-- **iCloud Drive uploads big files without loading them into memory.** A large video or archive is sent from disk piece by piece; before, the whole file (and a second copy while sending) had to fit in RAM. A file replacing one in iCloud is still read through once before the old version goes to Recently Deleted, so a locked file never costs the iCloud copy.
-- **Renaming or moving a Notes folder on your iPhone or Mac moves its pages too**, at the next sync. Before, notes you hadn't edited stayed under the old folder name until a full read.
-- **New iCloud Drive files go up three at a time.** Apple limits each upload connection, so many files together now go several times faster. A file that replaces one in iCloud still goes alone, after them.
-- **iCloud Drive uploads are much faster on fast connections.** Windows gives a program only a 64 KB send buffer, which held one upload to about 0.6 MB/s however fast the line was; uploads to iCloud now get 8 MB, like a browser.
-- While a file is being uploaded to iCloud Drive, other programs can read it but not change it (as for Photos uploads), so iCloud never gets a mix of two versions. Skyfold also checks that iCloud received the whole file and confirmed it, and *Stop* pressed while iCloud is answering keeps the file from being registered.
-- **Photos uploads show their progress too** (MB sent, speed, time left), get the same bigger send buffer, and *Stop* stops a big video in the middle.
-- **iCloud Drive uploads show their progress** (MB sent, speed, time left), and *Stop* stops a big upload in the middle; it is sent again from the start next time.
-- iCloud Drive: deleting thousands of files at once is counted much faster before the question appears, and a quick check of an unchanged folder no longer rewrites the whole Drive cache file.
+- **Faster uploads to iCloud Drive.** Each upload now gets an 8 MB send buffer. On a 200 Mbit/s fibre line, one upload went from a steady ~0.5 MB/s to about 1.4–7 MB/s; Apple's servers vary. **New files go up three at a time**, each on its own connection, so several files together go faster. A file that replaces one in iCloud still goes alone, after them. An upload no longer holds up Photos and Notes while it runs.
+- **iCloud Drive uploads big files without loading them into memory.** A large video or archive is sent from disk piece by piece; before, the whole file (and a second copy while sending) had to fit in RAM.
+- **Uploads show their progress** (MB sent, speed, time left) for iCloud Drive and iCloud Photos, like downloads. *Stop* stops a big upload in the middle; it is sent again from the start next time.
+- **Renaming or moving a Notes folder on your iPhone or Mac moves its pages too.** The first check after updating reads all notes once to catch renames made before.
+- iCloud Drive: deleting thousands of files or folders at once is counted much faster before the question appears, and a quick check of an unchanged folder no longer rewrites the whole Drive cache file.
+- iCloud Drive: after an upload, the version iCloud confirms is remembered, so the next check doesn't download the file again to look at it.
+
+### Fixed
+- **A file being uploaded can't be changed meanwhile.** Other programs can read it, not change it (as for Photos uploads), so iCloud never gets a mix of two versions. A file replacing one in iCloud is locked *before* the old version goes to Recently Deleted: a file still open for writing in another program never costs the iCloud copy.
+- **An upload counts only when iCloud confirms it.** Skyfold checks that iCloud received the whole file and named the new document; an unconfirmed upload is tried again, and the PC file is never taken for deleted in iCloud. *Stop* pressed while iCloud is answering keeps the file from being registered; uploads iCloud had already confirmed are still written down.
+- A lost connection during uploads stops the other uploads too; files that replace ones in iCloud then wait for the next check.
+- When the reply to a replaced file got lost, the next check compares the file in iCloud with the one on the PC instead of making a `(PC conflict …)` copy of identical contents.
+- Photos: an upload iCloud reports with a different size is not registered and is tried again later.
 
 ## [1.0.18] - 2026-11-20
 

@@ -171,7 +171,8 @@ def test_upload_payload_preserves_client_mtime_without_network(tmp_path):
                 bodies.append(body)
                 return answer({'singleFile': info})
             payloads.append(kwargs['json'])
-            return answer({})
+            return answer({'results': [{'status': {'status_code': 0, 'error_message': ''},
+                                        'document': {'document_id': 'fake-document', 'etag': '1a'}}]})
     service = DriveService('https://example.invalid/drive', 'https://example.invalid/doc', Session(), {})
     adapter = ICloudDrive(SimpleNamespace(drive=service))
     p = tmp_path / 'file.txt'; p.write_bytes(b'cloud!')

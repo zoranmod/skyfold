@@ -400,6 +400,7 @@ class _CountingReader:
 
         self._raw, self._on_bytes = raw, on_bytes
         self._len = os.fstat(raw.fileno()).st_size - raw.tell()
+        self.read_total = 0
 
     def __len__(self) -> int:
         return self._len
@@ -408,6 +409,7 @@ class _CountingReader:
         if n == 0:
             return b""
         chunk = self._raw.read(n if n is None or n < 0 else max(n, 1 << 18))
+        self.read_total += len(chunk)
         if chunk and self._on_bytes:
             self._on_bytes(len(chunk))
         return chunk
@@ -424,17 +426,31 @@ class _CountingSession:
         return getattr(self._real, name)
 
     def post(self, *args: Any, **kwargs: Any) -> Any:
+        from .drive_remote import _before_send, _big_send_buffer, _unlocked_post
+
         data = kwargs.get("data")
         if data is not None and hasattr(data, "read") and hasattr(data, "fileno"):
-            from .drive_remote import _big_send_buffer
-
-            kwargs["data"] = _CountingReader(data, self._on_bytes)
+            reader = _CountingReader(data, self._on_bytes)
+            kwargs["data"] = reader
             kwargs["allow_redirects"] = False  # one-shot body: a redirect would replay it empty
-            _big_send_buffer(self._real, str(kwargs.get("url") or (args[0] if args else "")))
-            response = self._real.post(*args, **kwargs)
+            url = str(kwargs.pop("url", None) or (args[0] if args else ""))
+            _big_send_buffer(self._real, url)
+            # its own connection: never waits for (or holds up) the other iCloud requests
+            response = _unlocked_post(self._real, url, **kwargs)
             if 300 <= int(getattr(response, "status_code", 200) or 200) < 400:
                 raise RuntimeError("iCloud redirected the upload")
+            try:
+                told = response.json().get("singleFile", {}).get("size")
+            except Exception:  # noqa: BLE001 - pyicloud reads (and judges) the reply itself
+                told = None
+            if told is not None and int(told) != reader.read_total:
+                raise RuntimeError("iCloud received a different size")  # never registered: tried again
+            self._sent = True
             if self._on_bytes:
                 self._on_bytes(0)  # Stop pressed while iCloud was answering: the photo isn't registered
             return response
+        if getattr(self, "_sent", False) and self._on_bytes:
+            # registering what was sent: once it has its turn, Stop is checked one last time
+            with _before_send(self._real, lambda: self._on_bytes(0)):
+                return self._real.post(*args, **kwargs)
         return self._real.post(*args, **kwargs)

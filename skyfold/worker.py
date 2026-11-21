@@ -300,13 +300,19 @@ class SyncWorker(QObject):
             return
         lock = threading.RLock()
         original = session.request
+        before = threading.local()  # per thread: a check to run once the request has its turn
 
         def request(method, url, *args, **kwargs):
             with lock:
+                check = getattr(before, "check", None)
+                if check is not None:
+                    before.check = None
+                    check()  # (e.g. Stop pressed while this waited: raises, nothing is sent)
                 return original(method, url, *args, **kwargs)
 
         session.request = request
         session._skyfold_locked = True
+        session._skyfold_before_send = before  # file uploads pass the lock: drive_remote._unlocked_post
 
     @Slot(object)
     def set_api(self, api: Any) -> None:

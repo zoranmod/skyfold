@@ -1589,7 +1589,11 @@ class NotesSyncer:
             before = json.loads(self.state.get("folder_paths") or "null")
         except ValueError:
             before = None
-        if not res.full and isinstance(before, dict):
+        if not res.full and before is None and self.state.all():
+            # updated from 1.0.18 (no folder map yet): a folder renamed since can only be seen by
+            # reading all notes once
+            res.full = True
+        elif not res.full and isinstance(before, dict):
             renamed = {path for fid, path in before.items() if folders.get(fid) != path}
             if renamed & {r[3] for r in self.state.all().values()}:
                 # a folder got another name or place: its notes didn't change, so only a full read

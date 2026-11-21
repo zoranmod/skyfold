@@ -62,7 +62,7 @@ def test_streamed_body_is_what_requests_would_send(tmp_path, monkeypatch):
     f.write_bytes(payload)
     monkeypatch.setattr(filepost, "choose_boundary", lambda: "BOUNDARY123")
     api = FakeApi()
-    size, digest = adapter(api).upload(PARENT, f)
+    size, digest = adapter(api).upload(PARENT, f)[:2]
     with open(f, "rb") as fh:  # what pyicloud's send_file posts: files={name: file}
         ref = requests.Request("POST", "https://x", files={f.name: fh}).prepare()
     expected = ref.body.replace(ref.headers["Content-Type"].split("boundary=")[1].encode(), b"BOUNDARY123")
