@@ -45,6 +45,9 @@ class FakeApi:
 
     def _update_contentws(self, folder, info, doc, fh, zone, **kw):
         self.updated = (folder, doc, fh.name, zone)
+        # what Apple answers for a saved file (1.0.19: no answer is no confirmation)
+        return {"results": [{"status": {"status_code": 0, "error_message": ""},
+                             "document": {"document_id": doc}}]}
 
 
 def adapter(api):

@@ -70,9 +70,13 @@ def is_transient(exc: BaseException) -> bool:
     import requests
     from pyicloud.exceptions import PyiCloudAPIResponseException, PyiCloudConnectionException
 
-    if isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
-                        requests.exceptions.ChunkedEncodingError, PyiCloudConnectionException)):
-        return True
+    seen = 0
+    cur: BaseException | None = exc
+    while cur is not None and seen < 8:  # pyicloud wraps a broken reply in its own error
+        if isinstance(cur, (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
+                            requests.exceptions.ChunkedEncodingError, PyiCloudConnectionException)):
+            return True
+        cur, seen = cur.__cause__ or cur.__context__, seen + 1
     if isinstance(exc, PyiCloudAPIResponseException):
         try:
             code = int(exc.code or 0)
@@ -315,7 +319,7 @@ class ICloudDrive:
                 with _before_send(d.session, (lambda: on_bytes(0)) if on_bytes else None):
                     result = d._update_contentws(parent.docwsid, info, document_id, named, parent.zone,
                                                  mtime=st.st_mtime, ctime=st.st_mtime)
-                etag = _check_registered(result)
+                etag = _check_registered(result, local.name)
                 return st.st_size, form.digest(), etag
         except Exception as exc:  # noqa: BLE001
             from .engine import Cancelled
@@ -481,16 +485,20 @@ class _StreamedForm:
         return self._hash.hexdigest()
 
 
-def _check_registered(result: Any) -> str | None:
+def _check_registered(result: Any, name: str | None = None) -> str | None:
     """update/documents answers {"status": {...}, "results": [{"status": {"status_code": 0,
     "error_message": ""}, "document": {...}}]}: the new document is the confirmation (its status is
     an object, not the "OK" string of the other Drive calls). Returns the document's version tag."""
-    if result is None:
-        return None  # (test doubles without an answer)
     listed = result.get("results") if isinstance(result, dict) else None
     first = listed[0] if isinstance(listed, list) and listed and isinstance(listed[0], dict) else None
     doc = (first or {}).get("document")
     if isinstance(doc, dict):
+        given = doc.get("name")
+        if name and isinstance(given, str):
+            ext = doc.get("extension")
+            given = f"{given}.{ext}" if isinstance(ext, str) and ext else given
+            if given.lower() != name.lower():
+                return None  # saved under another name (the name was taken meanwhile): no version for ours
         etag = doc.get("etag")
         return etag if isinstance(etag, str) and etag else None
     status = (first or (result if isinstance(result, dict) else {})).get("status")

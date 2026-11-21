@@ -183,6 +183,7 @@ class DriveState:
 
 
 SKIPPED_REMOTE = "skipped_remote"  # iCloud items the PC never shows (JSON list of paths)
+RECEIPT = "receipt:"  # receipt:<path> = version tag iCloud named when it confirmed an upload
 PENDING_MOVE = "move_pending"  # renames/moves in iCloud started and not known to be settled, by item id
 
 
@@ -857,6 +858,11 @@ class DriveSyncer:
                         # either this upload (its reply got lost) or another device's save. Same size:
                         # downloaded and compared (identical = ours); otherwise both are kept.
                         if r.size == lo.size:
+                            # compared as a file met on both sides for the first time: identical =
+                            # this upload; different = both kept (the PC edit is never taken for the
+                            # version that was synced)
+                            self.state.drop(path)
+                            base.pop(path, None)
                             downloads.append(r)
                         else:
                             self._conflict(path, r, res, downloads)
@@ -865,6 +871,15 @@ class DriveSyncer:
                     continue
                 # iCloud's version tag differs from the synced one (or isn't known yet, after our own
                 # upload): its content is unknown until it has been looked at. Size and time prove nothing.
+                if b.etag is None and not b.pending:
+                    told = self.state.get_meta(RECEIPT + path)
+                    if told and r.etag == told:
+                        # the version iCloud named when it confirmed our upload: synced, no download
+                        b = Base(path, False, r.etag, r.size, b.lmtime, b.lsize, False, b.hash)
+                        self.state.put(b)
+                        base[path] = b
+                    if told:
+                        self.state.set_meta(RECEIPT + path, None)
                 remote_changed = b.etag is None or r.etag != b.etag
                 local_changed = (lo.size, round(lo.mtime, 2)) != (b.lsize, round(b.lmtime or 0, 2))
                 if remote_changed and local_changed and self._is_synced_content(b, r):
@@ -2574,6 +2589,23 @@ class DriveSyncer:
         from .engine import _upload_reader
         from .ui_text import Rate
 
+        fresh: list[tuple[str, DriveItem]] = []
+        replacing: list[tuple[str, DriveItem, DriveItem]] = []
+        for path in paths:
+            parent_path = str(PurePosixPath(path).parent) if "/" in path else ""
+            parent = remote.get(parent_path)
+            if parent is None or not parent.is_dir:
+                res.followup = True  # parent folder is created this round; the file follows next run
+                continue
+            existing = remote.get(path)
+            if existing is None:
+                fresh.append((path, parent))
+            else:
+                replacing.append((path, parent, existing))
+        paths = [p for p, _ in fresh] + [p for p, _, _ in replacing]  # (the ones that go now)
+        if not paths:
+            return
+
         rate = Rate()
         total = sum(local[p].size for p in paths if p in local) or 0
         lock = threading.Lock()
@@ -2620,9 +2652,11 @@ class DriveSyncer:
         def recorded(path: str, lo: Local, got: tuple) -> None:
             size, digest = got[0], got[1]
             etag = got[2] if len(got) > 2 else None
-            # The version iCloud named in its confirmation, when it named one: the next pass then
-            # knows the file without downloading it to look. Without it, what it must contain.
-            self.state.put(Base(path, False, etag, size, lo.mtime, lo.size, False, digest))
+            # What it must contain. The version iCloud named in its confirmation is kept aside: when a
+            # listing shows that very version the file counts as synced without a download; until a
+            # listing shows it at all, the usual wait for our own upload applies (never "deleted").
+            self.state.put(Base(path, False, None, size, lo.mtime, lo.size, False, digest))
+            self.state.set_meta(RECEIPT + path, etag or None)
             res.uploaded += 1
             res.last_up = res.last_up or str(self._abs(path))
             res.up_files.append(path)
@@ -2630,22 +2664,6 @@ class DriveSyncer:
         def failed(path: str, exc: Exception) -> None:
             res.errors += 1
             self.cb.activity("error", t("Upload failed ({name}): {error}", name=path, error=brief(exc)))
-
-        fresh: list[tuple[str, DriveItem]] = []
-        replacing: list[tuple[str, DriveItem, DriveItem]] = []
-        for path in paths:
-            parent_path = str(PurePosixPath(path).parent) if "/" in path else ""
-            parent = remote.get(parent_path)
-            if parent is None or not parent.is_dir:
-                res.followup = True  # parent folder is created this round; the file follows next run
-                with lock:
-                    finished[0] += 1
-                continue
-            existing = remote.get(path)
-            if existing is None:
-                fresh.append((path, parent))
-            else:
-                replacing.append((path, parent, existing))
 
         # new files: a few at a time
         self._check_cancel()
@@ -2728,7 +2746,8 @@ class DriveSyncer:
                     self.state.put(Base(path, False, existing.etag, existing.size, lo.mtime, lo.size, True))
                     self.remote.trash(existing)
                     self._check_cancel()  # (the row stays "pending": the upload is done next time)
-                    recorded(path, lo, send(path, parent, True, handle=fh))
+                    st = os.fstat(fh.fileno())  # (an edit saved while it waited is what was sent)
+                    recorded(path, Local(False, st.st_size, st.st_mtime), send(path, parent, True, handle=fh))
             except (AuthRequired, RemoteUnavailable, Cancelled):
                 raise
             except Exception as exc:  # noqa: BLE001

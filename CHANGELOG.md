@@ -18,6 +18,8 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 - A lost connection during uploads stops the other uploads too; files that replace ones in iCloud then wait for the next check.
 - When the reply to a replaced file got lost, the next check compares the file in iCloud with the one on the PC instead of making a `(PC conflict …)` copy of identical contents.
 - Photos: an upload iCloud reports with a different size is not registered and is tried again later.
+- When a replacement was interrupted and another device saved a different version of the same size meanwhile, both are kept; before, the PC edit could go to the Recycle Bin.
+- A file saved under another name in iCloud (the name was taken meanwhile), or a check that doesn't list a just-uploaded file yet, no longer counts as the file being synced or deleted.
 
 ## [1.0.18] - 2026-11-20
 

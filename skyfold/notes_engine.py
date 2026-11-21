@@ -1564,6 +1564,10 @@ class NotesSyncer:
             self._restyle_pages()
         stored = self.state.get("cursor")
         cursor = self.remote.cursor()
+        if stored and not full and self.state.get("folder_paths") is None and self.state.all():
+            # updated from 1.0.18 (no folder map yet): a folder renamed since (even one 1.0.18 already
+            # polled) can only be seen by reading all notes once
+            full = True
         if stored == cursor and not full:
             if self.state.get("orphan_sweep") != "1":  # one-time tidy-up, works offline from the database
                 self._remove_leftover_pages(res)
