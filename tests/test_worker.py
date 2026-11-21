@@ -153,7 +153,8 @@ def test_slow_drive_runs_in_background_while_photos_sync(qt, monkeypatch, tmp_pa
     assert pump(lambda: (root / "2025/11/IMG_0002.JPG").exists(), 10)
     assert w.drive_running()
     gate.set()
-    assert pump(lambda: not w.drive_running() and states and states[-1][0] == "idle", 10), states[-3:]
+    # (slow CI machines need time, as above: a whole Drive pass still runs after the gate opens)
+    assert pump(lambda: not w.drive_running() and states and states[-1][0] == "idle", 30), states[-3:]
     assert (tmp_path / "Drive/Docs/a.txt").read_bytes() == b"a"
 
 
