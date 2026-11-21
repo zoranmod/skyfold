@@ -154,7 +154,19 @@ def test_slow_drive_runs_in_background_while_photos_sync(qt, monkeypatch, tmp_pa
     assert w.drive_running()
     gate.set()
     # (slow CI machines need time, as above: a whole Drive pass still runs after the gate opens)
-    assert pump(lambda: not w.drive_running() and states and states[-1][0] == "idle", 30), states[-3:]
+    finished = pump(lambda: not w.drive_running() and states and states[-1][0] == "idle", 30)
+    if not finished:  # where the Drive thread is stuck (only seen on CI so far)
+        import sys
+        import traceback
+
+        stacks = {t.name: t.ident for t in threading.enumerate()}
+        frames = sys._current_frames()
+        where = "
+".join(f"--- {name}
+" + "".join(traceback.format_stack(frames[ident]))
+                           for name, ident in stacks.items() if ident in frames and name != "MainThread")
+        raise AssertionError(f"{states[-3:]}
+{where}")
     assert (tmp_path / "Drive/Docs/a.txt").read_bytes() == b"a"
 
 
