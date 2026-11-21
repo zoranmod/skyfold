@@ -2590,8 +2590,12 @@ class DriveSyncer:
             with lock:
                 now_bytes, done_files = sent[0], finished[0]
             rate.add(now_bytes, done_files)
+            from .ui_text import count_text
+
+            # several go at once: how many are done, not "which one" (e.g. "done 0 of 3" while 3 go up)
             self.cb.progress(now_bytes, total or 1, transfer_text(
-                t("Drive: uploading "), min(done_files + 1, len(paths)), len(paths), now_bytes, total, rate))
+                "", done_files, len(paths), now_bytes, total, rate,
+                first=t("Drive: uploading, {i} of {n} files done", i=count_text(done_files), n=count_text(len(paths)))))
 
         def counter(here: bool) -> Callable[[int], None]:
             def on_bytes(k: int) -> None:  # (from an upload thread, or this one for a replacement)

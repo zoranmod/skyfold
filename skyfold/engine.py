@@ -322,11 +322,12 @@ def duration_text(seconds: float) -> str:
     return t("about {h} h {m} min", h=h, m=m) if m and h < 10 else t("about {h} h", h=h)
 
 
-def transfer_text(prefix: str, i: int, n: int, done: int, total: int, rate) -> str:
-    """'Drive: 3.413 of 9.935 files · 30,5 of 59,0 GB · 2,1 MB/s · about 1 h 20 min left'."""
+def transfer_text(prefix: str, i: int, n: int, done: int, total: int, rate, first: str | None = None) -> str:
+    """'Drive: 3.413 of 9.935 files · 30,5 of 59,0 GB · 2,1 MB/s · about 1 h 20 min left'.
+    first: another opening part (uploads say how many files are done, as several go at once)."""
     from .ui_text import count_text, size_text
 
-    parts = [t("{prefix}{i} of {n} files", prefix=prefix, i=count_text(i), n=count_text(n))]
+    parts = [first or t("{prefix}{i} of {n} files", prefix=prefix, i=count_text(i), n=count_text(n))]
     if total > 0:
         parts.append(t("{done} of {total}", done=size_text(done), total=size_text(total)))
     bps, _fps = rate.speed()

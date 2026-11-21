@@ -461,6 +461,7 @@ BS: dict[str, str] = {
     "Drive: uploaded {n} files": "Drive: poslano fajlova: {n}",
     "Drive: uploading {i} of {n}": "Drive: šaljem {i} od {n}",
     "Drive: uploading ": "Drive: šaljem ",
+    "Drive: uploading, {i} of {n} files done": "Drive: šaljem, gotovo {i} od {n} fajlova",
     "Enabled": "Uključeno",
     "File/folder clash, skipped: {name}": "Fajl i folder istog imena, preskočeno: {name}",
     "Files are downloaded to this PC; there are no online-only placeholders.":
