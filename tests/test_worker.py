@@ -159,12 +159,13 @@ def test_slow_drive_runs_in_background_while_photos_sync(qt, monkeypatch, tmp_pa
         import sys
         import traceback
 
-        stacks = {t.name: t.ident for t in threading.enumerate()}
-        frames = sys._current_frames()
+        names = {t.ident: t.name for t in threading.enumerate()}
         nl = chr(10)
-        where = nl.join(f"--- {name}{nl}" + "".join(traceback.format_stack(frames[ident]))
-                        for name, ident in stacks.items() if ident in frames and name != "MainThread")
-        raise AssertionError(f"{states[-3:]}{nl}{where}")
+        where = nl.join(f"--- {names.get(ident, 'Qt thread ' + str(ident))}{nl}"
+                        + "".join(traceback.format_stack(frame)[-12:])
+                        for ident, frame in sys._current_frames().items()
+                        if "watchdog" not in "".join(traceback.format_stack(frame)))
+        raise AssertionError(f"drive_running={w.drive_running()} states={states[-15:]}{nl}{where}")
     assert (tmp_path / "Drive/Docs/a.txt").read_bytes() == b"a"
 
 
