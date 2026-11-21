@@ -9,6 +9,7 @@
 ### Fixed
 - **A photo iCloud refused is sent again.** Before (also in 1.0.19), a refusal from iCloud — busy, no access, a connection that couldn't be made, or this one file refused — could be taken for a lost reply, and the photo was never sent again. Now only a registration whose answer really got lost counts as maybe sent.
 - **When uploads to iCloud Photos have to wait**, photos from your iPhone still come down in the same check; the waiting files go up next time.
+- The panel no longer stays at "Checking for changes…" when iCloud Drive and Photos finish at the same moment.
 - A broken connection stops the other uploads too; Stop pressed while a video is being read sends nothing and unlocks it at once; one video under two names (hard links) goes once.
 
 Full list: [CHANGELOG](https://github.com/zoranmod/skyfold/blob/main/CHANGELOG.md).

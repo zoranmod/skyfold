@@ -263,3 +263,36 @@ def test_settings_survive_a_damaged_file(tmp_path, monkeypatch):
         ("a@b.c", None, 0, "flat", False, 5)
     f.write_text("[]", encoding="utf-8")
     assert config.Settings.load() == config.Settings()
+
+
+def test_state_from_two_threads_never_arrives_out_of_order(qt):
+    """Regression (seen on CI): Drive's thread worked out "syncing" while the cycle set "idle";
+    the older state was sent last and the panel stayed at "Checking for changes…". The lock below
+    lets the other thread finish exactly when Drive's thread releases it: the order of that race."""
+    import threading
+
+    app, w, th, d, remote, root, states, pend, notes = qt
+    seen = []
+    w.stateChanged.connect(lambda s, t: seen.append(s), wk.Qt.DirectConnection)
+    real = w._state_lock
+    handed = []
+
+    class Handoff:
+        def __enter__(self):
+            real.acquire()
+
+        def __exit__(self, *exc):
+            real.release()
+            if threading.current_thread().name == "drive" and not handed:
+                handed.append(True)  # the cycle finishes right now, on its own thread
+                other = threading.Thread(target=w._set_state, args=("idle", "Everything is in sync."))
+                other.start()
+                other.join()
+
+    w._set_state("syncing", "Checking for changes…")  # the cycle is busy
+    w._state_lock = Handoff()
+    drive = threading.Thread(target=w._set_state, args=("idle", "", "drive"), name="drive")
+    drive.start()
+    drive.join()
+    w._state_lock = real
+    assert handed and seen[-1] == "idle", seen

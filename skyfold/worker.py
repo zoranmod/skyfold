@@ -146,7 +146,7 @@ class SyncWorker(QObject):
         self._drive_lock = threading.Lock()
         self._last_state = ("idle", "")  # Photos / app-wide state (sign-in, setup, pause…)
         self._drive_ui = ("idle", "")  # state of the background Drive pass
-        self._state_lock = threading.Lock()
+        self._state_lock = threading.RLock()  # (a slot connected directly may set a state again)
         self._drive_thread: threading.Thread | None = None
         self._drive_want_full = False
         self._closing = False  # set first thing on Quit: nothing is started after that
@@ -250,7 +250,10 @@ class SyncWorker(QObject):
                 shown = drive
             else:
                 shown = app
-        self.stateChanged.emit(*shown)
+            # Sent while still holding the lock: Drive's thread and this one set states at the same
+            # time, and a state worked out earlier must never arrive after a newer one (the panel
+            # stayed at "Checking for changes…" after everything had finished).
+            self.stateChanged.emit(*shown)
 
     def log(self, kind: str, text: str, target: str = "") -> None:
         ts = now_iso()
