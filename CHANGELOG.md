@@ -2,10 +2,10 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.19] - 2026-11-21
 
 ### Changed
-- **Faster uploads to iCloud Drive.** Each upload now gets an 8 MB send buffer. On a 200 Mbit/s fibre line, one upload went from a steady ~0.5 MB/s to about 1.4–7 MB/s; Apple's servers vary. **New files go up three at a time**, each on its own connection, so several files together go faster. A file that replaces one in iCloud still goes alone, after them. An upload no longer holds up Photos and Notes while it runs.
+- **Faster uploads to iCloud Drive.** Each upload now gets an 8 MB send buffer. On a 200 Mbit/s fibre line, one upload went from a steady ~0.5 MB/s to about 1.4–7 MB/s, and several files together reached ~10 MB/s; Apple's servers vary. **New files go up three at a time**, each on its own connection, so several files together go faster. A file that replaces one in iCloud still goes alone, after them. An upload no longer holds up Photos and Notes while it runs.
 - **iCloud Drive uploads big files without loading them into memory.** A large video or archive is sent from disk piece by piece; before, the whole file (and a second copy while sending) had to fit in RAM.
 - **Uploads show their progress** (MB sent, speed, time left) for iCloud Drive and iCloud Photos, like downloads. *Stop* stops a big upload in the middle; it is sent again from the start next time.
 - **Renaming or moving a Notes folder on your iPhone or Mac moves its pages too.** The first check after updating reads all notes once to catch renames made before.
