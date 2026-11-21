@@ -1072,6 +1072,7 @@ class Syncer:
         flight: dict = {}  # future -> job
         moving: dict[int, list] = {}  # job id -> [bytes sent, size, name]
         rate, shown, sent_bytes = Rate(), [0.0], [0]
+        sending: set[tuple[int, int]] = set()  # file identities of the uploads under way
 
         def show(force: bool = False) -> None:  # (this thread only)
             clock = time.monotonic()
@@ -1141,6 +1142,7 @@ class Syncer:
             finally:
                 with lock:
                     moving.pop(job["id"], None)
+                sending.discard((st.st_dev, st.st_ino))
                 job["hold"].close()  # the file can be changed again
 
         def take(done) -> None:
@@ -1169,12 +1171,17 @@ class Syncer:
                     if not self._upload_settled(rel, st):
                         hold.close()
                         continue
+                    if st.st_ino and (st.st_dev, st.st_ino) in sending:
+                        hold.close()
+                        continue  # the same file under another name is being sent: decided next pass
                     signature = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
                     idle = self._upload_idle.get(key)
                     if idle and idle[0] == signature:
                         hold.close()
                         continue  # bounded delay only; the bytes are read again before anything is sent
                     digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                    self._check_cancel()  # (reading a big video takes a while: Stop meanwhile counts)
+                    show()
                     mark = self._marked(st, rel)
                     if mark and self._same_marked(mark, st, digest):
                         if mark[0] != digest:
@@ -1219,6 +1226,8 @@ class Syncer:
                        "retry": retry, "hold": hold}
                 with lock:
                     moving[job["id"]] = [0, st.st_size, path.name]
+                if st.st_ino:
+                    sending.add((st.st_dev, st.st_ino))
                 if pool is None:
                     def run(job=job):
                         return send(job)
@@ -1239,7 +1248,7 @@ class Syncer:
                 pool.shutdown(wait=True, cancel_futures=True)
             for f, job in list(flight.items()):  # (iCloud may have confirmed some meanwhile)
                 flight.pop(f)
-                if f.done() and not f.cancelled() and f.exception() is None:
+                if f.done() and not f.cancelled() and not isinstance(f.exception(), Cancelled):
                     try:
                         finish(job, f)
                     except Exception:  # noqa: BLE001

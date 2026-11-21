@@ -205,6 +205,7 @@ class ICloudRemote:
             raise UploadRejected("uploads aren't available for this library")
         uploader = getattr(client, "_uploader", None)
         real_session = getattr(uploader, "_session", None)
+        counting: _CountingSession | None = None
         try:
             if real_session is not None:
                 # This upload's own copy of the uploader (it holds only its settings), with its own
@@ -212,7 +213,7 @@ class ICloudRemote:
                 import copy
 
                 own = copy.copy(uploader)
-                own._session = _CountingSession(real_session, on_bytes)
+                own._session = counting = _CountingSession(real_session, on_bytes)
                 result = own.upload(str(path), zone_name=zone)
             else:
                 result = client.upload_file(str(path), zone_name=zone)
@@ -229,6 +230,24 @@ class ICloudRemote:
             status = response.get("status") if isinstance(response, dict) else None
             if status in (401, 421, 450):
                 raise AuthRequired(str(status)) from exc
+            if counting is not None:
+                from .drive_remote import is_transient
+
+                if not counting.registering:
+                    # Nothing was registered: known not saved. A broken connection stops the batch (tried
+                    # again next pass); anything else about this file waits its usual retry time.
+                    if is_transient(exc):
+                        raise RemoteUnavailable(t("iCloud Photos can't be reached right now")) from exc
+                    raise UploadRejected(type(exc).__name__) from exc
+                try:
+                    http = int(getattr(exc, "code", None) or 0)
+                except (TypeError, ValueError):
+                    http = 0
+                if http in (429, 503):  # registration refused as a whole (busy): not saved, next pass
+                    raise RemoteUnavailable(t("iCloud Photos is busy; uploads continue later")) from exc
+                if isinstance(status, int) and status >= 400 and status != 409:
+                    raise UploadRejected(str(status)) from exc  # refused for this file: not saved
+                raise  # registration sent and its answer lost: the photo may be there
             # In the pinned uploader these stages precede putAsset. A lost putAsset
             # reply, in contrast, can follow a successful registration.
             from pyicloud.services.photos_cloudkit.upload import PhotosUploader
@@ -425,6 +444,7 @@ class _CountingSession:
 
     def __init__(self, real: Any, on_bytes: Callable[[int], None] | None) -> None:
         self._real, self._on_bytes = real, on_bytes
+        self.registering = False  # True once the registration request has been handed over
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._real, name)
@@ -442,11 +462,12 @@ class _CountingSession:
             # its own connection: never waits for (or holds up) the other iCloud requests
             import time
 
-            from .drive_remote import _log_speed
+            from .drive_remote import _adapter_buffer, _log_speed
 
             began = time.monotonic()
+            buffer = _adapter_buffer(self._real, url)
             response = _unlocked_post(self._real, url, **kwargs)
-            _log_speed("Photos", reader.read_total, time.monotonic() - began)
+            _log_speed("Photos", reader.read_total, time.monotonic() - began, buffer)
             if 300 <= int(getattr(response, "status_code", 200) or 200) < 400:
                 raise RuntimeError("iCloud redirected the upload")
             try:
@@ -459,8 +480,13 @@ class _CountingSession:
             if self._on_bytes:
                 self._on_bytes(0)  # Stop pressed while iCloud was answering: the photo isn't registered
             return response
-        if getattr(self, "_sent", False) and self._on_bytes:
+        if getattr(self, "_sent", False):
             # registering what was sent: once it has its turn, Stop is checked one last time
-            with _before_send(self._real, lambda: self._on_bytes(0)):
+            def last_check() -> None:
+                if self._on_bytes:
+                    self._on_bytes(0)
+                self.registering = True  # from here on, iCloud may have it
+
+            with _before_send(self._real, last_check):
                 return self._real.post(*args, **kwargs)
         return self._real.post(*args, **kwargs)

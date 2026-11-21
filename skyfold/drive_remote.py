@@ -306,10 +306,11 @@ class ICloudDrive:
                 # one-shot body: a redirect would replay it empty, so it is never followed. It goes on
                 # its own connection, never waiting for (or holding up) the other iCloud requests.
                 began = time.monotonic()
+                buffer = _adapter_buffer(d.session, content_url)
                 resp = _unlocked_post(d.session, content_url, data=form,
                                       headers={"Content-Type": form.content_type},
                                       timeout=(30, 600), allow_redirects=False)
-                _log_speed("Drive", st.st_size, time.monotonic() - began)
+                _log_speed("Drive", st.st_size, time.monotonic() - began, buffer)
                 if 300 <= int(getattr(resp, "status_code", 200) or 200) < 400:
                     raise RuntimeError(Text("iCloud redirected the upload; it is tried again later"))
                 d._raise_if_error(resp)
@@ -520,10 +521,21 @@ def _check_registered(result: Any, name: str | None = None) -> str | None:
     raise RuntimeError(Text("iCloud didn't confirm the uploaded file; it is tried again later"))
 
 
-def _log_speed(service: str, size: int, seconds: float) -> None:
+def _adapter_buffer(session: Any, url: str) -> int:
+    """The send buffer of the connections this request goes out on (a setting changed meanwhile
+    only applies to new ones)."""
+    try:
+        adapter = session.get_adapter(url)
+    except Exception:  # noqa: BLE001
+        return SEND_BUFFER
+    return getattr(adapter, "buffer", SEND_BUFFER)
+
+
+def _log_speed(service: str, size: int, seconds: float, buffer: int | None = None) -> None:
     """One line per upload in the log: how fast it went, with which send buffer (to compare)."""
     if size >= 1 << 20 and seconds > 0:
-        buf = f"{SEND_BUFFER >> 20} MB" if SEND_BUFFER > 0 else "automatic"
+        buffer = SEND_BUFFER if buffer is None else buffer
+        buf = f"{buffer >> 20} MB" if buffer > 0 else "automatic"
         log.info("%s: upload of %.1f MB took %.1f s (%.2f MB/s, send buffer %s)",
                  service, size / 1e6, seconds, size / 1e6 / seconds, buf)
 

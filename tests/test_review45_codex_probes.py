@@ -209,7 +209,10 @@ def test_photos_restores_exact_session_when_upload_exits(tmp_path, exception):
             raise exception()
 
     if exception:
-        with pytest.raises(exception):
+        from skyfold.remote import UploadRejected
+
+        # (1.0.20: an error before registration means "not saved": reported as a refusal, retried later)
+        with pytest.raises(UploadRejected if exception is RuntimeError else exception):
             remote.upload(path, on_bytes=progress)
     else:
         assert remote.upload(path, on_bytes=progress).asset_id == "ASSET1"
