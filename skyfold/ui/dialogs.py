@@ -1160,6 +1160,7 @@ class SettingsDialog(_Dialog):
         return True if ans == QMessageBox.Yes else None
 
     def _save(self) -> None:
+        self.drive_trash = []  # (worked out again from the choice saved now; an earlier attempt's is void)
         new_dir = self.dir.text().strip()
         changed = self._check_folder(new_dir, self.s.photos_dir, t("Photos folder"))
         if changed is None:

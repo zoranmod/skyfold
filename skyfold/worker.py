@@ -149,6 +149,7 @@ class SyncWorker(QObject):
         self._drive_ui = ("idle", "")  # state of the background Drive pass
         self._state_lock = threading.RLock()  # (a slot connected directly may set a state again)
         self._drive_thread: threading.Thread | None = None
+        self._drive_deferred: set[str] = set()  # follow-ups waiting for the debounce timer
         self._drive_want_full = False
         self._closing = False  # set first thing on Quit: nothing is started after that
         self._pause_now = False  # set by the UI thread the moment Pause is pressed
@@ -562,6 +563,9 @@ class SyncWorker(QObject):
 
     def _drive_changed(self) -> None:
         """Debounced reaction to changes in the Drive folder: a quick pass over those folders only."""
+        with self._drive_lock:
+            deferred, self._drive_deferred = self._drive_deferred, set()
+            self._drive_changes |= deferred
         if self.drive is None or self.settings.paused:
             return
         self._kick_drive(full=False)
@@ -853,9 +857,11 @@ class SyncWorker(QObject):
             self._drive_last = time.monotonic()
             with self._drive_lock:
                 self._drive_retry.clear()  # (changes saved during the pass stay queued for a quick one)
-        if res.followup and changed:  # a folder was just created: send its contents next
+        if res.followup and changed:  # a folder was just created, or a file is still being saved
             with self._drive_lock:
-                self._drive_changes |= changed
+                # Waits out the debounce first (moved to the active queue when the timer fires): a
+                # file still being written isn't listed again and again without a pause.
+                self._drive_deferred |= changed
             self._driveChange.emit()  # timers live on the worker thread
         self.state.set("drive_last_sync", now_iso())
         if res.full or res.pending_to_cloud or res.pending_to_pc:  # a quick pass sees only a few folders
@@ -1008,8 +1014,12 @@ class SyncWorker(QObject):
             known.update(self.drive.state.all())
         except Exception:  # noqa: BLE001
             pass
+        from .drive_engine import in_scope
+
         root = self.drive.root
         for rel in paths:
+            if in_scope(rel, True, self.settings.drive_folders):
+                continue  # synced again by the choice that was finally saved: never recycled
             target = root / rel
             try:
                 if not target.exists():
@@ -1025,7 +1035,9 @@ class SyncWorker(QObject):
                             kept.append(p)
                             continue
                         same = (row is not None and not row.is_dir and not row.pending and row.etag
-                                and (st.st_size, round(st.st_mtime, 2)) == (row.lsize, round(row.lmtime or 0, 2)))
+                                and row.hash  # (contents known: size and time alone prove nothing)
+                                and (st.st_size, round(st.st_mtime, 2)) == (row.lsize, round(row.lmtime or 0, 2))
+                                and self.drive._pc_has_synced_content(row, p))
                         (confirmed if same else kept).append(p)
                 if not kept:
                     self.drive._trash_local(target)

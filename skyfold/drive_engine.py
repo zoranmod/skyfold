@@ -684,6 +684,10 @@ class DriveSyncer:
             self.remote.incomplete = set()
         if hasattr(self.remote, "skipped"):
             self.remote.skipped = set()
+        try:
+            self.remote.should_stop = self._stopped  # a long listing stops at the next batch on Stop
+        except AttributeError:
+            pass
         res = DriveResult()
         base = self.state.all()  # (after the folder check above)
         everything_known = dict(base)  # before a quick pass narrows `base` to a few folders
@@ -758,6 +762,9 @@ class DriveSyncer:
             def in_twin(p: str) -> bool:
                 return any(p == q or p.startswith(q + "/") for q in twins)
 
+            # what isn't synced because of the clash is never deleted with its folder
+            self._unsynced_remote = sorted(set(getattr(self, "_unsynced_remote", ()) or ())
+                                           | {p for p in remote if in_twin(p)})
             remote = {p: r for p, r in remote.items() if not in_twin(p)}
             base = {p: b for p, b in base.items() if not in_twin(p)}
             local = {p: lo for p, lo in local.items() if not in_twin(p)}

@@ -172,6 +172,11 @@ class ICloudDrive:
             pending: dict[Future, dict[str, str]] = {}
             with ThreadPoolExecutor(WORKERS) as pool:
                 while queue or pending:
+                    stop = getattr(self, "should_stop", None)  # (set by the Drive engine: Stop, Quit)
+                    if queue and stop is not None and stop():
+                        from .engine import Cancelled
+
+                        raise Cancelled()  # the requests under way finish; nothing new is asked
                     while queue and len(pending) < WORKERS:
                         # Small batches early on, so the first levels of the tree already run in parallel.
                         size = max(1, min(BATCH, -(-len(queue) // WORKERS)))
@@ -227,6 +232,10 @@ class ICloudDrive:
                             on_progress(len(out))
             return out
         except Exception as exc:  # noqa: BLE001
+            from .engine import Cancelled
+
+            if isinstance(exc, Cancelled):
+                raise  # Stop pressed while listing: not a network problem
             raise _translate(exc) from exc
 
     def download(self, item: DriveItem, dest: Path, on_bytes: Callable[[int], None]) -> None:

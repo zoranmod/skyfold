@@ -2,6 +2,20 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **Settings: changing your mind no longer deletes a Drive folder.** If saving failed and you chose to keep syncing a folder you had first set to recycle, Skyfold could still recycle it and then delete it in iCloud. The cleanup now follows only the choice finally saved.
+- **Recycling a folder you stop syncing checks the contents**, not only size and time: an edited file with the old size and time stays on the PC.
+- **iCloud Drive: two files whose names differ only in capital letters** (Windows can hold only one) no longer let a deleted PC folder take the other one with it in iCloud.
+- **Notes:** pictures a failed export had already downloaded go away when the note is locked or deleted; a PDF that couldn't be downloaded is tried again instead of staying an online link; a note deleted while Apple reset the change token is removed from the PC at the next check.
+- The panel says uploads to iCloud Photos are waiting while a refused photo waits for its next try.
+- *Stop* during a long iCloud Drive listing stops asking iCloud for more folders right away.
+- A file still being saved in the Drive folder waits a few seconds before it is looked at again, instead of being listed again and again.
+
+### Known limitation
+- A file you shared on its own from iCloud Drive and then edit on the PC becomes a new document in iCloud (see README, Limitations).
+
 ## [1.0.22] - 2026-11-22
 
 ### Fixed
