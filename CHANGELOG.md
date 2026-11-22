@@ -2,7 +2,7 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.21] - 2026-11-22
 
 ### Fixed
 - **Stopping to sync an iCloud Drive folder keeps your unsent work.** Choosing *Move to Recycle Bin* for folders you no longer sync only recycles files that are exactly what iCloud has; anything new or changed on this PC (not in iCloud yet) stays, and you are told.
