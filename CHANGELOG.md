@@ -2,6 +2,11 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.22] - 2026-11-22
+
+### Fixed
+- Screen readers name the fields of the sign-in window: Apple ID, password and the verification code.
+
 ## [1.0.21] - 2026-11-22
 
 ### Fixed
