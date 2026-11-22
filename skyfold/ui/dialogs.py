@@ -670,6 +670,20 @@ class SettingsDialog(_Dialog):
         btns.addWidget(cancel)
         btns.addWidget(save)
         outer.addWidget(footer)
+        self._fit_to_pages(nav_pane, footer)
+
+    def _fit_to_pages(self, nav_pane: QWidget, footer: QWidget) -> None:
+        """Opens big enough for the longest page, so nothing needs scrolling (as far as the screen allows)."""
+        need_w, need_h = 680, 540
+        for i in range(self.stack.count()):
+            page = self.stack.widget(i)
+            body = page.widget() if isinstance(page, QScrollArea) else page
+            if body is None:
+                continue
+            hint = body.sizeHint()
+            need_w = max(need_w, nav_pane.width() + hint.width() + 24)
+            need_h = max(need_h, hint.height() + footer.sizeHint().height() + 4)
+        self.resize(*_fit_screen(need_w, need_h))
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette
@@ -716,7 +730,7 @@ class SettingsDialog(_Dialog):
         if not w.accessibleName():
             w.setAccessibleName(text)
         row.addWidget(label, 1, Qt.AlignVCenter)
-        w.setFixedWidth(220)
+        w.setFixedWidth(250)  # (room for "Automatic (recommended)" and its Bosnian text)
         row.addWidget(w, 0, Qt.AlignVCenter)
         return row
 
@@ -800,13 +814,13 @@ class SettingsDialog(_Dialog):
             self.limit.addItem(t("No limit") if not mb else t("{n} MB/s", n=mb), mb)
         self.limit.setCurrentIndex(max(0, self.limit.findData(self.s.speed_limit_mb)))
         sync.addLayout(self._row(t("Download speed limit"), self.limit))
+        sync.addWidget(_label(t("Keeps some of your connection free while Skyfold downloads, for example during "
+                                "video calls."), "Hint", True))
         self.upbuf = Combo()
         self.upbuf.addItem(t("Automatic (recommended)"), 0)
         self.upbuf.addItem(t("Fixed 8 MB"), 8)
         self.upbuf.setCurrentIndex(max(0, self.upbuf.findData(self.s.upload_buffer_mb)))
         sync.addLayout(self._row(t("Upload send buffer"), self.upbuf))
-        sync.addWidget(_label(t("Keeps some of your connection free while Skyfold downloads, for example during "
-                                "video calls."), "Hint", True))
         self.threshold = Spin(1, 10000, self.s.delete_threshold)
         sync.addLayout(self._row(t("Ask before deleting more than"), self.threshold))
         self.instant = self._toggle(sync, t("Send deletions on this PC right away (watch the folder)"),

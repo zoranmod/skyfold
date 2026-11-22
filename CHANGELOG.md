@@ -2,6 +2,12 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Settings opens tall enough for its longest page, so nothing needs scrolling (as far as the screen allows).
+- The download-limit hint sits under *Download speed limit* again, and *Automatic (recommended)* is no longer cut off.
+
 ## [1.0.20] - 2026-11-21
 
 ### Changed
