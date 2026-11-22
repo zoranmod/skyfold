@@ -268,6 +268,7 @@ BS: dict[str, str] = {
     "{n} MB/s": "{n} MB/s",
     "Download speed limit": "Ograničenje brzine preuzimanja",
     "Upload send buffer": "Buffer za slanje",
+    "Verification code": "Verifikacijski kod",
     "iCloud Photos can't be reached right now": "iCloud Photos trenutno nije dostupan",
     "iCloud Photos is busy; uploads continue later": "iCloud Photos je zauzet; slanje se nastavlja kasnije",
     "Uploads to iCloud Photos wait: {error}": "Slanje u iCloud Photos čeka: {error}",
