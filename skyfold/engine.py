@@ -1114,6 +1114,7 @@ class Syncer:
                         abort.set()
                         raise
                     retry = job["retry"]
+                    self.uploads_waiting = True
                     self.state.set("upload_retry:" + key, json.dumps([digest, time.time() + 3600]))
                     if st.st_ino:
                         self.state.set(f"upload_retry:#{st.st_dev}:{st.st_ino}", json.dumps([digest, time.time() + 3600]))
@@ -1222,6 +1223,7 @@ class Syncer:
                     if retry:
                         previous, after = json.loads(retry)
                         if previous == digest and time.time() < after:
+                            self.uploads_waiting = True  # (the panel says so, not "Everything is in sync")
                             hold.close()
                             continue
                 except OSError:

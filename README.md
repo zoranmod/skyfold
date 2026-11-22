@@ -149,6 +149,7 @@ To uninstall, first turn off *Start with Windows* and *Safari bookmarks* in Sett
 - **No online-only placeholders, by design.** iCloud Drive files are real downloads, so you need enough disk space for the folders you choose.
 - **Mac packages** (folders that a Mac shows as one file, such as `.app` or `.xcodeproj`) are left in iCloud and skipped.
 - **Notes are one-way** (iCloud → PC). Locked notes can't be read; they are only listed.
+- **A shared iCloud Drive file edited on the PC becomes a new document in iCloud.** Apple's web interface that Skyfold uses replaces a file by moving the old version to Recently Deleted and adding the new one (other tools do the same). For a file you shared with others on its own, they may lose access and need to be invited again; edit such files on an Apple device, or share the folder instead.
 - **Safari bookmarks are one-way** (Safari → a file your browser imports). Bookmarks made in Firefox or Chrome don't go back to Safari.
 - **Advanced Data Protection:** Skyfold needs *Access iCloud Data on the Web* to be on. Without it, Apple doesn't let Skyfold read your data.
 - **Messages, calls, contacts, calendars, passwords and Lost Mode** aren't included. For lost devices, use iCloud.com.

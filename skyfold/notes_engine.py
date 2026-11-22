@@ -1250,7 +1250,7 @@ def _is_our_index(p: Path) -> bool:
 
 STAGE_PREFIX = ".skyfold-tmp-note-"
 # pyicloud leaves an attachment's iCloud web address in the page when its download failed
-_MISSING_ATTACHMENT = re.compile(r"""(?i)\b(?:src|data|poster)\s*=\s*["']?https?://[^"'\s>]*icloud-content\.com""")
+_MISSING_ATTACHMENT = re.compile(r"""(?i)\b(?:src|data|poster|href)\s*=\s*["']?https?://[^"'\s>]*icloud-content\.com""")
 
 
 def _digest(p: Path) -> str:
@@ -1395,6 +1395,23 @@ class NotesSyncer:
                 pass
         mine = {**left, **keep}
         self.state.set(f"assets:{nid}", json.dumps(mine) if mine else None)
+
+    def _asset_files(self, nid: str) -> dict[str, list[int]]:
+        """Files in a note's own picture folder: path under the notes folder -> [size, mtime_ns]."""
+        folder = self.root / ASSETS / nid
+        out: dict[str, list[int]] = {}
+        try:
+            entries = list(folder.iterdir()) if folder.is_dir() and not _is_link(folder) else []
+        except OSError:
+            return out
+        for p in entries:
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode):
+                out[p.relative_to(self.root).as_posix()] = [st.st_size, st.st_mtime_ns]
+        return out
 
     def _retry_attachment_cleanup(self) -> None:
         """Pictures of a note that is gone or locked now, which couldn't go to the Recycle Bin then
@@ -1599,6 +1616,10 @@ class NotesSyncer:
             self._restyle_pages()
         stored = self.state.get("cursor")
         cursor = self.remote.cursor()
+        if stored and not full and self.state.items("missing:"):
+            # a full read missed some notes once (deleted, or a read that came back short): the next
+            # full read decides, instead of waiting for the daily one while the pages stay readable
+            full = True
         if stored and not full and self.state.get("folder_paths") is None and self.state.all():
             # updated from 1.0.18 (no folder map yet): a folder renamed since (even one 1.0.18 already
             # polled) can only be seen by reading all notes once
@@ -1688,6 +1709,7 @@ class NotesSyncer:
             self.cb.progress(i, len(notes), t("Downloading note {i} of {n}", i=i, n=len(notes)))
             rel = self._path_for(n, folder, old, taken)
             before = self._known_assets(n.id, old[1] if old else None)
+            present = self._asset_files(n.id)  # what is in the note's picture folder before this export
             try:
                 out_dir = (self.root / rel).parent
                 if not inside_root(self.root, out_dir):
@@ -1717,6 +1739,12 @@ class NotesSyncer:
             except (Cancelled, AuthRequired, RemoteUnavailable):
                 raise
             except Exception as exc:  # noqa: BLE001
+                # the pictures this attempt already downloaded belong to the note: written down, so a lock,
+                # a deletion or the next successful export takes them away again
+                fresh = {r: v for r, v in self._asset_files(n.id).items() if r not in present}
+                if fresh:
+                    self.state.set(f"assets:{n.id}", json.dumps({**self._known_assets(n.id, old[1] if old else None),
+                                                                 **fresh}))
                 key = f"failed:{n.id}"
                 if self.state.get(key) == (modified or "?") and not full:
                     res.held = True  # reported already; the cursor doesn't move, so it is tried again
