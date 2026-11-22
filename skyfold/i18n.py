@@ -271,6 +271,8 @@ BS: dict[str, str] = {
     "iCloud Photos can't be reached right now": "iCloud Photos trenutno nije dostupan",
     "iCloud Photos is busy; uploads continue later": "iCloud Photos je zauzet; slanje se nastavlja kasnije",
     "Uploads to iCloud Photos wait: {error}": "Slanje u iCloud Photos čeka: {error}",
+    "Downloads are up to date. Uploads to iCloud Photos are waiting.":
+        "Preuzimanja su ažurna. Slanje u iCloud Photos čeka.",
     "Uploads to iCloud Photos aren't available for this account right now":
         "Slanje u iCloud Photos trenutno nije dostupno za ovaj nalog",
     "Automatic (recommended)": "Automatski (preporučeno)",
@@ -317,6 +319,8 @@ BS: dict[str, str] = {
     "There are no folders in your iCloud Drive.": "Na tvom iCloud Driveu nema foldera.",
     "Couldn't read iCloud Drive: {error}": "Ne mogu pročitati iCloud Drive: {error}",
     "Loading…": "Učitavam…",
+    "Drive: {name} is no longer synced; {n} files that aren't in iCloud were kept on this PC":
+        "Drive: {name} se više ne sinhronizuje; {n} fajlova kojih nema u iCloudu ostalo je na računaru",
     "Drive: moved to the Recycle Bin (no longer synced): {name}": "Drive: premješteno u Recycle Bin (više se ne sinhronizuje): {name}",
     "less than a minute": "manje od minute",
     "about {m} min": "oko {m} min",

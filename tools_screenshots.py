@@ -31,6 +31,9 @@ from skyfold.ui import dialogs, theme  # noqa: E402
 from skyfold.ui.flyout import Flyout  # noqa: E402
 
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent / "docs" / "screenshots"
+# The offscreen "screen" is small (800x600): windows are shown at the size they take on a normal
+# screen, where Settings opens without scrolling.
+dialogs._fit_screen = lambda w, h: (w, h)
 OUT.mkdir(parents=True, exist_ok=True)
 NOW = datetime.now(timezone.utc)
 GB = 1000 ** 3

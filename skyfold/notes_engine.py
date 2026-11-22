@@ -1207,6 +1207,21 @@ class NotesResult:
     held: bool = False  # a note failed again (reported before): the cursor waits so it is tried again
 
 
+def _token_expired(exc: BaseException) -> bool:
+    """Apple refused the saved change token (expired or reset): only a full read helps."""
+    cur: BaseException | None = exc
+    for _ in range(6):
+        if cur is None:
+            return False
+        payload = getattr(cur, "payload", None)
+        code_ = payload.get("serverErrorCode") if isinstance(payload, dict) else None
+        text = f"{code_ or ''} {cur}".upper()
+        if any(k in text for k in ("CHANGE_TOKEN_EXPIRED", "BAD_SYNC_CONTINUATION", "SYNC_TOKEN", "TOKEN EXPIRED")):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
 def _legacy_index_of(p: Path, rows: list) -> bool:
     """An index written by Skyfold 1.0.5 or earlier (its older format, without the owner mark that
     1.0.6 writes) that lists at least one note page of this setup: those versions kept no record."""
@@ -1381,6 +1396,25 @@ class NotesSyncer:
         mine = {**left, **keep}
         self.state.set(f"assets:{nid}", json.dumps(mine) if mine else None)
 
+    def _retry_attachment_cleanup(self) -> None:
+        """Pictures of a note that is gone or locked now, which couldn't go to the Recycle Bin then
+        (open in a viewer, say): tried again on every check until they are gone or changed by you."""
+        rows = None
+        for key, value in self.state.items("assets:"):
+            if rows is None:
+                rows = self.state.all()
+            nid = key.removeprefix("assets:")
+            row = rows.get(nid)
+            if row is not None and not row[5]:
+                continue  # an exported note: its pictures are in use
+            try:
+                files = json.loads(value)
+            except ValueError:
+                self.state.set(key, None)
+                continue
+            if isinstance(files, dict) and files:
+                self._retire_assets(nid, files, {})
+
     def _own(self, p: Path, kind: str) -> None:
         """Write down a private file before it is created: only files on this list are ever tidied up."""
         self.state.set("tmp:" + p.relative_to(self.root).as_posix(), kind)
@@ -1553,6 +1587,7 @@ class NotesSyncer:
         for key, value in self.state.items("style_tx:"):
             self._finish_restyle(key, json.loads(value))
         self._tidy_leftovers()
+        self._retry_attachment_cleanup()
         if self.state.get("format") != FORMAT:  # nicer pages / sharper drawings: export all again
             for nid, row in self.state.all().items():
                 self.state.put(nid, row[1], row[2], row[3], None, bool(row[5]))
@@ -1604,7 +1639,17 @@ class NotesSyncer:
                 # lists them; their pages move with it
                 log.info("Notes: a folder was renamed or moved; reading all notes")
                 res.full = True
-        notes = self.remote.changes(None if res.full else stored)
+        try:
+            notes = self.remote.changes(None if res.full else stored)
+        except Exception as exc:  # noqa: BLE001
+            if res.full or not _token_expired(exc):
+                raise
+            # Apple no longer accepts the saved change token (it expires after a while): all notes are
+            # read once; pages stay as they are and only what changed is written, then the new token
+            # is kept as usual
+            log.info("Notes: the change token expired; reading all notes once")
+            res.full = True
+            notes = self.remote.changes(None)
         known = self.state.all()
         seen: set[str] = set()
         taken = {r[1].lower() for r in known.values() if r[1]}

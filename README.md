@@ -118,7 +118,8 @@ To uninstall, first turn off *Start with Windows* and *Safari bookmarks* in Sett
 - **Photos** start downloading right away, newest first. A large library can take hours; Skyfold keeps going in the background and picks up where it left off after a restart.
 - **iCloud Drive** shows how much will be downloaded and how much disk space will be left before you turn it on. Skyfold always keeps 2 GB free on the disk.
 - **The first Drive download is slow for many small files.** Apple limits how fast one account can download, to roughly 1 to 2 files per second, no matter how fast your connection is. A Drive with 20,000 files can take several hours. Big files go at your connection's speed. After the first sync only changes are transferred.
-- You can limit the download speed in Settings, and pause at any time from the tray.
+- **Uploads** go from disk without loading big files into memory, with progress, speed and time left in the panel. New iCloud Drive files go up three at a time and photos two at a time, each on its own connection. Apple limits each upload connection, so the speed of a single file varies (we measured 2 to 13 MB/s on a 200 Mbit/s line); several files together go faster.
+- You can limit the download speed in Settings, and pause at any time from the tray. *Stop* also stops a big upload in the middle; it is sent again from the start next time.
 
 ## How syncing works
 

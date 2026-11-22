@@ -1339,9 +1339,11 @@ class Syncer:
             self.cb.activity("info", t("Followed {n} files moved inside the folder", n=moved))
         if getattr(self.settings, "photos_upload", False) and not self._upload_saw_missing and not self.held:
             # (only when nothing is missing: a new-looking file might be a photo moved or renamed)
+            self.uploads_waiting = False
             try:
                 self.upload_new()
             except RemoteUnavailable as exc:
+                self.uploads_waiting = True  # (the panel says so instead of "Everything is in sync")
                 # Uploads wait for the next pass; what's new in iCloud still comes down now (a real
                 # outage stops the reading below on its own).
                 told = str(exc)

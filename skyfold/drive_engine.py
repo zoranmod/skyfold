@@ -797,7 +797,21 @@ class DriveSyncer:
                         del base[p]
         if scope is not None:
             paths = [p for p in paths if _parent(p) in dirs]  # only the re-read folders' contents
+        # A file on this PC where iCloud has a folder: nothing is decided below it until you sort it
+        # out, so the folder's files in iCloud are never taken for deleted on this PC. (The other way
+        # round, a folder's files missing in iCloud are asked about as usual.)
+        clashes = {p for p in paths if p in remote and p in local and remote[p].is_dir and not local[p].is_dir}
+
+        def under_clash(p: str) -> bool:
+            while "/" in p:
+                p = p.rsplit("/", 1)[0]
+                if p in clashes:
+                    return True
+            return False
+
         for path in paths:
+            if clashes and under_clash(path):
+                continue
             r, lo, b = remote.get(path), local.get(path), base.get(path)
             if partial and (listed_partly(path) or path in partial):
                 continue  # iCloud didn't list this folder completely: nothing is done in it this pass
@@ -843,6 +857,8 @@ class DriveSyncer:
                 continue
 
             settled = lo is not None and not (0 <= now - lo.mtime < SETTLE_SECONDS)
+            if lo is not None and not lo.is_dir and not settled:
+                res.followup = True  # still being written: looked at again shortly, not in an hour
             if r and lo:
                 if b is None:
                     if r.size == lo.size:
