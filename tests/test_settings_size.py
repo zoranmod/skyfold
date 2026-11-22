@@ -36,3 +36,14 @@ def test_download_limit_hint_follows_the_download_limit(qapp):  # noqa: F811
         assert limit < hint < upload, texts[limit:upload + 1]
     finally:
         dialog.close()
+
+
+def test_sign_in_fields_have_screen_reader_names(qapp):  # noqa: F811
+    from skyfold.ui.dialogs import LoginDialog
+
+    dlg = LoginDialog("someone@example.invalid")
+    try:
+        assert dlg.code.accessibleName() == "Verification code"
+        assert dlg.email.accessibleName() and dlg.password.accessibleName()
+    finally:
+        dlg.close()
