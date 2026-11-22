@@ -2,7 +2,7 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.23] - 2026-11-23
 
 ### Fixed
 - **Settings: changing your mind no longer deletes a Drive folder.** If saving failed and you chose to keep syncing a folder you had first set to recycle, Skyfold could still recycle it and then delete it in iCloud. The cleanup now follows only the choice finally saved.
