@@ -11,6 +11,7 @@ import copy
 import hashlib
 import logging
 import sys
+import os
 import threading
 import time
 from datetime import datetime
@@ -453,8 +454,12 @@ class SyncWorker(QObject):
             # its files are matched up afresh instead of being taken for deletions.
             from .drive_engine import in_scope
 
-            self.drive_state.drop_many([path for path, row in self.drive_state.all().items()
-                                        if not in_scope(path, row.is_dir, settings.drive_folders)])
+            leaving = {path: row for path, row in self.drive_state.all().items()
+                       if not in_scope(path, row.is_dir, settings.drive_folders)}
+            # (kept for a moment: if you chose to recycle those PC copies, only the ones that are
+            # really what iCloud has may go; see trash_drive_paths)
+            self._forgotten_drive_rows = leaving
+            self.drive_state.drop_many(list(leaving))
             self._drive_last = 0.0  # read Drive again with the new choice
         if albums_changed and self.state and not reset_state:
             self.state.set("last_full_scan", None)  # next check reads the library and the albums
@@ -705,6 +710,8 @@ class SyncWorker(QObject):
             self._set_state("error", problems[0])
         elif self.settings.paused:
             self._set_state("paused", t("Syncing is paused."))
+        elif getattr(self, "_photos_uploads_waiting", False):
+            self._set_state("idle", t("Downloads are up to date. Uploads to iCloud Photos are waiting."))
         else:
             self._set_state("idle", t("Everything is in sync."))
 
@@ -782,6 +789,7 @@ class SyncWorker(QObject):
                                n=res.downloaded))
         if res.errors:
             problems.append(t("Finished with {n} errors. Will retry.", n=res.errors))
+        self._photos_uploads_waiting = bool(getattr(self.syncer, "uploads_waiting", False))
         return True
 
     def _refresh_storage(self, force: bool = False) -> None:
@@ -990,17 +998,46 @@ class SyncWorker(QObject):
 
     @Slot(list)
     def trash_drive_paths(self, paths: list) -> None:
-        """Move PC copies of Drive folders the user stopped syncing to the Recycle Bin."""
+        """Move PC copies of Drive folders the user stopped syncing to the Recycle Bin. Only files that
+        are exactly the synced version go; anything new or changed on this PC (not in iCloud yet, so
+        its only copy) stays where it is, and you are told."""
         if not self.drive:
             return
+        known = dict(getattr(self, "_forgotten_drive_rows", {}) or {})
+        try:
+            known.update(self.drive.state.all())
+        except Exception:  # noqa: BLE001
+            pass
+        root = self.drive.root
         for rel in paths:
-            target = self.drive.root / rel
+            target = root / rel
             try:
-                if target.exists():
+                if not target.exists():
+                    continue
+                confirmed, kept = [], []
+                for dirpath, _dirs, files in os.walk(target):
+                    for name in files:
+                        p = Path(dirpath) / name
+                        row = known.get(p.relative_to(root).as_posix())
+                        try:
+                            st = os.stat(p)
+                        except OSError:
+                            kept.append(p)
+                            continue
+                        same = (row is not None and not row.is_dir and not row.pending and row.etag
+                                and (st.st_size, round(st.st_mtime, 2)) == (row.lsize, round(row.lmtime or 0, 2)))
+                        (confirmed if same else kept).append(p)
+                if not kept:
                     self.drive._trash_local(target)
                     self.log("trash", t("Drive: moved to the Recycle Bin (no longer synced): {name}", name=rel))
+                    continue
+                for p in confirmed:
+                    self.drive._trash_local(p)
+                self.log("info", t("Drive: {name} is no longer synced; {n} files that aren't in iCloud were kept "
+                                   "on this PC", name=rel, n=len(kept)), str(target))
             except OSError as exc:
                 self.log("error", t("Couldn't delete {name}: {error}", name=rel, error=brief(exc)))
+        self._forgotten_drive_rows = {}
 
     @Slot()
     def clear_activity(self) -> None:

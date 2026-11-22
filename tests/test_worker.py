@@ -6,12 +6,25 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
+from PySide6.QtCore import QCoreApplication, QObject, Qt, QThread, Signal, Slot
 
 from skyfold import engine as eng
 from skyfold import worker as wk
 from skyfold.config import Settings
 from tests.test_engine import FakeRemote
+
+
+class StateSink(QObject):
+    """Receives states the way the panel does: on this (GUI) thread, queued in the order they were
+    sent. A bare lambda would run on the sender's thread and could record them out of order."""
+
+    def __init__(self, states: list) -> None:
+        super().__init__()
+        self.states = states
+
+    @Slot(str, str)
+    def receive(self, state: str, text: str) -> None:
+        self.states.append((state, text))
 
 
 class Driver(QObject):
@@ -53,7 +66,9 @@ def qt(tmp_path, monkeypatch):
     states: list[tuple[str, str]] = []
     pend: list = []
     notes: list = []
-    w.stateChanged.connect(lambda s, t: states.append((s, t)))
+    sink = StateSink(states)
+    w.stateChanged.connect(sink.receive, Qt.QueuedConnection)
+    w._test_sink = sink  # (kept alive with the worker)
     w.pendingChanged.connect(pend.append)
     w.notify.connect(lambda a, b: notes.append(a))
     remote.add("A1", "IMG_0001.HEIC", b"abc", live=b"mov")

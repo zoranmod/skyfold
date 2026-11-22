@@ -2,6 +2,18 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.21] - 2026-11-22
+
+### Fixed
+- **Stopping to sync an iCloud Drive folder keeps your unsent work.** Choosing *Move to Recycle Bin* for folders you no longer sync only recycles files that are exactly what iCloud has; anything new or changed on this PC (not in iCloud yet) stays, and you are told.
+- **A file on this PC where iCloud has a folder of the same name** no longer sends that folder's files in iCloud to Recently Deleted; nothing below it is decided until you sort it out.
+- **Notes: an expired change token** no longer keeps new edits from coming down; Skyfold reads all notes once and goes on as usual.
+- **Notes: a picture of a deleted or locked note that was open in a viewer** goes to the Recycle Bin on a later check, once it is closed.
+- iCloud Drive: a file still being saved is looked at again a few seconds later instead of at the next hourly check.
+- When uploads to iCloud Photos have to wait, the panel says *Downloads are up to date. Uploads to iCloud Photos are waiting.* instead of *Everything is in sync*.
+- Settings opens tall enough for its longest page, so nothing needs scrolling (as far as the screen allows); the download-limit hint sits under *Download speed limit* again, and *Automatic (recommended)* is no longer cut off.
+- README: new screenshots (Settings with the upload send buffer) and a note on upload speeds.
+
 ## [1.0.20] - 2026-11-21
 
 ### Changed
