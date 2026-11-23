@@ -27,7 +27,8 @@ from ..config import APP_NAME
 from ..i18n import t
 from ..worker import fmt_time
 from .icons import STATE_COLORS, glyph
-from .theme import OLED, state_color
+from .glow import GlowTile, animations_on
+from .theme import OLED, service_color, state_color
 
 log = logging.getLogger(__name__)
 
@@ -317,10 +318,7 @@ class ServiceRow(QFrame):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(11, 8, 9, 8)
         lay.setSpacing(11)
-        self.icon = QLabel()
-        self.icon.setObjectName("SvcTile")
-        self.icon.setFixedSize(26, 26)
-        self.icon.setAlignment(Qt.AlignCenter)
+        self.icon = GlowTile(glyph_name, palette, service_color(palette, glyph_name) or palette["muted"])
         col = QVBoxLayout()
         col.setSpacing(2)
         self.name = QLabel(name)
@@ -342,7 +340,7 @@ class ServiceRow(QFrame):
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette
-        self.icon.setPixmap(glyph(self.glyph_name, palette["muted"], 16).pixmap(QSize(16, 16)))
+        self.icon.set_palette(palette, service_color(palette, self.glyph_name) or palette["muted"])
         self.chevron.setPixmap(glyph("chevron", palette["muted"], 14).pixmap(QSize(14, 14)))
 
     def set(self, detail: str, state: str | None, checked: str = "") -> None:
@@ -358,6 +356,22 @@ class ServiceRow(QFrame):
     def mousePressEvent(self, e) -> None:  # noqa: N802
         self.clicked.emit()
         super().mousePressEvent(e)
+
+    def enterEvent(self, e) -> None:  # noqa: N802 - the tile glows while the row is under the pointer
+        self.icon.set_hot(True)
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:  # noqa: N802
+        self.icon.set_hot(self.hasFocus())
+        super().leaveEvent(e)
+
+    def focusInEvent(self, e) -> None:  # noqa: N802 - and while it has keyboard focus
+        self.icon.set_hot(True)
+        super().focusInEvent(e)
+
+    def focusOutEvent(self, e) -> None:  # noqa: N802
+        self.icon.set_hot(self.underMouse())
+        super().focusOutEvent(e)
 
     def keyPressEvent(self, e) -> None:  # noqa: N802
         if e.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
@@ -561,11 +575,9 @@ class Flyout(QWidget):
 
         # header
         head = QHBoxLayout()
-        logo = QLabel()  # a quiet brand mark: the cloud in the accent colour on its soft tint
+        # the brand mark: the cloud in the accent colour on its tint, glowing under the pointer
+        logo = GlowTile("cloud", palette, palette["accent_fg"], size=34, icon=20, radius=11, hover_self=True)
         logo.setObjectName("Brand")
-        logo.setFixedSize(34, 34)
-        logo.setAlignment(Qt.AlignCenter)
-        logo.setPixmap(glyph("cloud", palette["accent_fg"], 20).pixmap(QSize(20, 20)))
         self._brand = logo
         titles = QVBoxLayout()
         titles.setSpacing(0)
@@ -579,6 +591,11 @@ class Flyout(QWidget):
         status.setSpacing(5)
         self.status_icon = QLabel()
         self.status_icon.setFixedSize(13, 13)
+        self._spin = QTimer(self)  # turns the sync arrows next to "Syncing…" while a pass runs
+        self._spin.setInterval(50)
+        self._spin.timeout.connect(self._spin_tick)
+        self._spin_angle = 0.0
+        self._spin_base: QPixmap | None = None
         self.status_line = QLabel("")
         self.status_line.setObjectName("StatusLine")
         status.addWidget(self.status_icon, 0, Qt.AlignVCenter)
@@ -812,7 +829,7 @@ class Flyout(QWidget):
         """Called when Windows switches light/dark: re-tint the hand-drawn icons."""
         self.c = palette
         self.gear.setIcon(glyph("gear", palette["muted"]))
-        self._brand.setPixmap(glyph("cloud", palette["accent_fg"], 20).pixmap(QSize(20, 20)))
+        self._brand.set_palette(palette, palette["accent_fg"])
         self.dot.c = palette
         self.storage_ring.c = palette
         self.storage_ring.update()
@@ -895,9 +912,36 @@ class Flyout(QWidget):
         icon = {"idle": "check", "syncing": "sync", "paused": "pause", "error": "error", "auth": "error",
                 "offline": "cloud", "setup": "folder", "attention": "error"}.get(state, "check")
         color = state_color(self.c, state)
-        self.status_icon.setPixmap(glyph(icon, color, 13).pixmap(QSize(13, 13)))
+        pix = glyph(icon, color, 13).pixmap(QSize(13, 13), max(1.0, self.devicePixelRatioF()))
+        self.status_icon.setPixmap(pix)
+        if icon == "sync" and animations_on():
+            self._spin_base = pix
+            if not self._spin.isActive():
+                self._spin.start()
+        else:
+            self._spin.stop()
+            self._spin_base = None
+            self._spin_angle = 0.0
         self.status_line.setText(title)
         self.status_line.setStyleSheet(f"color: {color};")
+
+    def _spin_tick(self) -> None:
+        if self._spin_base is None or not self.isVisible():
+            return  # hidden panel: nothing to draw
+        self._spin_angle = (self._spin_angle + 18) % 360
+        dpr = self._spin_base.devicePixelRatio()
+        canvas = QPixmap(round(13 * dpr), round(13 * dpr))
+        canvas.setDevicePixelRatio(dpr)
+        canvas.fill(Qt.transparent)
+        p = QPainter(canvas)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.translate(6.5, 6.5)
+        p.rotate(self._spin_angle)
+        p.translate(-6.5, -6.5)
+        p.drawPixmap(0, 0, self._spin_base)
+        p.end()
+        self.status_icon.setPixmap(canvas)
 
     def set_progress(self, done: int, total: int, text: str) -> None:
         if self.state != "syncing" or total <= 0:
