@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="https://zoranmod.github.io/skyfold/"><img alt="Website" src="https://img.shields.io/badge/website-zoranmod.github.io%2Fskyfold-8fb8ff"></a>
   <a href="../../releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/zoranmod/skyfold?label=download"></a>
   <a href="../../releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/zoranmod/skyfold/total?label=downloads"></a>
   <a href="LICENSE"><img alt="License: GPL v3" src="https://img.shields.io/badge/license-GPLv3-blue"></a>
