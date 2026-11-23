@@ -655,6 +655,7 @@ class SettingsDialog(_Dialog):
         self._build_photos()
         self._build_drive()
         self._build_notes()
+        self._build_bookmarks()
         self._build_about()
         self.nav.setCurrentRow(0)
 
@@ -946,16 +947,6 @@ class SettingsDialog(_Dialog):
         self.notes_dir = self._folder_row(fold, self.s.notes_dir, t("Choose a folder for your notes"))
         fold.addWidget(_label(t("Open Notes.html in that folder to browse and search all notes in your web browser."),
                               "Hint", True))
-        bm = self._card(lay, t("SAFARI BOOKMARKS"))
-        self.bookmarks_on = self._toggle(bm, t("Save my Safari bookmarks for Firefox and Chrome"),
-                                         self.s.bookmarks_enabled)
-        self.bookmarks_dir = self._folder_row(bm, self.s.bookmarks_dir, t("Choose a folder for the bookmarks file"))
-        bm.addWidget(_label(t("Skyfold keeps \"Safari Bookmarks.html\" in this folder up to date (read-only: nothing "
-                              "changes in iCloud). In Firefox or Chrome: Bookmarks → Import, choose that file; your "
-                              "Safari bookmarks appear in a \"Safari Bookmarks\" folder. Importing again adds a "
-                              "second copy."), "Hint", True))
-        self.bookmarks_on.toggled.connect(self.bookmarks_dir.setEnabled)
-        self.bookmarks_dir.setEnabled(self.bookmarks_on.isChecked())
         info = self._card(lay, t("GOOD TO KNOW"))
         for line in (t("Each note is an HTML file with its pictures and attachments, in the same folders as in Notes."),
                      t("Notes deleted on your devices are moved to the Recycle Bin here."),
@@ -964,6 +955,36 @@ class SettingsDialog(_Dialog):
         lay.addStretch(1)
         self.notes_on.toggled.connect(self.notes_card.setEnabled)
         self.notes_card.setEnabled(self.notes_on.isChecked())
+
+    def _build_bookmarks(self) -> None:
+        lay = self._page(t("Bookmarks"), "bookmark")
+        head = QHBoxLayout()
+        head.addWidget(_label(t("Safari bookmarks"), "H2"), 1)
+        self.bookmarks_on = Toggle(t("Enabled"), self.c)
+        self.bookmarks_on.setChecked(self.s.bookmarks_enabled)
+        self.bookmarks_on.setCursor(Qt.PointingHandCursor)
+        head.addWidget(self.bookmarks_on)
+        lay.addLayout(head)
+        lay.addWidget(_label(t("Your Safari bookmarks from iPhone, iPad or Mac as a file that Firefox, Chrome and Edge "
+                               "can import, kept up to date. Read-only: nothing changes in iCloud."), "Muted", True))
+        fold = self._card(lay, t("BOOKMARKS FILE"))
+        self.bookmarks_card = fold.parentWidget()
+        self.bookmarks_dir = self._folder_row(fold, self.s.bookmarks_dir, t("Choose a folder for the bookmarks file"))
+        fold.addWidget(_label(t("Skyfold keeps \"Safari Bookmarks.html\" in this folder up to date: every 6 hours "
+                                "and when you click Sync now."), "Hint", True))
+        how = self._card(lay, t("IMPORT IT IN YOUR BROWSER"))
+        for line in (t("Firefox: Ctrl+Shift+O → Import and Backup → Import Bookmarks from HTML…"),
+                     t("Chrome or Edge: Bookmarks → Import bookmarks and settings → Bookmarks HTML file."),
+                     t("Your bookmarks appear in a \"Safari Bookmarks\" folder. Importing again adds a second "
+                       "copy, so delete the old folder first.")):
+            how.addWidget(_label("•  " + line, "Muted", True))
+        info = self._card(lay, t("GOOD TO KNOW"))
+        for line in (t("One-way: bookmarks you add in your browser don't go to Safari."),
+                     t("Deleted bookmarks, tab groups and the Reading List are left out.")):
+            info.addWidget(_label("•  " + line, "Muted", True))
+        lay.addStretch(1)
+        self.bookmarks_on.toggled.connect(self.bookmarks_card.setEnabled)
+        self.bookmarks_card.setEnabled(self.bookmarks_on.isChecked())
 
     def drive_estimate(self) -> int | None:
         """Apple's "Docs" storage category: iCloud Drive plus app documents (a slight overestimate)."""

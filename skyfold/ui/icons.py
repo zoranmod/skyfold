@@ -242,6 +242,14 @@ def glyph(name: str, color: str, size: int = 20) -> QIcon:
         p.drawRoundedRect(QRectF(s * 0.22, s * 0.14, s * 0.56, s * 0.72), s * 0.08, s * 0.08)
         for k, y in enumerate((0.34, 0.48, 0.62)):
             p.drawLine(QPointF(s * 0.33, s * y), QPointF(s * (0.67 if k < 2 else 0.55), s * y))
+    elif name == "bookmark":
+        path = QPainterPath(QPointF(s * 0.3, s * 0.14))
+        path.lineTo(s * 0.7, s * 0.14)
+        path.lineTo(s * 0.7, s * 0.86)
+        path.lineTo(s * 0.5, s * 0.7)
+        path.lineTo(s * 0.3, s * 0.86)
+        path.closeSubpath()
+        p.drawPath(path)
     elif name == "upload":
         p.drawLine(QPointF(s / 2, s * 0.66), QPointF(s / 2, m))
         p.drawPolyline([QPointF(s * 0.3, s * 0.4), QPointF(s / 2, m), QPointF(s * 0.7, s * 0.4)])

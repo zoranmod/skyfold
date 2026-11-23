@@ -74,7 +74,7 @@ const tree = [
 
   await assert.rejects(ext.syncOnce(b));
   const st = await b.storage.local.get(["error"]);
-  assert.match(st.error, /Settings → Notes/);
+  assert.match(st.error, /turn on Safari bookmarks/);
   assert.ok(b.nodes.has(folder.id), "a failed update leaves the folder as it was");
   console.log("extension sync: ok");
 })().catch((e) => { console.error(e); process.exit(1); });

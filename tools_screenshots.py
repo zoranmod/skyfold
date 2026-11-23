@@ -51,7 +51,8 @@ def settings() -> Settings:
     return Settings(apple_id=EMAIL, photos_dir=HOME + r"\Pictures\iCloud Photos", photos_dir_confirmed=True,
                     folder_structure="year_month", drive_enabled=True, drive_dir=HOME + r"\iCloud Drive",
                     drive_folders=["Documents", "Projects", "Scans"], notes_enabled=True,
-                    notes_dir=HOME + r"\Documents\Apple Notes", start_with_windows=True)
+                    notes_dir=HOME + r"\Documents\Apple Notes", start_with_windows=True,
+                    bookmarks_enabled=True, bookmarks_dir=HOME + r"\Documents")
 
 
 def use(mode: str) -> dict:
@@ -159,7 +160,7 @@ flyout("dark")
 first_run()
 settings_page(0, "settings-general.png")
 settings_page(2, "settings-drive.png")
-settings_page(3, "settings-notes.png")
+settings_page(4, "settings-bookmarks.png")
 drive_folders()
 delete_confirm()
 find_my()

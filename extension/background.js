@@ -65,8 +65,8 @@ async function addAll(b, parentId, nodes) {
 }
 
 const MESSAGES = {
-  "no-bookmarks": "Skyfold hasn't read your Safari bookmarks yet. In Skyfold: Settings → Notes → Safari bookmarks, turn it on, then Sync now.",
-  "no-host": "Skyfold isn't set up for this browser yet. Install Skyfold on this PC, turn on Safari bookmarks (Settings → Notes) and let it sync once.",
+  "no-bookmarks": "Skyfold hasn't read your Safari bookmarks yet. In Skyfold Settings, turn on Safari bookmarks, then Sync now.",
+  "no-host": "Skyfold isn't set up for this browser yet. Install Skyfold on this PC, turn on Safari bookmarks in its Settings and let it sync once.",
 };
 
 function explain(err) {
