@@ -2,6 +2,11 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.24] - 2026-11-23
+
+### Changed
+- **Safari bookmarks have their own page in Settings** (*Settings → Bookmarks*), with its own on/off switch, the folder for the bookmarks file, how to import it in Firefox, Chrome or Edge, and what is left out. They used to be on the Notes page.
+
 ## [1.0.23] - 2026-11-23
 
 ### Fixed

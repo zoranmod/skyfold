@@ -60,12 +60,13 @@
   <img src="docs/screenshots/find-my.png" width="430" alt="Find My: devices, battery and play sound">
 </p>
 <p>
+  <img src="docs/screenshots/settings-bookmarks.png" width="430" alt="Settings: Safari bookmarks for Firefox, Chrome and Edge">
   <img src="docs/screenshots/update.png" width="430" alt="A new version: what's new, and Update now">
 </p>
 
 ## Safari bookmarks in Firefox or Chrome
 
-1. In Skyfold: **Settings → Notes → Safari bookmarks**, turn on *Save my Safari bookmarks for Firefox and Chrome* (the file goes to your Documents folder unless you choose another), **Save**, then **Sync now**.
+1. In Skyfold: **Settings → Bookmarks**, turn it on (the file goes to your Documents folder unless you choose another), **Save**, then **Sync now**. (Before 1.0.24 this was under *Settings → Notes*.)
 2. Skyfold writes **`Safari Bookmarks.html`** and refreshes it every 6 hours and when you click **Sync now**.
 3. Import it once:
    - **Firefox:** Ctrl+Shift+O → *Import and Backup* → *Import Bookmarks from HTML…*
@@ -233,7 +234,7 @@ Skyfold is not affiliated with, endorsed by or sponsored by Apple Inc. Apple, iC
 
 - **Brisanje slika ide u oba smjera, a Drive se sinhronizuje u oba smjera** (i preimenovanja i premještanja). Obrisani fajlovi idu u Recycle Bin ili u "Nedavno obrisano", pa se mogu vratiti.
 - **Skyfold je javna beta.** Dvosmjerna Drive sinhronizacija je nova: Skyfold uvijek pita prije većeg brisanja, ali čuvaj rezervnu kopiju važnih stvari.
-- **Safari oznake za Firefox i Chrome:** Postavke → Bilješke → Safari oznake. Skyfold drži ažuran fajl `Safari Bookmarks.html` koji uvezeš u Firefox (Ctrl+Shift+O → Uvoz i rezervna kopija → Uvezi oznake iz HTML-a) ili Chrome. Samo čita iz iClouda; jednosmjerno.
+- **Safari oznake za Firefox i Chrome:** Postavke → Oznake. Skyfold drži ažuran fajl `Safari Bookmarks.html` koji uvezeš u Firefox (Ctrl+Shift+O → Uvoz i rezervna kopija → Uvezi oznake iz HTML-a) ili Chrome. Samo čita iz iClouda; jednosmjerno.
 - **Slanje slika s računara (po želji):** Postavke → Fotografije → *Šalji u iCloud slike i videe koje dodam u ovaj folder*. Slike i videi koje ubaciš u folder sa slikama šalju se u iCloud Photos i pojave se na telefonu, uključujući one koji su već u folderu kad je uključiš. Slanje je jednosmjerno: fajl ostaje običan fajl na računaru, a brisanje na jednoj strani ne briše na drugoj. Opcija je po defaultu isključena.
 - **Jedan folder za slike po Apple ID-u:** kad se prijaviš drugim Apple ID-om, Skyfold traži da mu izabereš folder. Skyfold prati preimenovane i premještene slike dok Windows zadrži ID fajla; ako uređivač zamijeni fajl i preimenuješ ga prije sljedeće provjere, Skyfold to može protumačiti kao brisanje.
 - **Bilješke se čuvaju kao web stranice** s fotografijama u punoj veličini i bibliotekom s pretragom (Notes.html).
