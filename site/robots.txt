@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://zoranmod.github.io/skyfold/sitemap.xml
