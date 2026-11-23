@@ -123,10 +123,21 @@ h2 { margin-top: 10px; font: 700 clamp(32px, 4vw, 48px)/1.08 var(--display); let
   padding: 18px 22px; border-radius: var(--radius); background: var(--card); border: 1px solid var(--line);
 }
 .from { display: flex; align-items: center; gap: 14px; min-width: 0 }
-.ico { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: var(--card-2); border: 1px solid var(--line-2) }
-.ico svg { width: 22px; height: 22px }
+.ico {
+  --c: 143, 184, 255;
+  flex: none; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px;
+  color: rgb(var(--c));
+  background: linear-gradient(145deg, rgba(var(--c), .24), rgba(var(--c), .06));
+  border: 1px solid rgba(var(--c), .32);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .07), 0 6px 18px -10px rgba(var(--c), .6);
+}
+.ico svg { width: 24px; height: 24px }
+.ico.pink { --c: 246, 128, 158 }
+.ico.blue { --c: 125, 172, 255 }
+.ico.amber { --c: 243, 201, 105 }
+.ico.violet { --c: 182, 163, 255 }
 .from b { display: block; font-size: 17px }
-.from span { display: block; font-size: 14px; color: var(--muted) }
+.from .name span { display: block; font-size: 14px; color: var(--muted) }
 .dir { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 12px; font-weight: 650; color: var(--muted); text-align: center; line-height: 1.2 }
 .dir svg { width: 56px; height: 18px }
 .two { color: var(--green) }
@@ -248,7 +259,7 @@ footer { border-top: 1px solid var(--line); padding: 36px 0 48px; font-size: 14p
   .btn-sm { display: none }
   .lede { font-size: 17px }
   .route { grid-template-columns: 1fr; gap: 12px; padding: 18px }
-  .dir { flex-direction: row; gap: 6px; justify-content: flex-start; padding-left: 58px; font-size: 13px }
+  .dir { flex-direction: row; gap: 6px; justify-content: flex-start; padding-left: 62px; font-size: 13px }
   .dir svg { display: none }
   .dir.two::before { content: "\2195" }
   .dir.one::before { content: "\2193" }
@@ -267,8 +278,8 @@ footer { border-top: 1px solid var(--line); padding: 36px 0 48px; font-size: 14p
   box-shadow: 0 14px 34px -18px rgba(79, 141, 255, .45);
 }
 .extra:hover .ico, .route:hover .ico {
-  color: var(--accent); border-color: rgba(143, 184, 255, .45);
-  box-shadow: 0 0 18px -2px rgba(79, 141, 255, .55);
+  border-color: rgba(var(--c), .6);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .07), 0 0 22px -2px rgba(var(--c), .6);
 }
 .btn-primary { position: relative; overflow: hidden; transition: transform .15s ease, background .15s ease, box-shadow .25s ease }
 .btn-primary:hover { box-shadow: 0 10px 30px -8px rgba(143, 184, 255, .6) }
