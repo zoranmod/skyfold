@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0d1016">
+  <title>Skyfold: iCloud Photos, Drive and Notes on Windows, in real folders</title>
+  <meta name="description" content="Skyfold is a free, open-source Windows tray app that syncs iCloud Photos and iCloud Drive with real folders on your PC and exports Apple Notes and Safari bookmarks. No iCloud for Windows or iTunes needed.">
+  <link rel="canonical" href="https://zoranmod.github.io/skyfold/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Skyfold">
+  <meta property="og:url" content="https://zoranmod.github.io/skyfold/">
+  <meta property="og:title" content="Skyfold: iCloud on Windows, in real folders">
+  <meta property="og:description" content="iCloud Photos, iCloud Drive, Apple Notes and Safari bookmarks on Windows, without iCloud for Windows. Free and open source.">
+  <meta property="og:image" content="https://zoranmod.github.io/skyfold/assets/social.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="The Skyfold tray panel with Photos, iCloud Drive and Notes in sync.">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="assets/favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="assets/logo-192.png">
+  <link rel="stylesheet" href="style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Skyfold",
+    "description": "A free, open-source Windows tray app that syncs iCloud Photos and iCloud Drive with real folders on your PC and exports Apple Notes and Safari bookmarks, without iCloud for Windows.",
+    "url": "https://zoranmod.github.io/skyfold/",
+    "image": "https://zoranmod.github.io/skyfold/assets/social.png",
+    "screenshot": "https://zoranmod.github.io/skyfold/assets/flyout-dark.webp",
+    "applicationCategory": "UtilitiesApplication",
+    "operatingSystem": "Windows 10, Windows 11",
+    "downloadUrl": "https://github.com/zoranmod/skyfold/releases/latest/download/Skyfold-windows.zip",
+    "softwareHelp": { "@type": "WebPage", "@id": "https://github.com/zoranmod/skyfold#readme", "url": "https://github.com/zoranmod/skyfold#readme" },
+    "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+    "isAccessibleForFree": true,
+    "inLanguage": ["en", "bs"],
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+    "sameAs": ["https://github.com/zoranmod/skyfold"]
+  }
+  </script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-photo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M9 8h6M9 12h6M9 16h4"/></symbol>
+    <symbol id="i-bookmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h10a1 1 0 0 1 1 1v17l-6-4-6 4V4a1 1 0 0 1 1-1z"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-github" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.3 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></symbol>
+    <symbol id="i-storage" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4.5 4.5 0 0 1-.5-9A6 6 0 0 1 18 9.5a4 4 0 0 1-.5 8.5z"/><path d="M8 14h8"/></symbol>
+    <symbol id="i-update" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.6-4.5M4 4v3h3M4 13a8 8 0 0 0 14.6 4.5M20 20v-3h-3"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5zM3 8v8l9 5 9-5V8M12 13v8"/></symbol>
+    <symbol id="i-theme" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M10 9v6M14 9v6"/></symbol>
+    <symbol id="a-two" viewBox="0 0 56 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h46M44 1l6 5M4 12h46M4 12l6 5"/></symbol>
+    <symbol id="a-one" viewBox="0 0 56 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h46M44 3l6 6-6 6"/></symbol>
+  </defs>
+</svg>
+
+<header class="top" id="top">
+  <div class="wrap bar">
+    <a class="brand" href="#main"><img src="assets/logo-192.png" alt="" width="32" height="32">Skyfold</a>
+    <nav class="nav" aria-label="Sections">
+      <a class="wide-only" href="#how">How it works</a>
+      <a class="wide-only" href="#features">Features</a>
+      <a href="#safety">Safety</a>
+      <a href="#install">Install</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="btn-sm" href="https://github.com/zoranmod/skyfold">GitHub</a>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <div class="eyebrow">
+          <span class="chip">Free and open source</span>
+          <span class="chip">Windows 10 &amp; 11</span>
+          <span class="chip beta">Public beta</span>
+        </div>
+        <h1>iCloud on Windows, <span class="grad nobr">in real folders.</span></h1>
+        <p class="lede">Skyfold keeps iCloud Photos and iCloud Drive in sync with ordinary folders on your PC, and exports your Apple Notes and Safari bookmarks. A small tray app, without iCloud for Windows.</p>
+        <div class="cta">
+          <a class="btn btn-primary" href="https://github.com/zoranmod/skyfold/releases/latest"><svg aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
+          <a class="btn btn-ghost" href="https://github.com/zoranmod/skyfold"><svg aria-hidden="true"><use href="#i-github"/></svg>Source on GitHub</a>
+        </div>
+        <p class="fine">Nothing else to install: no iCloud for Windows, no iTunes, no other Apple software. Portable zip, GPLv3. Not affiliated with Apple.</p>
+      </div>
+      <figure class="hero-shot">
+        <img class="window" src="assets/flyout-dark.webp" width="376" height="535" alt="The Skyfold tray panel: everything is in sync, with Photos, iCloud Drive and Notes, iCloud storage use and recent activity.">
+      </figure>
+    </div>
+  </section>
+
+  <section class="section alt" id="how">
+    <div class="wrap">
+      <p class="kicker">How it works</p>
+      <h2>Everything lands in a folder you choose.</h2>
+      <p class="section-lede">Real files on disk, always there offline. No online-only placeholders and nothing to open in a special app.</p>
+
+      <div class="map">
+        <div class="route">
+          <div class="from"><span class="ico"><svg aria-hidden="true"><use href="#i-photo"/></svg></span><div><b>iCloud Photos</b><span>Photos, videos, Live Photo videos</span></div></div>
+          <div class="dir two"><svg aria-hidden="true"><use href="#a-two"/></svg>two-way</div>
+          <div class="to"><span class="path">C:\<wbr>Users\<wbr>you\<wbr>Pictures\<wbr>iCloud Photos\<wbr>2026\<wbr>11</span><small>Photos Skyfold downloads: deletions travel both ways. Albums appear under <code>Albums\</code>. Optional uploads from the PC are one-way.</small></div>
+        </div>
+        <div class="route">
+          <div class="from"><span class="ico"><svg aria-hidden="true"><use href="#i-folder"/></svg></span><div><b>iCloud Drive</b><span>All of it, or the folders you pick</span></div></div>
+          <div class="dir two"><svg aria-hidden="true"><use href="#a-two"/></svg>two-way</div>
+          <div class="to"><span class="path">C:\<wbr>Users\<wbr>you\<wbr>iCloud Drive\<wbr>Projects</span><small>New, changed, deleted, renamed and moved items follow on the other side.</small></div>
+        </div>
+        <div class="route">
+          <div class="from"><span class="ico"><svg aria-hidden="true"><use href="#i-note"/></svg></span><div><b>Apple Notes</b><span>With pictures, scans and attachments</span></div></div>
+          <div class="dir one"><svg aria-hidden="true"><use href="#a-one"/></svg>export</div>
+          <div class="to"><span class="path">C:\<wbr>Users\<wbr>you\<wbr>Documents\<wbr>Apple Notes\<wbr>Notes.html</span><small>A searchable library that opens in your browser.</small></div>
+        </div>
+        <div class="route">
+          <div class="from"><span class="ico"><svg aria-hidden="true"><use href="#i-bookmark"/></svg></span><div><b>Safari bookmarks</b><span>From your iPhone, iPad or Mac</span></div></div>
+          <div class="dir one"><svg aria-hidden="true"><use href="#a-one"/></svg>export</div>
+          <div class="to"><span class="path">C:\<wbr>Users\<wbr>you\<wbr>Documents\<wbr>Safari Bookmarks.html</span><small>Import it into Firefox, Chrome or Edge. Skyfold refreshes the file every 6 hours and on Sync now.</small></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features" aria-labelledby="features-title">
+    <div class="wrap">
+      <h2 class="sr-only" id="features-title">Features</h2>
+
+      <div class="feature">
+        <div class="copy">
+          <p class="kicker">iCloud Photos</p>
+          <h3>Your whole photo library, laid out your way.</h3>
+          <p>Skyfold downloads your photos and videos newest first, keeps going in the background, and picks up where it left off after a restart.</p>
+          <ul class="ticks">
+            <li><b>All in one folder, by year, or by year and month.</b> Change it later in Settings.</li>
+            <li><b>Albums as folders</b> that take no extra disk space.</li>
+            <li>Delete a downloaded photo on the iPhone and the PC copy goes to the Recycle Bin. Delete it on the PC and it goes to Recently Deleted in iCloud.</li>
+            <li><b>Optional upload, off by default:</b> turn it on to send photos and videos in the folder that Skyfold didn't download, including ones already there. Album folders, hidden files and cloud placeholders are skipped. Sending is one-way: deleting a sent file on one side doesn't delete it on the other.</li>
+          </ul>
+        </div>
+        <figure class="shot narrow">
+          <img class="window" src="assets/first-run.webp" width="500" height="686" loading="lazy" alt="First run: choose the photos folder and whether photos are kept in one folder, by year, or by year and month.">
+        </figure>
+      </div>
+
+      <div class="feature flip">
+        <div class="copy">
+          <p class="kicker">iCloud Drive</p>
+          <h3>Two-way iCloud Drive, folder by folder.</h3>
+          <p>Sync your whole Drive or only the folders you pick (Mac packages stay in iCloud). Before you turn it on, Skyfold shows how much will be downloaded and how much disk space will be left.</p>
+          <ul class="ticks">
+            <li><b>Renames and moves</b> follow on the other side.</li>
+            <li><b>Conflicts keep both copies:</b> if a file changed on both sides, nothing is overwritten.</li>
+            <li>Changes on the PC are noticed within seconds. Changes in iCloud arrive at the next check: Drive is read in full once an hour, or when you click Sync now.</li>
+            <li>Uploads show progress, speed and time left.</li>
+          </ul>
+          <p class="note"><b>Shared files:</b> a file you shared on its own and then edit on the PC becomes a new document in iCloud, and the people you shared it with may lose access. Edit such files on an Apple device, or share the folder instead.</p>
+        </div>
+        <figure class="shot mid">
+          <img class="window" src="assets/drive-folders.webp" width="560" height="580" loading="lazy" alt="Choosing which iCloud Drive folders to sync, with the number of files and size of each folder.">
+        </figure>
+      </div>
+
+      <div class="feature wide">
+        <div class="copy">
+          <p class="kicker">Apple Notes</p>
+          <h3>Your notes, as a library you can open anywhere.</h3>
+          <p>Unlocked notes become web pages with their full-size pictures, scans and attachments, in the same folders as in Notes; locked notes are listed by title only. <code>Notes.html</code> lets you search by title and folder, in a light, dark or OLED theme.</p>
+        </div>
+        <figure class="shot notes-shot">
+          <img class="window" src="assets/notes-index.webp" width="1280" height="860" loading="lazy" alt="Notes.html: exported Apple Notes in folders, with a search field and a folder sidebar.">
+        </figure>
+      </div>
+
+    </div>
+  </section>
+
+  <section class="section alt" id="more">
+    <div class="wrap">
+      <p class="kicker">And also</p>
+      <h2>The small things, done properly.</h2>
+      <div class="extras">
+        <div class="extra"><span class="ico"><svg aria-hidden="true"><use href="#i-pin"/></svg></span><h3>Find My</h3><p>Your devices with battery and last-seen time, a map link, and Play sound.</p></div>
+        <div class="extra"><span class="ico"><svg aria-hidden="true"><use href="#i-storage"/></svg></span><h3>iCloud storage</h3><p>How much space Photos, Drive and the rest take, at a glance in the tray.</p></div>
+        <div class="extra"><span class="ico"><svg aria-hidden="true"><use href="#i-update"/></svg></span><h3>Updates itself</h3><p>Shows what's new and updates with one click. Your settings and files stay as they are.</p></div>
+        <div class="extra"><span class="ico"><svg aria-hidden="true"><use href="#i-box"/></svg></span><h3>Nothing else to install</h3><p>Unzip and run. No installer, no Microsoft Store, no iTunes or other Apple software.</p></div>
+        <div class="extra"><span class="ico"><svg aria-hidden="true"><use href="#i-pause"/></svg></span><h3>You're in control</h3><p>Limit the download speed, or pause from the tray at any time.</p></div>
+        <div class="extra"><span class="ico"><svg aria-hidden="true"><use href="#i-theme"/></svg></span><h3>Light, dark or OLED</h3><p>Follows the Windows theme, or pick one. In English and Bosnian.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="safety">
+    <div class="wrap safety-grid">
+      <div>
+        <p class="kicker">Built to be safe</p>
+        <h2>How deletion and recovery work.</h2>
+        <div class="cards">
+          <div class="card"><h3>Recycle Bin and Recently Deleted</h3><p>Skyfold doesn't delete permanently. Recover PC files from the Windows Recycle Bin. In iCloud Photos and Drive, check Recently Deleted within 30 days.</p></div>
+          <div class="card"><h3>Big deletions wait for you</h3><p>For Photos and iCloud Drive: if more items than your limit (5 by default) disappear at once, Skyfold asks before deleting them on the other side. Notes pages and Safari bookmarks follow iCloud without asking.</p></div>
+          <div class="card"><h3>An unavailable folder is not a deletion</h3><p>If your sync folder or its drive is unavailable, Skyfold won't treat that as deleting its contents. Deleting a folder <i>inside</i> your synced Drive does delete it in iCloud.</p></div>
+        </div>
+        <p class="beta-note"><b>Public beta.</b> Two-way iCloud Drive sync is new and has been through many rounds of independent review, but it hasn't met every real-world folder yet. Please keep a backup of anything important.</p>
+      </div>
+      <figure class="shot mid">
+        <img class="window" src="assets/delete-confirm.webp" width="560" height="520" loading="lazy" alt="A large deletion is waiting for your OK: seven photos deleted in iCloud, with buttons to keep them on this PC or delete them here too.">
+      </figure>
+    </div>
+  </section>
+
+  <section class="section alt" id="compare">
+    <div class="wrap">
+      <p class="kicker">Skyfold or iCloud for Windows?</p>
+      <h2>Apple's app works for many people.<br>Skyfold is for when it doesn't suit you.</h2>
+      <div class="fit">
+        <div class="yes">
+          <h3>Skyfold is for you if you want</h3>
+          <ul>
+            <li>real files on disk, always available offline</li>
+            <li>your own photo layout, with albums as folders</li>
+            <li>Apple Notes as browsable, searchable pages</li>
+            <li>Safari bookmarks in Firefox, Chrome or Edge</li>
+            <li>a portable app with open source code</li>
+          </ul>
+        </div>
+        <div class="no">
+          <h3>Keep Apple's app if you need</h3>
+          <ul>
+            <li>passwords and Keychain</li>
+            <li>mail, contacts and calendars</li>
+            <li>online-only files</li>
+            <li>two-way bookmark sync</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="privacy">
+    <div class="wrap">
+      <p class="kicker">Privacy</p>
+      <h2>Your password is never stored.</h2>
+      <div class="privacy">
+        <div><h3>Apple's own sign-in</h3><p>Your password is only used to sign in, with Apple's sign-in protocol and two-factor authentication.</p></div>
+        <div><h3>No Skyfold server</h3><p>No telemetry, no analytics, no crash reporting. Skyfold talks to Apple, and once a day to GitHub to check for updates (you can turn that off). It opens Google Maps only when you click Map in Find My.</p></div>
+        <div><h3>What stays on your PC</h3><p>Apple's session and the sync database live in <code>%LOCALAPPDATA%\Skyfold</code>, never next to the app. Settings, including your Apple ID email, live in the <code>data</code> folder next to <code>Skyfold.exe</code>, or in <code>%LOCALAPPDATA%\Skyfold\data</code> if that folder is read-only. The log has file names but no password.</p></div>
+        <div><h3>Use a PC you trust</h3><p>Anyone who can read the saved session can reach your iCloud until it expires, like a browser that's still signed in. <b>Settings → General → Sign out</b> deletes it.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section alt" id="install">
+    <div class="wrap">
+      <p class="kicker">Install</p>
+      <h2>Three steps to get going.</h2>
+      <ol class="steps">
+        <li><h3>Download</h3><p>Get <code>Skyfold-windows.zip</code> from the <a href="https://github.com/zoranmod/skyfold/releases/latest">latest release</a>. It is built by GitHub Actions from the public source. To check it, run <code>Get-FileHash .\Skyfold-windows.zip</code> in PowerShell and compare the value with <code>Skyfold-windows.zip.sha256</code>.</p></li>
+        <li><h3>Unzip and run</h3><p>Unzip to a normal folder and run <code>Skyfold.exe</code>. Skyfold isn't code-signed, so if SmartScreen says "Windows protected your PC", click <b>More info → Run anyway</b>. On a new Windows 11 PC, Smart App Control may block unsigned apps altogether.</p></li>
+        <li><h3>Sign in</h3><p>Choose where your photos should go, then sign in with your Apple ID and the 6-digit code from your iPhone, iPad or Mac (or by SMS). Turn on iCloud Drive and Notes in Settings if you want them.</p></li>
+      </ol>
+      <p class="reqs"><b>You need</b> Windows 10 or 11 (64-bit) and an Apple ID with two-factor authentication; hardware security keys and the old two-step verification aren't supported. <b>Access iCloud Data on the Web</b> must be on in your iPhone's iCloud settings; it is on by default unless you use Advanced Data Protection.</p>
+    </div>
+  </section>
+
+  <section class="section" id="faq">
+    <div class="wrap">
+      <p class="kicker">FAQ</p>
+      <h2>Questions people ask.</h2>
+      <div class="faq">
+        <details><summary>Is this an official Apple app?</summary><div><p>No. Skyfold is an independent project and isn't affiliated with Apple.</p></div></details>
+        <details><summary>Why does Windows warn me when I start it?</summary><div><p>The exe isn't code-signed (certificates cost money every year). The source and the build are public: the release zip is built by GitHub Actions from the repository.</p></div></details>
+        <details><summary>Why is the first iCloud Drive sync slow?</summary><div><p>Apple limits how fast one account can download, to roughly 1 to 2 files per second, no matter how fast your connection is. A Drive with 20,000 files can take several hours. Big files go at your connection's speed, and after the first sync only changes are transferred.</p></div></details>
+        <details><summary>Do I have to sign in again?</summary><div><p>About every two months, when Apple's session expires. Skyfold tells you in the tray. Find My is the exception: after every PC restart Apple asks for your password once more before it shows your devices. Syncing keeps working without it.</p></div></details>
+        <details><summary>I deleted something by mistake.</summary><div><p>Check the Windows Recycle Bin, or Recently Deleted in Photos or iCloud Drive (on iCloud.com or your iPhone) within 30 days.</p></div></details>
+        <details><summary>What isn't synced?</summary><div><p><b>Photos:</b> shared albums, the iCloud Shared Photo Library and smart albums aren't synced. Hidden photos aren't downloaded, and if you hide a photo Skyfold already downloaded, its PC copy goes to the Recycle Bin. Edited photos come down as originals, edits to a photo that's already synced aren't uploaded, and a Live Photo copied from an iPhone goes up as a still photo.</p><p><b>iCloud Drive:</b> Mac packages such as <code>.app</code> stay in iCloud.</p><p><b>Exports:</b> Notes and Safari bookmarks are one-way, and locked notes are listed by title only.</p><p>Messages, contacts, calendars and passwords aren't included.</p><p>The full list is in the <a href="https://github.com/zoranmod/skyfold#limitations">limitations</a>.</p></div></details>
+        <details><summary>Can I keep my synced folders in OneDrive or Dropbox?</summary><div><p>Better not: everything would be uploaded to a second cloud. Skyfold warns you if you pick such a folder. This matters on PCs where Pictures or Documents already live in OneDrive. The app itself can sit there; its session and database stay local.</p></div></details>
+        <details><summary>How do I refresh Safari bookmarks in my browser?</summary><div><p>Skyfold keeps <code>Safari Bookmarks.html</code> up to date, but a browser copies the bookmarks when you import them. Importing again adds a second Safari Bookmarks folder, so delete the old one first.</p></div></details>
+        <details><summary>Can I use it on two PCs?</summary><div><p>Yes, each PC has its own session and sync database. One Apple ID per Windows user.</p></div></details>
+        <details><summary>Is it free?</summary><div><p>Yes, and it will stay free. Skyfold is open source under the GNU GPL v3.</p></div></details>
+      </div>
+    </div>
+  </section>
+
+  <section class="final alt section">
+    <div class="wrap">
+      <img src="assets/logo-192.png" width="88" height="88" alt="">
+      <h2>Give Skyfold a try.</h2>
+      <p class="section-lede">Free and open source. If something doesn't work, a bug report on GitHub helps the most.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/zoranmod/skyfold/releases/latest"><svg aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
+        <a class="btn btn-ghost" href="https://github.com/zoranmod/skyfold/issues/new/choose">Report a problem</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <a class="brand" href="#main"><img src="assets/logo-192.png" alt="" width="32" height="32">Skyfold</a>
+      <nav aria-label="Project links">
+        <a href="https://github.com/zoranmod/skyfold">GitHub</a>
+        <a href="https://github.com/zoranmod/skyfold/releases">Releases</a>
+        <a href="https://github.com/zoranmod/skyfold/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/zoranmod/skyfold/blob/main/SECURITY.md">Security</a>
+        <a href="https://github.com/zoranmod/skyfold/blob/main/LICENSE">License (GPLv3)</a>
+      </nav>
+    </div>
+    <p class="legal">Skyfold is provided "as is", without warranty of any kind; keep your own backup of anything important. Skyfold is not affiliated with, endorsed by or sponsored by Apple Inc. Apple, iCloud, iPhone, iPad, Mac, Find My and Apple Notes are trademarks of Apple Inc., registered in the U.S. and other countries.</p>
+  </div>
+</footer>
+
+<script>
+  // Shows the header's bottom line once the page is scrolled.
+  (function () {
+    var top = document.getElementById("top");
+    function update() { top.classList.toggle("scrolled", window.scrollY > 8); }
+    window.addEventListener("scroll", update, { passive: true });
+    update();
+  })();
+</script>
+</body>
+</html>
