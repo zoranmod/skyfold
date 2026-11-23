@@ -256,3 +256,59 @@ footer { border-top: 1px solid var(--line); padding: 36px 0 48px; font-size: 14p
   .extras, .privacy, .steps, .fit { grid-template-columns: 1fr }
   .cta .btn { flex: 1 1 auto; justify-content: center }
 }
+
+/* Motion: a few quiet touches; all off when the visitor asks for reduced motion. */
+.extra, .privacy > div, .steps li, .route, .card, .fit > div, .faq details {
+  transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease;
+}
+.ico { transition: color .25s ease, border-color .25s ease, box-shadow .25s ease }
+.extra:hover, .privacy > div:hover, .steps li:hover, .route:hover, .card:hover {
+  border-color: rgba(143, 184, 255, .32);
+  box-shadow: 0 14px 34px -18px rgba(79, 141, 255, .45);
+}
+.extra:hover .ico, .route:hover .ico {
+  color: var(--accent); border-color: rgba(143, 184, 255, .45);
+  box-shadow: 0 0 18px -2px rgba(79, 141, 255, .55);
+}
+.btn-primary { position: relative; overflow: hidden; transition: transform .15s ease, background .15s ease, box-shadow .25s ease }
+.btn-primary:hover { box-shadow: 0 10px 30px -8px rgba(143, 184, 255, .6) }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Logo: a slow blue glow that breathes */
+  @keyframes glow {
+    from { box-shadow: 0 0 0 1px rgba(143, 184, 255, .12), 0 10px 30px -12px rgba(79, 141, 255, .35) }
+    to   { box-shadow: 0 0 0 1px rgba(143, 184, 255, .32), 0 18px 60px -6px rgba(79, 141, 255, .75) }
+  }
+  @keyframes glow-sm {
+    from { box-shadow: 0 0 0 0 rgba(79, 141, 255, 0) }
+    to   { box-shadow: 0 0 14px 1px rgba(79, 141, 255, .55) }
+  }
+  .final img { animation: glow 3.2s ease-in-out infinite alternate }
+  .top .brand img { animation: glow-sm 3.2s ease-in-out infinite alternate }
+
+  /* Hero: the light behind the panel breathes, the gradient words drift */
+  @keyframes breathe { from { opacity: .55; transform: scale(.94) } to { opacity: 1; transform: scale(1.04) } }
+  .hero-shot::after { animation: breathe 5s ease-in-out infinite alternate }
+  @keyframes drift { from { background-position: 0% 50% } to { background-position: 100% 50% } }
+  h1 .grad { background-size: 200% 100%; animation: drift 7s ease-in-out infinite alternate }
+
+  /* Folder map: arrows nudge in the direction things travel */
+  @keyframes nudge { 0%, 100% { transform: translateX(-3px) } 50% { transform: translateX(3px) } }
+  @keyframes swap { 0%, 100% { opacity: .55 } 50% { opacity: 1 } }
+  .dir.one svg { animation: nudge 2.4s ease-in-out infinite }
+  .dir.two svg { animation: swap 2.4s ease-in-out infinite }
+
+  /* Cards lift a little under the pointer */
+  .extra:hover, .privacy > div:hover, .steps li:hover, .card:hover { transform: translateY(-3px) }
+
+  /* Primary button: a light sweep on hover */
+  .btn-primary::after {
+    content: ""; position: absolute; inset: 0; transform: translateX(-120%);
+    background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .45) 50%, transparent 70%);
+  }
+  .btn-primary:hover::after { transform: translateX(120%); transition: transform .7s ease }
+
+  /* Sections fade in as they scroll into view (only when the script runs) */
+  .js .reveal { opacity: 0; transform: translateY(18px) }
+  .js .reveal.in { opacity: 1; transform: none; transition: opacity .7s ease, transform .7s ease }
+}

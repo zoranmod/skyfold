@@ -330,6 +330,32 @@
     window.addEventListener("scroll", update, { passive: true });
     update();
   })();
+  // Fades sections in as they come into view. Without the script (or with reduced motion) everything is simply shown.
+  (function () {
+    if (!("IntersectionObserver" in window) || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    var items = document.querySelectorAll(".map .route, .feature .copy, .feature .shot, .extra, .safety-grid .card, .safety-grid .shot, .fit > div, .privacy > div, .steps li, .faq details");
+    document.documentElement.classList.add("js");
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (!e.isIntersecting) return;
+        var el = e.target;
+        io.unobserve(el);
+        el.classList.add("in");
+        el.addEventListener("transitionend", function done(ev) {
+          if (ev.propertyName !== "opacity") return;
+          el.removeEventListener("transitionend", done);
+          el.classList.remove("reveal", "in");
+          el.style.transitionDelay = "";
+        });
+      });
+    }, { rootMargin: "0px 0px -8% 0px" });
+    items.forEach(function (el) {
+      var i = Array.prototype.indexOf.call(el.parentNode.children, el);
+      el.classList.add("reveal");
+      el.style.transitionDelay = Math.min(i, 5) * 70 + "ms";
+      io.observe(el);
+    });
+  })();
 </script>
 </body>
 </html>
