@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import QRectF, QSize, Qt, QVariantAnimation
+from PySide6.QtCore import QRect, QRectF, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen
 from PySide6.QtWidgets import QGraphicsDropShadowEffect, QWidget
 
@@ -46,9 +46,12 @@ class GlowTile(QWidget):
         self._hover_self = hover_self
         self._level = 0.0
         self._hot = False
+        # The effect stays on with a fixed size; only its colour fades. Changing the blur radius or
+        # switching the effect on and off moves the tile by a device pixel at fractional display
+        # scaling, which looked like a jiggle.
         self._shadow = QGraphicsDropShadowEffect(self)
         self._shadow.setOffset(0, 0)
-        self._shadow.setEnabled(False)
+        self._shadow.setBlurRadius(22)
         self.setGraphicsEffect(self._shadow)
         self._anim = QVariantAnimation(self)
         self._anim.setDuration(180)
@@ -59,7 +62,7 @@ class GlowTile(QWidget):
         self.c = palette
         self.color = QColor(color)
         self._light = theme_kind(palette) == "light"
-        self._pix = glyph(self.glyph_name, color, self.icon_size).pixmap(QSize(self.icon_size, self.icon_size))
+        self._icon = glyph(self.glyph_name, color, self.icon_size)  # drawn at the screen's own pixel density
         self._set_level(self._level)
         self.update()
 
@@ -91,8 +94,6 @@ class GlowTile(QWidget):
         glow = QColor(self.color)
         glow.setAlpha(int((140 if self._light else 225) * self._level))
         self._shadow.setColor(glow)
-        self._shadow.setBlurRadius(8 + 18 * self._level)
-        self._shadow.setEnabled(self._level > 0.01)
         self.update()
 
     def paintEvent(self, _e) -> None:  # noqa: N802 - Qt naming
@@ -114,7 +115,7 @@ class GlowTile(QWidget):
         p.setBrush(grad)
         p.setPen(QPen(edge, 1))
         p.drawRoundedRect(r, self.radius, self.radius)
-        x = (self.width() - self.icon_size) / 2
-        y = (self.height() - self.icon_size) / 2
-        p.drawPixmap(int(round(x)), int(round(y)), self._pix)
+        x = (self.width() - self.icon_size) // 2
+        y = (self.height() - self.icon_size) // 2
+        self._icon.paint(p, QRect(x, y, self.icon_size, self.icon_size))
         p.end()
