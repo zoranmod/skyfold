@@ -2,7 +2,7 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.25] - 2026-11-23
 
 ### Changed
 - **Each service has its own colour**, in every theme: Photos pink, iCloud Drive blue, Notes amber, Safari bookmarks violet, on tinted tiles in the panel and as icons in Settings (the same colours as on the website).
