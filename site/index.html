@@ -21,6 +21,26 @@
   <link rel="icon" href="assets/favicon.png" type="image/png">
   <link rel="apple-touch-icon" href="assets/logo-192.png">
   <link rel="stylesheet" href="style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Skyfold",
+    "description": "A free, open-source Windows tray app that syncs iCloud Photos and iCloud Drive with real folders on your PC and exports Apple Notes and Safari bookmarks, without iCloud for Windows.",
+    "url": "https://zoranmod.github.io/skyfold/",
+    "image": "https://zoranmod.github.io/skyfold/assets/social.png",
+    "screenshot": "https://zoranmod.github.io/skyfold/assets/flyout-dark.webp",
+    "applicationCategory": "UtilitiesApplication",
+    "operatingSystem": "Windows 10, Windows 11",
+    "downloadUrl": "https://github.com/zoranmod/skyfold/releases/latest",
+    "softwareHelp": "https://github.com/zoranmod/skyfold#readme",
+    "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+    "isAccessibleForFree": true,
+    "inLanguage": ["en", "bs"],
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+    "sameAs": ["https://github.com/zoranmod/skyfold"]
+  }
+  </script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -48,8 +68,8 @@
   <div class="wrap bar">
     <a class="brand" href="#main"><img src="assets/logo-192.png" alt="" width="32" height="32">Skyfold</a>
     <nav class="nav" aria-label="Sections">
-      <a href="#how">How it works</a>
-      <a href="#features">Features</a>
+      <a class="wide-only" href="#how">How it works</a>
+      <a class="wide-only" href="#features">Features</a>
       <a href="#safety">Safety</a>
       <a href="#install">Install</a>
       <a href="#faq">FAQ</a>
@@ -92,7 +112,7 @@
         <div class="route">
           <div class="from"><span class="ico"><svg aria-hidden="true"><use href="#i-photo"/></svg></span><div><b>iCloud Photos</b><span>Photos, videos, Live Photo videos</span></div></div>
           <div class="dir two"><svg aria-hidden="true"><use href="#a-two"/></svg>two-way</div>
-          <div class="to"><span class="path">C:\<wbr>Users\<wbr>you\<wbr>Pictures\<wbr>iCloud Photos\<wbr>2026\<wbr>11</span><small>Deletions travel both ways. Your albums appear under <code>Albums\</code>.</small></div>
+          <div class="to"><span class="path">C:\<wbr>Users\<wbr>you\<wbr>Pictures\<wbr>iCloud Photos\<wbr>2026\<wbr>11</span><small>Photos Skyfold downloads: deletions travel both ways. Albums appear under <code>Albums\</code>. Optional uploads from the PC are one-way.</small></div>
         </div>
         <div class="route">
           <div class="from"><span class="ico"><svg aria-hidden="true"><use href="#i-folder"/></svg></span><div><b>iCloud Drive</b><span>All of it, or the folders you pick</span></div></div>
@@ -107,14 +127,15 @@
         <div class="route">
           <div class="from"><span class="ico"><svg aria-hidden="true"><use href="#i-bookmark"/></svg></span><div><b>Safari bookmarks</b><span>From your iPhone, iPad or Mac</span></div></div>
           <div class="dir one"><svg aria-hidden="true"><use href="#a-one"/></svg>export</div>
-          <div class="to"><span class="path">C:\<wbr>Users\<wbr>you\<wbr>Documents\<wbr>Safari Bookmarks.html</span><small>Import it into Firefox, Chrome or Edge. Skyfold keeps it up to date.</small></div>
+          <div class="to"><span class="path">C:\<wbr>Users\<wbr>you\<wbr>Documents\<wbr>Safari Bookmarks.html</span><small>Import it into Firefox, Chrome or Edge. Skyfold refreshes the file every 6 hours and on Sync now.</small></div>
         </div>
       </div>
     </div>
   </section>
 
-  <section id="features">
+  <section id="features" aria-labelledby="features-title">
     <div class="wrap">
+      <h2 class="sr-only" id="features-title">Features</h2>
 
       <div class="feature">
         <div class="copy">
@@ -124,8 +145,8 @@
           <ul class="ticks">
             <li><b>All in one folder, by year, or by year and month.</b> Change it later in Settings.</li>
             <li><b>Albums as folders</b> that take no extra disk space.</li>
-            <li>Delete on the iPhone and the PC copy goes to the Recycle Bin. Delete on the PC and the photo goes to Recently Deleted in iCloud.</li>
-            <li><b>Optional upload:</b> photos and videos you add to the folder go up to iCloud Photos and appear on your iPhone.</li>
+            <li>Delete a downloaded photo on the iPhone and the PC copy goes to the Recycle Bin. Delete it on the PC and it goes to Recently Deleted in iCloud.</li>
+            <li><b>Optional upload, off by default:</b> photos and videos in the folder that Skyfold didn't download go up to iCloud Photos, including ones already there when you turn it on. Sending is one-way: deleting a sent file on one side doesn't delete it on the other.</li>
           </ul>
         </div>
         <figure class="shot narrow">
@@ -137,13 +158,13 @@
         <div class="copy">
           <p class="kicker">iCloud Drive</p>
           <h3>Two-way iCloud Drive, folder by folder.</h3>
-          <p>Keep a full copy of your Drive, or only the folders you pick. Before you turn it on, Skyfold shows how much will be downloaded and how much disk space will be left.</p>
+          <p>Keep a local copy of your whole Drive, or only the folders you pick. Before you turn it on, Skyfold shows how much will be downloaded and how much disk space will be left.</p>
           <ul class="ticks">
             <li><b>Renames and moves</b> follow on the other side.</li>
             <li><b>Conflicts keep both copies:</b> if a file changed on both sides, nothing is overwritten.</li>
-            <li>Changes on the PC are noticed within seconds.</li>
-            <li>Uploads show progress, speed and time left.</li>
+            <li>Changes on the PC are noticed within seconds. Uploads show progress, speed and time left.</li>
           </ul>
+          <p class="note"><b>Shared files:</b> a file you shared on its own and then edit on the PC becomes a new document in iCloud, and the people you shared it with may lose access. Edit such files on an Apple device, or share the folder instead.</p>
         </div>
         <figure class="shot mid">
           <img class="window" src="assets/drive-folders.webp" width="560" height="580" loading="lazy" alt="Choosing which iCloud Drive folders to sync, with the number of files and size of each folder.">
@@ -154,7 +175,7 @@
         <div class="copy">
           <p class="kicker">Apple Notes</p>
           <h3>Your notes, as a library you can open anywhere.</h3>
-          <p>Every note becomes a web page with its full-size pictures, scans and attachments, in the same folders as in Notes. <code>Notes.html</code> lets you search by title and folder, in a light, dark or OLED theme.</p>
+          <p>Every note becomes a web page with its full-size pictures, scans and attachments, in the same folders as in Notes. <code>Notes.html</code> lets you search by title and folder, in a light, dark or OLED theme. Locked notes are listed by title only.</p>
         </div>
         <figure class="shot notes-shot">
           <img class="window" src="assets/notes-index.webp" width="1280" height="860" loading="lazy" alt="Notes.html: exported Apple Notes in folders, with a search field and a folder sidebar.">
@@ -183,10 +204,10 @@
     <div class="wrap safety-grid">
       <div>
         <p class="kicker">Built to be safe</p>
-        <h2>Nothing is deleted for good.</h2>
+        <h2>How deletion and recovery work.</h2>
         <div class="cards">
-          <div class="card"><h3>Recycle Bin and Recently Deleted</h3><p>Files deleted on the PC go to the Recycle Bin. Items deleted in iCloud go to Recently Deleted for 30 days.</p></div>
-          <div class="card"><h3>Big deletions wait for you</h3><p>If more items than your limit (5 by default) disappear at once, Skyfold asks before deleting them on the other side.</p></div>
+          <div class="card"><h3>Recycle Bin and Recently Deleted</h3><p>Skyfold never deletes permanently. Files go to the Windows Recycle Bin; items deleted in iCloud go to Recently Deleted, where they stay for 30 days.</p></div>
+          <div class="card"><h3>Big deletions wait for you</h3><p>For Photos and iCloud Drive: if more items than your limit (5 by default) disappear at once, Skyfold asks before deleting them on the other side. Notes pages and Safari bookmarks follow iCloud without asking.</p></div>
           <div class="card"><h3>A missing folder is not a deletion</h3><p>An unplugged drive or a missing folder is never read as "delete everything".</p></div>
         </div>
         <p class="beta-note"><b>Public beta.</b> Two-way iCloud Drive sync is new and has been through many rounds of independent review, but it hasn't met every real-world folder yet. Please keep a backup of anything important.</p>
@@ -231,8 +252,9 @@
       <h2>Your password is never stored.</h2>
       <div class="privacy">
         <div><h3>Apple's own sign-in</h3><p>Your password is only used to sign in, with Apple's sign-in protocol and two-factor authentication.</p></div>
-        <div><h3>No Skyfold server</h3><p>No telemetry, no analytics, no crash reporting. Skyfold talks to Apple, and once a day to GitHub to check for updates. You can turn that off.</p></div>
-        <div><h3>Stays on your PC</h3><p>The session and sync database live in <code>%LOCALAPPDATA%\Skyfold</code>, never next to the app, so they aren't uploaded if the app sits in OneDrive.</p></div>
+        <div><h3>No Skyfold server</h3><p>No telemetry, no analytics, no crash reporting. Skyfold talks to Apple, and once a day to GitHub to check for updates (you can turn that off). It opens Google Maps only when you click Map in Find My.</p></div>
+        <div><h3>What stays on your PC</h3><p>Apple's session and the sync database live in <code>%LOCALAPPDATA%\Skyfold</code>, never next to the app. Settings, including your Apple ID email, sit next to <code>Skyfold.exe</code>. The log has file names but no password.</p></div>
+        <div><h3>Use a PC you trust</h3><p>Anyone who can read the saved session can reach your iCloud until it expires, like a browser that's still signed in. <b>Settings → General → Sign out</b> deletes it.</p></div>
       </div>
     </div>
   </section>
@@ -242,11 +264,11 @@
       <p class="kicker">Install</p>
       <h2>Three steps to get going.</h2>
       <ol class="steps">
-        <li><h3>Download</h3><p>Get <code>Skyfold-windows.zip</code> from the <a href="https://github.com/zoranmod/skyfold/releases/latest">latest release</a>. It is built by GitHub Actions from the public source, with its SHA-256 attached.</p></li>
-        <li><h3>Unzip and run</h3><p>Unzip to a normal folder and run <code>Skyfold.exe</code>. Skyfold isn't code-signed, so if SmartScreen says "Windows protected your PC", click <b>More info → Run anyway</b>.</p></li>
-        <li><h3>Sign in</h3><p>Choose where your photos should go, then sign in with your Apple ID and the 6-digit code from your iPhone, iPad or Mac.</p></li>
+        <li><h3>Download</h3><p>Get <code>Skyfold-windows.zip</code> from the <a href="https://github.com/zoranmod/skyfold/releases/latest">latest release</a>. It is built by GitHub Actions from the public source; compare it with the attached <code>.sha256</code> file if you like.</p></li>
+        <li><h3>Unzip and run</h3><p>Unzip to a normal folder and run <code>Skyfold.exe</code>. Skyfold isn't code-signed, so if SmartScreen says "Windows protected your PC", click <b>More info → Run anyway</b>. On a new Windows 11 PC, Smart App Control may block unsigned apps altogether.</p></li>
+        <li><h3>Sign in</h3><p>Choose where your photos should go, then sign in with your Apple ID and the 6-digit code from your iPhone, iPad or Mac (or by SMS). Turn on iCloud Drive and Notes in Settings if you want them.</p></li>
       </ol>
-      <p class="reqs"><b>You need</b> Windows 10 or 11 (64-bit) and an Apple ID with two-factor authentication. <b>Access iCloud Data on the Web</b> must be on in your iPhone's iCloud settings; it is on by default unless you use Advanced Data Protection.</p>
+      <p class="reqs"><b>You need</b> Windows 10 or 11 (64-bit) and an Apple ID with two-factor authentication; hardware security keys and the old two-step verification aren't supported. <b>Access iCloud Data on the Web</b> must be on in your iPhone's iCloud settings; it is on by default unless you use Advanced Data Protection.</p>
     </div>
   </section>
 
@@ -260,7 +282,8 @@
         <details><summary>Why is the first iCloud Drive sync slow?</summary><div><p>Apple limits how fast one account can download, to roughly 1 to 2 files per second, no matter how fast your connection is. A Drive with 20,000 files can take several hours. Big files go at your connection's speed, and after the first sync only changes are transferred.</p></div></details>
         <details><summary>Do I have to sign in again?</summary><div><p>About every two months, when Apple's session expires. Skyfold tells you in the tray. Find My is the exception: after every PC restart Apple asks for your password once more before it shows your devices. Syncing keeps working without it.</p></div></details>
         <details><summary>I deleted something by mistake.</summary><div><p>Check the Windows Recycle Bin, or Recently Deleted in Photos or iCloud Drive (on iCloud.com or your iPhone) within 30 days.</p></div></details>
-        <details><summary>What isn't synced?</summary><div><p>Shared albums, the iCloud Shared Photo Library, smart albums and the Hidden album. Edited photos come down as originals. Notes and Safari bookmarks are one-way. Messages, contacts, calendars and passwords aren't included.</p><p>The full list is in the <a href="https://github.com/zoranmod/skyfold#limitations">limitations</a>.</p></div></details>
+        <details><summary>What isn't synced?</summary><div><p>Shared albums, the iCloud Shared Photo Library, smart albums and the Hidden album. Edited photos come down as originals, and edits to a photo that's already synced aren't uploaded. A Live Photo copied from an iPhone goes up as a still photo. Mac packages such as <code>.app</code> stay in iCloud. Notes and Safari bookmarks are one-way. Messages, contacts, calendars and passwords aren't included.</p><p>The full list is in the <a href="https://github.com/zoranmod/skyfold#limitations">limitations</a>.</p></div></details>
+        <details><summary>How do I refresh Safari bookmarks in my browser?</summary><div><p>Skyfold keeps <code>Safari Bookmarks.html</code> up to date, but a browser copies the bookmarks when you import them. Importing again adds a second Safari Bookmarks folder, so delete the old one first.</p></div></details>
         <details><summary>Can I use it on two PCs?</summary><div><p>Yes, each PC has its own session and sync database. One Apple ID per Windows user.</p></div></details>
         <details><summary>Is it free?</summary><div><p>Yes, and it will stay free. Skyfold is open source under the GNU GPL v3.</p></div></details>
       </div>
@@ -284,7 +307,7 @@
 <footer>
   <div class="wrap">
     <div class="foot">
-      <a class="brand" href="#top"><img src="assets/logo-192.png" alt="" width="32" height="32">Skyfold</a>
+      <a class="brand" href="#main"><img src="assets/logo-192.png" alt="" width="32" height="32">Skyfold</a>
       <nav aria-label="Project links">
         <a href="https://github.com/zoranmod/skyfold">GitHub</a>
         <a href="https://github.com/zoranmod/skyfold/releases">Releases</a>

@@ -1,6 +1,8 @@
 name: Deploy website
 
 # Publishes site/ to GitHub Pages. Run by hand (Actions → Deploy website → Run workflow).
+# Before the first run: this file must be on the default branch (main), Settings → Pages → Source
+# must be "GitHub Actions", and the github-pages environment must allow the branch it runs from.
 on:
   workflow_dispatch:
 
