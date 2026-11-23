@@ -27,7 +27,6 @@ html { scroll-behavior: smooth; scroll-padding-top: 84px }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto }
   *, *::before, *::after { transition: none !important }
-  .btn:active { transform: none }
 }
 body {
   margin: 0;
@@ -79,7 +78,7 @@ code, .path { font-family: var(--mono); font-size: .88em }
 .btn-primary:hover { background: #a9c8ff }
 .btn-ghost { color: var(--ink); border-color: var(--line-2); background: rgba(255, 255, 255, .02) }
 .btn-ghost:hover { border-color: var(--muted) }
-.btn:active { transform: translateY(1px) }
+@media (prefers-reduced-motion: no-preference) { .btn:active { transform: translateY(1px) } }
 
 /* Hero */
 .hero { position: relative; padding: 72px 0 40px; overflow: hidden }
