@@ -603,6 +603,13 @@ class LoginDialog(_Dialog):
 POLL_PRESETS = (1, 2, 5, 10, 15, 30, 60)
 
 
+def _nav_color(c: dict[str, str], glyph_name: str) -> str:
+    """Settings pages for a service show its colour (as in the panel); the others stay quiet."""
+    from .theme import service_color
+
+    return service_color(c, glyph_name) or c["muted"]
+
+
 class SettingsDialog(_Dialog):
     """Left navigation (General · Photos · iCloud Drive · About) with one scrolling page each."""
 
@@ -695,11 +702,11 @@ class SettingsDialog(_Dialog):
             item = self.nav.item(i)
             name = item.data(Qt.UserRole)
             if name:
-                item.setIcon(glyph(name, palette["muted"]))
+                item.setIcon(glyph(name, _nav_color(palette, name)))
 
     # page helpers ---------------------------------------------------------------------
     def _page(self, name: str, glyph_name: str) -> QVBoxLayout:
-        item = QListWidgetItem(glyph(glyph_name, self.c["muted"]), name)
+        item = QListWidgetItem(glyph(glyph_name, _nav_color(self.c, glyph_name)), name)
         item.setData(Qt.UserRole, glyph_name)  # drawn again in the new colour when the theme changes
         self.nav.addItem(item)
         scroll = QScrollArea()

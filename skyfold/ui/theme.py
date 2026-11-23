@@ -56,6 +56,26 @@ DARK = {
 }
 
 
+# Each service keeps one colour everywhere (panel tiles, Settings, the website): Photos pink, Drive
+# blue, Notes amber, Safari bookmarks violet. Darker shades on the light theme keep icons readable.
+SERVICE_COLORS = {
+    "light": {"photo": "#cc2f58", "folder": "#1767c8", "note": "#9a6700", "bookmark": "#6247c9"},
+    "dark": {"photo": "#f6809e", "folder": "#7dacff", "note": "#f3c969", "bookmark": "#b6a3ff"},
+    "oled": {"photo": "#ff6b8a", "folder": "#64b5ff", "note": "#ffd60a", "bookmark": "#bf9fff"},
+}
+
+
+def theme_kind(c: dict[str, str]) -> str:
+    if c is OLED:
+        return "oled"
+    return "light" if c is LIGHT or c.get("bg") == LIGHT["bg"] else "dark"
+
+
+def service_color(c: dict[str, str], glyph_name: str) -> str | None:
+    """The colour of a service glyph (photo, folder, note, bookmark) on this palette; None for others."""
+    return SERVICE_COLORS[theme_kind(c)].get(glyph_name)
+
+
 def state_color(c: dict[str, str], state: str) -> str:
     """Text/icon colour of a sync state on this palette (readable on its surfaces)."""
     return {"idle": c["ok"], "syncing": c["accent_fg"], "paused": c["warn"], "offline": c["offline"],
