@@ -99,7 +99,6 @@ h1 .grad { background: linear-gradient(100deg, #9cc2ff 10%, #6f9dff 55%, #b6a3ff
 .fine a { color: var(--muted) }
 
 .hero-shot { position: relative; justify-self: center; width: min(100%, 400px) }
-.hero-shot .window { transform: rotate(1.2deg) }
 .hero-shot::after {
   content: ""; position: absolute; inset: 8% -12% -6% -12%; z-index: -1;
   background: radial-gradient(closest-side, rgba(111, 157, 255, .35), transparent 75%); filter: blur(10px);
