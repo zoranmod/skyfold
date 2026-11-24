@@ -32,7 +32,7 @@
 - **One photos folder per Apple ID.** If you sign in with another Apple ID, Skyfold asks you to choose a photos folder for it; a folder that belongs to another Apple ID isn't synced. Downloaded photos sync deletions both ways; photos you send are one-way. Skyfold follows renamed and moved photos by their Windows file id; an editor that replaces the file plus a rename before the next check can still look like a deletion.
 - **Albums as folders.** Every album you made in Photos also appears under `Albums\`, as hard links that take **no extra disk space**.
 - **iCloud Drive, two-way.** A full local copy of your Drive, or only the folders you pick. New, changed, deleted, **renamed and moved** files and folders are synced in both directions. If a file changed on both sides, both versions are kept.
-- **Apple Notes export.** Every note becomes a web page with its full-size pictures, scans and attachments, in the same folders as in Notes, plus a `Notes.html` library with your folders, search by title and folder, light, dark and OLED theme. One-way (iCloud → PC).
+- **Apple Notes, read and searched on the PC.** Click *Notes* in the tray panel for a Notes window with your folders, your notes and the note itself, with its checklists, tables, pictures and scans. Search finds words in the text of your notes too, with or without accents, and you can zoom the text, sort the list and fill the screen. Every unlocked note is also saved as a web page in the same folders as in Notes, plus a `Notes.html` library you can open in any browser. One-way (iCloud → PC) and read-only.
 - **Safari bookmarks for Firefox and Chrome.** Your Safari bookmarks from iPhone, iPad or Mac as a bookmarks file that Firefox, Chrome and Edge import, kept up to date, with your folders in Safari's order. Read-only: nothing changes in iCloud.
 - **Find My.** Your devices with battery and last-seen time, a map link, and **Play sound**. (Apple asks for your password again after each PC restart before it shows them.)
 - **iCloud storage** at a glance in the tray panel.
@@ -45,7 +45,7 @@
 ## Screenshots
 
 <p>
-  <img src="docs/screenshots/notes-index.png" width="880" alt="Notes.html: your Apple Notes as a searchable library with folders">
+  <img src="docs/screenshots/notes-window.png" width="880" alt="The Notes window: folders, your notes and the open note with a checklist, a table and a picture">
 </p>
 <p>
   <img src="docs/screenshots/first-run.png" width="360" alt="First run: choose the photos folder and layout">
@@ -62,6 +62,9 @@
 <p>
   <img src="docs/screenshots/settings-bookmarks.png" width="430" alt="Settings: Safari bookmarks for Firefox, Chrome and Edge">
   <img src="docs/screenshots/update.png" width="430" alt="A new version: what's new, and Update now">
+</p>
+<p>
+  <img src="docs/screenshots/notes-index.png" width="880" alt="Notes.html: your Apple Notes as a searchable library in your browser">
 </p>
 
 ## Safari bookmarks in Firefox or Chrome
@@ -86,7 +89,7 @@ Apple's app works for many people. Skyfold is for when it doesn't suit you:
 | Files | Real files on disk, always available offline | Mostly online-only placeholders in Explorer |
 | Photos layout | One folder, by year, or by year/month; albums as hard-linked folders | Apple's layout |
 | New photos from the PC | Optional: photos and videos you add to the folder go to iCloud Photos | Yes |
-| Apple Notes | Exported as browsable, searchable HTML | Not available |
+| Apple Notes | Read and searched in Skyfold, and saved as web pages | Not available |
 | Safari bookmarks | One-way export file for Firefox / Chrome / Edge | Two-way, through Apple's browser extension |
 | Install | Portable zip, no installer, no Microsoft Store | Microsoft Store app |
 | Source | Open source (GPLv3) | Closed source |
@@ -150,7 +153,7 @@ To uninstall, first turn off *Start with Windows* and *Safari bookmarks* in Sett
 - **Shared albums, the iCloud Shared Photo Library and smart albums** (Favorites, etc.) aren't synced. Photos in the **Hidden** album aren't downloaded, and hiding a photo on the iPhone moves its PC copy to the Recycle Bin.
 - **No online-only placeholders, by design.** iCloud Drive files are real downloads, so you need enough disk space for the folders you choose.
 - **Mac packages** (folders that a Mac shows as one file, such as `.app` or `.xcodeproj`) are left in iCloud and skipped.
-- **Notes are one-way** (iCloud → PC). Locked notes can't be read; they are only listed.
+- **Notes are one-way and read-only** (iCloud → PC): you read them in Skyfold or your browser, but edit them on your iPhone, iPad or Mac. Locked notes can't be read; they are only listed.
 - **A shared iCloud Drive file edited on the PC becomes a new document in iCloud.** Apple's web interface that Skyfold uses replaces a file by moving the old version to Recently Deleted and adding the new one (other tools do the same). For a file you shared with others on its own, they may lose access and need to be invited again; edit such files on an Apple device, or share the folder instead.
 - **Safari bookmarks are one-way** (Safari → a file your browser imports). Bookmarks made in Firefox or Chrome don't go back to Safari.
 - **Advanced Data Protection:** Skyfold needs *Access iCloud Data on the Web* to be on. Without it, Apple doesn't let Skyfold read your data.
@@ -237,7 +240,7 @@ Skyfold is not affiliated with, endorsed by or sponsored by Apple Inc. Apple, iC
 - **Safari oznake za Firefox i Chrome:** Postavke → Oznake. Skyfold drži ažuran fajl `Safari Bookmarks.html` koji uvezeš u Firefox (Ctrl+Shift+O → Uvoz i rezervna kopija → Uvezi oznake iz HTML-a) ili Chrome. U Edgeu je lakše: instaliraj ekstenziju [Skyfold – Safari Bookmarks](https://microsoftedge.microsoft.com/addons/detail/ggcdepiimncfgfelhikkbjpdfikmfhdj) i ona sama drži folder Safari Bookmarks ažurnim, bez uvoza. Samo čita iz iClouda; jednosmjerno.
 - **Slanje slika s računara (po želji):** Postavke → Fotografije → *Šalji u iCloud slike i videe koje dodam u ovaj folder*. Slike i videi koje ubaciš u folder sa slikama šalju se u iCloud Photos i pojave se na telefonu, uključujući one koji su već u folderu kad je uključiš. Slanje je jednosmjerno: fajl ostaje običan fajl na računaru, a brisanje na jednoj strani ne briše na drugoj. Opcija je po defaultu isključena.
 - **Jedan folder za slike po Apple ID-u:** kad se prijaviš drugim Apple ID-om, Skyfold traži da mu izabereš folder. Skyfold prati preimenovane i premještene slike dok Windows zadrži ID fajla; ako uređivač zamijeni fajl i preimenuješ ga prije sljedeće provjere, Skyfold to može protumačiti kao brisanje.
-- **Bilješke se čuvaju kao web stranice** s fotografijama u punoj veličini i bibliotekom s pretragom (Notes.html).
+- **Bilješke čitaš i pretražuješ u Skyfoldu:** klikni *Bilješke* u panelu. Vidiš foldere, bilješke i samu bilješku sa slikama, a pretraga traži i po tekstu bilješki. Bilješke se čuvaju i kao web stranice s bibliotekom (Notes.html) koja se otvara u pregledniku.
 - **Skyfold se sam ažurira:** javi kad izađe nova verzija, pokaže šta je novo i ažurira se jednim klikom (od verzije 1.0.10).
 - **Program je besplatan i prenosiv.** Raspakuj ga, pokreni `Skyfold.exe` i prijavi se Apple ID-jem.
 - **Jezik** se mijenja u Postavke → Općenito → Jezik.

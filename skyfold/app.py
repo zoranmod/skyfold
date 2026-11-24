@@ -297,6 +297,7 @@ class Controller(QObject):
         w.notify.connect(self._notify, q)
         w.accountChanged.connect(f.set_account, q)
         w.accountChanged.connect(self._forget_login_api, q)
+        w.accountChanged.connect(lambda *_: self._close_notes(), q)
         f.syncNow.connect(lambda: self.req.syncNow.emit(True))
         f.clearActivity.connect(lambda: self.req.clearActivity.emit())
         # Cancel must not wait in the busy worker's queue: set the flag right here.
@@ -337,6 +338,7 @@ class Controller(QObject):
         m.addAction(t("Sync now"), lambda: self.req.syncNow.emit(True))
         m.addAction(t("Full library check"), lambda: self.req.fullCheck.emit())
         self.m_pause = m.addAction(t("Pause"), self.toggle_pause)
+        m.addAction(t("Notes"), self.open_notes)
         m.addAction(t("Find My devices…"), self.open_find_my)
         m.addSeparator()
         m.addAction(t("Settings…"), self.open_settings)
@@ -478,15 +480,54 @@ class Controller(QObject):
         if which == "drive" and not self.settings.drive_enabled:
             self.open_settings(page=2)
         elif which == "notes":
-            index = Path(self.settings.notes_dir) / "Notes.html"
-            if not self.settings.notes_enabled:
-                self.open_settings(page=3)
-            elif index.exists():
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(index)))
-            else:
-                self.open_folder("notes")
+            self.open_notes()
         else:
             self.open_folder(which)
+
+    def _notes_source(self):
+        """(Notes database, Notes folder) for the Notes window, or None when Notes isn't set up here."""
+        state = self.worker.notes_state
+        if not self.settings.notes_enabled or state is None or auth.signed_out():
+            return None  # after Sign out the notes stay in their folder, but Skyfold doesn't show them
+        root = Path(self.settings.notes_dir)
+        last = state.get("root")
+        if last is not None and Path(last) != root:
+            return None  # the list is still of another Notes folder (until the next sync)
+        return state, root
+
+    def open_notes(self) -> None:
+        """Read the notes inside Skyfold (Settings when Notes is off)."""
+        from shiboken6 import isValid
+
+        if not self.settings.notes_enabled:
+            self.open_settings(page=3)
+            return
+        if auth.signed_out():
+            self.open_login()  # the notes of whoever signed out aren't shown until someone signs in
+            return
+        old = self._dialogs.get("notes")
+        if old is not None and isValid(old) and old.isVisible():
+            self._show_dialog("notes", old)  # brought to the front
+            return
+        from .ui.notes_window import NotesWindow
+
+        win = NotesWindow(self.c, self._notes_source)
+
+        def gone(*_args, w=win) -> None:  # closed: Skyfold keeps no reference to it (only to a newer one)
+            if self._dialogs.get("notes") is w:
+                self._dialogs.pop("notes", None)
+
+        win.finished.connect(gone)
+        win.destroyed.connect(gone)
+        self._show_dialog("notes", win)
+
+    def _close_notes(self) -> None:
+        """Signed out or another Apple ID: the Notes window closes, nothing of the old notes stays."""
+        from shiboken6 import isValid
+
+        win = self._dialogs.pop("notes", None)
+        if win is not None and isValid(win):
+            win.clear()
 
     def toggle_pause(self) -> None:
         self.settings.paused = not self.settings.paused
@@ -638,6 +679,7 @@ class Controller(QObject):
 
     def sign_out(self) -> None:
         _close_stale_settings(self)
+        self._close_notes()
         self._login_api = None
         self.worker.cancel()  # stop the running pass now; the rest happens on the worker thread
         # Right now, not queued: a sign-in made while the worker is still busy must never be undone by it.

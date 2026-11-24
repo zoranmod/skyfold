@@ -37,6 +37,14 @@ def _bookmarks_cache_in_tmp(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _signed_in_memory_reset(monkeypatch):
+    """A Sign out in one test (kept in memory for the rest of that run) doesn't carry into the next."""
+    from skyfold import auth
+
+    monkeypatch.setattr(auth, "_SIGNED_OUT_NOW", False)
+
+
+@pytest.fixture(autouse=True)
 def _no_modal_account_notice(monkeypatch):
     """The notice after signing in with another Apple ID is a modal box shown a moment later; in tests
     nobody would close it (a test that checks it patches it itself)."""

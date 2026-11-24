@@ -300,7 +300,7 @@ class SyncWorker(QObject):
             self._set_state("offline", t("Can't reach iCloud. Will retry shortly."))
             return
         if api is None:
-            if auth.SIGNED_OUT.exists():  # signed out on purpose: nothing has expired
+            if auth.signed_out():  # signed out on purpose: nothing has expired
                 self._set_state("auth", t("You are signed out. Sign in to continue."))
                 return
             self._set_state("auth", t("Your session has expired. Please sign in again."))

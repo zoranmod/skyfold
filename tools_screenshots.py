@@ -18,7 +18,7 @@ from PySide6.QtGui import QFontDatabase  # noqa: E402
 from PySide6.QtWidgets import QApplication, QTreeWidgetItem  # noqa: E402
 
 app = QApplication([])
-for f in ("SegUIVar.ttf", "segoeui.ttf", "segoeuib.ttf", "seguisb.ttf"):
+for f in ("SegUIVar.ttf", "segoeui.ttf", "segoeuib.ttf", "seguisb.ttf", "seguisym.ttf", "seguiemj.ttf"):
     p = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / f
     if p.exists():
         QFontDatabase.addApplicationFont(str(p))
@@ -156,8 +156,101 @@ def find_my() -> None:
     save(d, "find-my.png")
 
 
+def notes_window(mode: str, name: str) -> None:
+    """The Notes window over a small made-up library (written to a temporary folder)."""
+    import tempfile
+    import time
+
+    from PySide6.QtCore import QPointF, QRectF
+    from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPen
+
+    from skyfold.notes_engine import NotesState, polish_note_html
+    from skyfold.ui.notes_window import NotesWindow
+
+    c = use(mode)
+    tmp = Path(tempfile.mkdtemp(prefix="skyfold-shot-"))
+    root = tmp / "Notes"
+    (root / "_assets" / "n1").mkdir(parents=True)
+    img = QImage(1400, 760, QImage.Format_RGB32)  # a made-up sketch of a garden
+    p = QPainter(img)
+    p.setRenderHint(QPainter.Antialiasing)
+    sky = QLinearGradient(0, 0, 0, 760)
+    sky.setColorAt(0, QColor("#bfe0ff"))
+    sky.setColorAt(1, QColor("#f4fbff"))
+    p.fillRect(img.rect(), sky)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor("#8cc56b"))
+    p.drawEllipse(QRectF(-300, 470, 1200, 600))
+    p.setBrush(QColor("#6aa84f"))
+    p.drawEllipse(QRectF(500, 430, 1300, 700))
+    p.setBrush(QColor("#ffd34d"))
+    p.drawEllipse(QRectF(1130, 80, 130, 130))
+    p.setBrush(QColor("#7a5230"))
+    p.drawRect(QRectF(330, 330, 34, 190))
+    p.setBrush(QColor("#3f8f3a"))
+    p.drawEllipse(QRectF(230, 190, 240, 200))
+    for x in (720, 800, 880, 960):
+        p.setPen(QPen(QColor("#8a6a45"), 8))
+        p.drawLine(QPointF(x, 560), QPointF(x, 450))
+    p.end()
+    img.save(str(root / "_assets" / "n1" / "garden.png"))
+    garden = """<div class="note-content"><h1>Garden plan</h1>
+<p>Spring jobs for the back garden, before the end of April.</p><h2>To do</h2>
+<ul><li><input type="checkbox" disabled checked> Prune the apple tree</li>
+<li><input type="checkbox" disabled checked> Buy tomato seedlings</li>
+<li><input type="checkbox" disabled> Fix the fence by the shed</li><li><input type="checkbox" disabled> Plant beans</li></ul>
+<h2>Budget</h2><table><tr><th>Item</th><th>Price</th></tr><tr><td>Seedlings</td><td>12 €</td></tr>
+<tr><td>Fence boards</td><td>48 €</td></tr><tr><td>Compost</td><td>9 €</td></tr></table>
+<p><span style="background-color:var(--hl3-bg)">Ask the neighbour about the ladder.</span></p>
+<img src="../_assets/n1/garden.png" alt="garden"></div>"""
+    st = NotesState(tmp / "notes.db")
+    ago = lambda d, h=0: (NOW - timedelta(days=d, hours=h)).strftime("%Y-%m-%dT%H:%M:%S")  # noqa: E731
+    rows = [("g", "Home/Garden plan.html", "Garden plan", "Home", ago(0, 2), False, garden),
+            ("r", "Home/Recipes/Pancakes.html", "Pancakes", "Home/Recipes", ago(1), False,
+             "Flour, two eggs, milk and a pinch of salt."),
+            ("s", "Home/Shopping.html", "Shopping list", "Home", ago(2), False, "Milk, bread, coffee, apples."),
+            ("m", "Work/Meeting notes.html", "Meeting notes", "Work", ago(3), False,
+             "Monday: plan the spring catalogue and the new price list."),
+            ("i", "Work/Ideas/Website.html", "Ideas for the website", "Work/Ideas", ago(6), False,
+             "A gallery page and a short video."),
+            ("t", "Travel/Packing list.html", "Packing list", "Travel", ago(9), False,
+             "Passport, charger, sunglasses, a good book."),
+            ("b", None, "Bank details", "Notes", ago(12), True, ""),
+            ("q", "Notes/Quotes.html", "Quotes", "Notes", ago(20), False, "Small steps every day.")]
+    for nid, rel, title, folder, when, locked, text in rows:
+        st.put(nid, rel, title, folder, when, locked)
+        if rel:
+            f = root / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            body = text if text.startswith("<") else f'<div class="note-content"><h1>{title}</h1><p>{text}</p></div>'
+            up = "../" * rel.count("/")
+            f.write_text(polish_note_html(body.replace("../_assets", up + "_assets"), up + "Notes.html",
+                                          "All notes", nid), encoding="utf-8")
+    w = NotesWindow(c, lambda: (st, root))
+    w.resize(1180, 720)
+    w.show()
+    end = time.time() + 5
+    while w.indexing and time.time() < end:
+        app.processEvents()
+        time.sleep(0.02)
+    for it in w._folder_items():
+        if it.data(0, Qt.UserRole) == "Home":
+            w.folders.setCurrentItem(it)
+    w.notes.setCurrentRow(0)
+    w.split.setSizes([210, 280, 690])
+    for _ in range(10):
+        app.processEvents()
+    w.current_key = None
+    w._show_current()
+    for _ in range(10):
+        app.processEvents()
+    save(w, name)
+    w.clear()
+
+
 flyout("light")
 flyout("dark")
+notes_window("dark", "notes-window.png")
 first_run()
 settings_page(0, "settings-general.png")
 settings_page(2, "settings-drive.png")

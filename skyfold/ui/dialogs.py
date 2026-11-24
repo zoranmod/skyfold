@@ -952,8 +952,8 @@ class SettingsDialog(_Dialog):
         fold = self._card(lay, t("NOTES FOLDER"))
         self.notes_card = fold.parentWidget()
         self.notes_dir = self._folder_row(fold, self.s.notes_dir, t("Choose a folder for your notes"))
-        fold.addWidget(_label(t("Open Notes.html in that folder to browse and search all notes in your web browser."),
-                              "Hint", True))
+        fold.addWidget(_label(t("Click Notes in the panel to read and search your notes in Skyfold. Notes.html in "
+                                "that folder shows them in your web browser."), "Hint", True))
         info = self._card(lay, t("GOOD TO KNOW"))
         for line in (t("Each note is an HTML file with its pictures and attachments, in the same folders as in Notes."),
                      t("Notes deleted on your devices are moved to the Recycle Bin here."),
