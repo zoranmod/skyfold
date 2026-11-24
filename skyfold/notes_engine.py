@@ -1600,6 +1600,9 @@ class NotesSyncer:
             raise Cancelled()  # quitting: this pass never starts
         res = NotesResult()
         last_page = INDEX
+        last_kind = "new"  # what happened to the last exported note: new | moved | changed
+        moved = 0
+        last_folder = ""
         self._check_root()
         for key, value in self.state.items("style_tx:"):
             self._finish_restyle(key, json.loads(value))
@@ -1762,6 +1765,12 @@ class NotesSyncer:
             taken.add(rel.lower())
             res.exported += 1
             last_page = rel
+            last_folder = folder
+            if old and not old[5] and old[3] != folder:
+                last_kind = "moved"  # into another folder (on its own, or changed as well)
+                moved += 1
+            else:
+                last_kind = "changed" if old and not old[5] else "new"
 
         if res.full and not res.more:  # notes that vanished entirely (e.g. purged) since the last full read
             for nid in seen:
@@ -1792,9 +1801,18 @@ class NotesSyncer:
         if res.exported:
             # click: the note itself when it's just one, otherwise the list of all notes
             target = self.root / (last_page if res.exported == 1 else INDEX)
-            text = (t("Notes: downloaded {name}", name=Path(last_page).stem) if res.exported == 1
-                    else t("Notes: downloaded {n}", n=res.exported))
-            self.cb.activity("download", text, str(target))
+            name = Path(last_page).stem
+            if res.exported == 1 and last_kind == "moved":
+                where = (last_folder or "Notes").replace("/", " \u203a ")
+                kind, text = "move", t("Notes: moved {name} to {folder}", name=name, folder=where)
+            elif res.exported == 1:
+                kind, text = "download", (t("Notes: updated {name}", name=name) if last_kind == "changed"
+                                          else t("Notes: downloaded {name}", name=name))
+            elif moved == res.exported:
+                kind, text = "move", t("Notes: moved {n} notes to other folders", n=moved)
+            else:
+                kind, text = "download", t("Notes: downloaded {n}", n=res.exported)
+            self.cb.activity(kind, text, str(target))
         return res
 
     def _remove_leftover_pages(self, res: NotesResult) -> None:

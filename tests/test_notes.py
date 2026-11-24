@@ -102,6 +102,29 @@ def test_rename_and_move_replace_old_file(env):
     assert (root / "Recepti/New title.html").exists() and not (root / "Notes/Old title.html").exists()
 
 
+def test_activity_says_moved_updated_or_downloaded(env):
+    s, r, root, _ = env
+    seen = []
+    s.cb.activity = lambda kind, text, target="": seen.append((kind, text))
+    r.put("n1", "Ivana")
+    s.run()
+    assert seen[-1] == ("download", "Notes: downloaded Ivana")
+    r.put("n1", "Ivana", folder="F3")  # moved into a subfolder on the iPhone
+    s.run()
+    assert seen[-1] == ("move", "Notes: moved Ivana to Recepti › Kolači")
+    r.put("n1", "Ivana", folder="F3", body="edited")
+    s.run()
+    assert seen[-1] == ("download", "Notes: updated Ivana")
+    r.put("n2", "A")
+    r.put("n3", "B")
+    s.run()
+    assert seen[-1] == ("download", "Notes: downloaded 2")
+    r.put("n2", "A", folder="F2")
+    r.put("n3", "B", folder="F2")
+    s.run()
+    assert seen[-1] == ("move", "Notes: moved 2 notes to other folders")
+
+
 def test_deleted_note_goes_to_recycle_bin(env):
     s, r, root, trashed = env
     r.put("n1", "A")
