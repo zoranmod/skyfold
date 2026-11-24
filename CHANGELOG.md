@@ -2,6 +2,11 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.26] - 2026-11-24
+
+### Fixed
+- **iCloud storage shows your plan's real size.** A 200 GB plan read "214.7 GB", because Apple counts a gigabyte as 1024 MB here and the panel counted 1000. The total, the used amount and the Photos / Drive / Other parts now use Apple's units, so the numbers match iPhone Settings.
+
 ## [1.0.25] - 2026-11-23
 
 ### Changed

@@ -116,10 +116,16 @@ def break_at_dots(text: str) -> str:
 
 
 def fmt_bytes(n: int, base: int = 1000) -> str:
-    """Human size. base=1000 matches how Apple counts iCloud storage (a "200 GB" plan)."""
+    """Human size of files on this PC (1 GB = 1000^3 bytes)."""
     from ..ui_text import size_text
 
     return size_text(n, base)
+
+
+def storage_text(n: int) -> str:
+    """iCloud storage the way Apple shows it: a "200 GB" plan is 200 x 1024^3 bytes, so Apple's
+    GB here is 1024^3 (with 1000^3 the plan would read 214.7 GB). "88 GB", not "88.0 GB"."""
+    return fmt_bytes(n, 1024).replace(",0 ", " ").replace(".0 ", " ")
 
 
 def round_corners(widget: QWidget) -> None:
@@ -250,8 +256,7 @@ class StorageBar(QFrame):
         self._render()
 
     def _render(self) -> None:
-        def size(n: int) -> str:  # "88 GB", not "88.0 GB"
-            return fmt_bytes(n, 1000).replace(",0 ", " ").replace(".0 ", " ")
+        size = storage_text
 
         self.amount.setText(t("{used} of {total}", used=size(self.used), total=size(self.total)))
         self.legend.setText("&nbsp;&nbsp;&nbsp;&nbsp;".join(
@@ -974,9 +979,9 @@ class Flyout(QWidget):
             used, total = st["used"], st["total"]
             self.storage_ring.set_fraction(used / total)
             lines = [t("iCloud storage"),
-                     t("{used} of {total}", used=fmt_bytes(used, 1000), total=fmt_bytes(total, 1000).replace(",0 ", " ").replace(".0 ", " ")),
+                     t("{used} of {total}", used=storage_text(used), total=storage_text(total)),
                      ""]
-            lines += [f"{p[0]}: {fmt_bytes(p[1], 1000)}" for p in st.get("parts", [])]
+            lines += [f"{p[0]}: {storage_text(p[1])}" for p in st.get("parts", [])]
             self.storage_ring.setToolTip("\n".join(lines).strip())
             self.storage_ring.setAccessibleName(t("iCloud storage") + f" {round(100 * used / total)}%")
             self.storage_bar.set(used, total, list(st.get("parts", [])))
