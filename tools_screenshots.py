@@ -37,14 +37,15 @@ dialogs._fit_screen = lambda w, h: (w, h)
 OUT.mkdir(parents=True, exist_ok=True)
 NOW = datetime.now(timezone.utc)
 GB = 1000 ** 3
+GIB = 1024 ** 3  # iCloud storage is counted in these (a "200 GB" plan is 200 GiB)
 HOME = r"C:\Users\you"
 EMAIL = "someone@example.com"
 
 STATS = {"photos": 1284, "videos": 36, "bytes": int(9.6 * GB), "last_sync": NOW.isoformat(),
          "drive_enabled": True, "drive_files": 4210, "drive_bytes": 31 * GB, "drive_last_sync": NOW.isoformat(),
          "notes_enabled": True, "notes_count": 86, "notes_last_sync": NOW.isoformat(),
-         "storage": {"used": 74 * GB, "total": 200 * GB,
-                     "parts": [("Photos", 38 * GB, "photos"), ("Docs", 29 * GB, "docs"), ("Backups", 7 * GB, "backup")]}}
+         "storage": {"used": 74 * GIB, "total": 200 * GIB,
+                     "parts": [("Photos", 38 * GIB, "photos"), ("Docs", 29 * GIB, "docs"), ("Backups", 7 * GIB, "backup")]}}
 
 
 def settings() -> Settings:
