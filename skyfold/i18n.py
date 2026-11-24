@@ -533,8 +533,6 @@ BS: dict[str, str] = {
     "Editing stays on your iPhone, iPad or Mac.":
         "Čuva kopiju svih bilješki na ovom PC-u kao web stranice, automatski ažurirane. "
         "Uređivanje ostaje na iPhone-u, iPad-u ili Mac-u.",
-    "Open Notes.html in that folder to browse and search all notes in your web browser.":
-        "Otvori Notes.html u tom folderu za pregled i pretragu svih bilješki u web pregledniku.",
     "Each note is an HTML file with its pictures and attachments, in the same folders as in Notes.":
         "Svaka bilješka je HTML fajl sa slikama i prilozima, u istim folderima kao u Notes-u.",
     "Notes deleted on your devices are moved to the Recycle Bin here.":
@@ -709,6 +707,36 @@ BS: dict[str, str] = {
         "Lokacija se otvara u Google Maps-u u pregledniku. Izgubljen uređaj? Na iCloud.com uključi "
         "Način izgubljenog uređaja ili brisanje.",
     "Open the original PDF": "Otvori originalni PDF",
+    # Notes window
+    "Audio recording": "Audio snimak",
+    "Video": "Video",
+    "Open the PDF": "Otvori PDF",
+    "Open the attachment": "Otvori prilog",
+    "Attachment unavailable on this PC": "Prilog nije dostupan na ovom PC-u",
+    "Show {n} more pages": "Prikaži još {n} stranica",
+    "Locked note": "Zaključana bilješka",
+    "Search notes (Ctrl+K)": "Pretraži bilješke (Ctrl+K)",
+    "Search notes": "Pretraži bilješke",
+    "Folders": "Folderi",
+    "Note": "Bilješka",
+    "Open in browser": "Otvori u pregledniku",
+    "All notes": "Sve bilješke",
+    "{name}, {n} notes": "{name}, bilješki: {n}",
+    "Searching titles now · indexing note text…": "Pretražujem naslove · indeksiram tekst bilješki…",
+    "{n} found": "Pronađeno: {n}",
+    "Notes are turned off in Settings.": "Bilješke su isključene u postavkama.",
+    "Your notes will appear here after the first sync.": "Bilješke će se pojaviti ovdje nakon prve sinhronizacije.",
+    "No notes found.": "Nema pronađenih bilješki.",
+    "This note is locked. Skyfold can't read locked notes; open it on your iPhone, iPad or Mac.":
+        "Ova bilješka je zaključana. Skyfold ne može čitati zaključane bilješke; otvori je na iPhoneu, iPadu ili Macu.",
+    "This note isn't on this PC yet. It will be after the next sync.":
+        "Ova bilješka još nije na ovom PC-u. Biće nakon sljedeće sinhronizacije.",
+    "This note is too big to show here. Open it in your browser.":
+        "Ova bilješka je prevelika za prikaz ovdje. Otvori je u pregledniku.",
+    "Click Notes in the panel to read and search your notes in Skyfold. Notes.html in that folder shows them "
+    "in your web browser.":
+        "Klikni Bilješke u panelu da ih čitaš i pretražuješ u Skyfoldu. Notes.html u tom folderu ih prikazuje "
+        "u web pregledniku.",
 }
 
 _CATALOGS = {"bs": BS}
