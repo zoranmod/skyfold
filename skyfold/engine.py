@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 
 MARKER = ".skyfold"
 OWNER_FILE = ".skyfold-account"  # which Apple ID the photos folder was set up for (a short fingerprint)
+INFO_KEY = "asset_info_v1"  # set once a full read has stored every photo's details
 ALBUMS_DIR = "Albums"  # album mirror inside the photos folder (hard links)
 ALBUM_REFRESH_SECONDS = 30 * 60
 LEGACY_MARKERS = (".isync", ".galerija-sync")
@@ -1365,7 +1366,8 @@ class Syncer:
             )
         # A full scan reads the whole library; it is only needed the first time, as a periodic
         # safety net, on request, or when CloudKit can't give us a change feed.
-        full = force_full or stale or not stored or bool(self.approved)
+        # (also once after the update that added the Photos window: it needs every photo's details)
+        full = force_full or stale or not stored or bool(self.approved) or self.state.get(INFO_KEY) != "1"
         local_new = set(local_deleted) - self.held
         if not full and cursor == stored and not local_new and not self.held:
             self.state.set("last_sync", now_iso())  # checked, nothing changed: still a check
@@ -1401,6 +1403,15 @@ class Syncer:
             for a in self.remote.list_assets(lambda n: self.cb.status(t("Reading your iCloud library… {n}", n=n))):
                 self._check_cancel()
                 remote_assets[a.id] = a
+
+        try:  # favourite, added, size... for the Photos window; never stops the sync
+            self.state.set_infos({a.id: a.info for a in remote_assets.values() if a.info is not None})
+            if gone:
+                self.state.drop_infos(gone)
+            if full:
+                self.state.set(INFO_KEY, "1")
+        except Exception:  # noqa: BLE001
+            log.warning("Couldn't keep the photos' details for the Photos window", exc_info=True)
 
         known_ids = self.state.asset_ids()
         rows_by_asset: dict[str, list[FileRow]] = defaultdict(list)

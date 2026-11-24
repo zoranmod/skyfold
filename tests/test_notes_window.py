@@ -655,6 +655,9 @@ def test_account_change_closes_notes_on_the_ui_thread_and_only_for_another_accou
         def _close_notes(self):
             self.closed_in.append(threading.current_thread() is threading.main_thread())
 
+        def _close_photos(self):  # (the Photos window closes with it; checked in test_photos_window)
+            pass
+
     class Sender(QObject):
         accountChanged = Signal(str)
 

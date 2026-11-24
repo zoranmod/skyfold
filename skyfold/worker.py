@@ -114,6 +114,7 @@ class SyncWorker(QObject):
     pendingChanged = Signal(object)
     notify = Signal(str, str)
     accountChanged = Signal(str)
+    favoriteSet = Signal(str, bool, str)  # asset id, favourite now, error text ("" = done)
     _localChange = Signal()
     _driveChange = Signal()
     _drivePendingSeen = Signal(object, object)  # to_cloud, to_pc; raised from the Drive thread
@@ -1005,6 +1006,28 @@ class SyncWorker(QObject):
             self._drive_pending = rest(d, set(ids))  # the other side of the question stays answerable
             self.pendingChanged.emit(self._pending or self._drive_pending)
             self._kick_drive(full=True)
+
+    @Slot(str, bool)
+    def set_favorite(self, asset_id: str, value: bool) -> None:
+        """The heart in the Photos window: mark or unmark the photo in iCloud too (between syncs, on
+        this thread like every other iCloud request), then keep it in the database."""
+        if not self.syncer:
+            self.favoriteSet.emit(asset_id, not value, t("Not signed in to iCloud"))
+            return
+        try:
+            self.syncer.remote.set_favorite(asset_id, value)
+        except KeyError:
+            self.favoriteSet.emit(asset_id, not value, t("This photo is no longer in iCloud"))
+            return
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Couldn't change the favourite in iCloud: %s", brief(exc))
+            self.favoriteSet.emit(asset_id, not value, brief(exc))
+            return
+        try:
+            self.state.set_favorite(asset_id, value)
+        except Exception:  # noqa: BLE001
+            log.warning("Couldn't keep the favourite in the database", exc_info=True)
+        self.favoriteSet.emit(asset_id, value, "")
 
     @Slot(list)
     def trash_drive_paths(self, paths: list) -> None:

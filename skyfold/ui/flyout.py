@@ -544,6 +544,7 @@ class Flyout(QWidget):
     setup = Signal()
     findMy = Signal()
     serviceClicked = Signal(str)  # "photos" | "drive" | "notes"
+    folderClicked = Signal(str)  # the folder of "photos" | "drive" | "notes"
     quitApp = Signal()
     openUpdate = Signal()
 
@@ -824,11 +825,11 @@ class Flyout(QWidget):
         if s.get("notes_enabled"):
             choices.append(("notes", t("Notes")))
         if len(choices) == 1:
-            self.serviceClicked.emit("photos")
+            self.folderClicked.emit("photos")
             return
         menu = QMenu(self)
         for key, label in choices:
-            menu.addAction(label, lambda k=key: self.serviceClicked.emit(k))
+            menu.addAction(label, lambda k=key: self.folderClicked.emit(k))
         menu.exec(self.open_btn.mapToGlobal(self.open_btn.rect().topLeft()) - QPoint(0, menu.sizeHint().height()))
 
     def apply_palette(self, palette: dict[str, str]) -> None:

@@ -4,6 +4,17 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Added
+- **A Photos window, as on an iPad.** Click *Photos* in the panel (or *Photos* in the tray menu): your synced photos and videos in an edge-to-edge grid, oldest at the top and the newest at the bottom, with *Years*, *Months* and *All Photos*. The sidebar has *Recently added* (by when a photo reached iCloud, so an old photo scanned today is there too), *Favourites*, *Videos*, *Live Photos*, *Screenshots* and your albums. `Ctrl` + mouse wheel (or `Ctrl +` / `Ctrl -`) makes the photos larger or smaller around the one under the mouse; *Search* finds file names, months, years, albums and kinds.
+- **The viewer** shows a photo large (click it to see only the photo, on black), steps with the arrow keys or the strip below, and its *Info* says when it was taken, its size, its albums and where its files are on this PC (a Live Photo's photo and video both). *Play* opens a video or a Live Photo's video in your usual player; *Show in folder* and *Open* do what they say.
+- **The heart works both ways.** Mark a photo as a favourite here and it is a favourite on your iPhone too (and the other way round). If iCloud can't be told, the heart goes back and you're told why.
+- **Delete from the Photos window** asks first (*Cancel* is the default), then moves the files to the Recycle Bin, exactly as deleting them in the folder would, so iCloud gets them in *Recently Deleted* as before (or keeps them, if you chose that in Settings).
+- Pictures come from Windows itself (the previews File Explorer shows), so the window takes no extra disk space and Skyfold stays the same size. HEIC photos need Microsoft's free *HEIF Image Extensions*, which most Windows 11 PCs already have; the window says so if they're missing.
+
+### Changed
+- After this update Skyfold reads your photo library once in full (nothing is downloaded again), to learn each photo's favourite, date added, size and length. From then on these come with every sync.
+- The panel's folder button opens the folders again for Photos, iCloud Drive and Notes; a click on the *Photos* row opens the Photos window.
+
 ## [1.0.30] - 2026-11-24
 
 ### Changed

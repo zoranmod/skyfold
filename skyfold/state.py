@@ -6,6 +6,10 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .remote import AssetInfo
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS files (
@@ -32,6 +36,17 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS album_links (
     rel_path TEXT PRIMARY KEY,
     asset_id TEXT NOT NULL
+);
+-- What the Photos window shows besides the files (favourite, when added, size, length,
+-- screenshot), as iCloud last said. Not needed for syncing.
+CREATE TABLE IF NOT EXISTS asset_info (
+    asset_id   TEXT PRIMARY KEY,
+    favorite   INTEGER NOT NULL DEFAULT 0,
+    added      TEXT,
+    width      INTEGER,
+    height     INTEGER,
+    duration   REAL,
+    screenshot INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS activity (
     id   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,6 +190,48 @@ class State:
                 self._db.execute("SELECT ts, kind, text, target FROM activity ORDER BY id DESC LIMIT ?", (limit,))
             )
 
+    # what the Photos window shows ------------------------------------------
+    def set_infos(self, infos: dict[str, "AssetInfo"]) -> None:
+        """Keep iCloud's details of these assets (favourite, added, size, length, screenshot)."""
+        rows = [(aid, int(i.favorite), i.added.isoformat() if i.added else None, i.width, i.height, i.duration,
+                 int(i.screenshot)) for aid, i in infos.items() if i is not None]
+        if not rows:
+            return
+        with self._lock:
+            self._db.executemany(
+                "INSERT OR REPLACE INTO asset_info(asset_id, favorite, added, width, height, duration, screenshot) "
+                "VALUES(?,?,?,?,?,?,?)", rows)
+
+    def drop_infos(self, asset_ids: set[str]) -> None:
+        with self._lock:
+            self._db.executemany("DELETE FROM asset_info WHERE asset_id=?", [(a,) for a in asset_ids])
+
+    def set_favorite(self, asset_id: str, value: bool) -> None:
+        with self._lock:
+            self._db.execute("INSERT INTO asset_info(asset_id, favorite) VALUES(?, ?) "
+                             "ON CONFLICT(asset_id) DO UPDATE SET favorite=excluded.favorite", (asset_id, int(value)))
+
+    def library(self) -> list[tuple]:
+        """Every synced photo and video for the Photos window, oldest first: (asset_id, resource_key,
+        rel_path, size, is_video, asset_date, favorite, added, width, height, duration, screenshot).
+        One row per file: a Live Photo has its photo and its video."""
+        with self._lock:
+            return self._db.execute(
+                "SELECT f.asset_id, f.resource_key, f.rel_path, f.size, f.is_video, f.asset_date, "
+                "COALESCE(i.favorite, 0), i.added, i.width, i.height, i.duration, COALESCE(i.screenshot, 0) "
+                "FROM files f LEFT JOIN asset_info i ON i.asset_id = f.asset_id "
+                "ORDER BY f.asset_date, f.asset_id").fetchall()
+
+    def library_fingerprint(self) -> tuple:
+        """Changes whenever a file, a favourite or an album link changes (for the Photos window)."""
+        with self._lock:
+            return (
+                self._db.execute("SELECT COUNT(*), MAX(synced_at), COALESCE(SUM(LENGTH(rel_path)), 0) "
+                                 "FROM files").fetchone()
+                + self._db.execute("SELECT COUNT(*), COALESCE(SUM(favorite), 0) FROM asset_info").fetchone()
+                + self._db.execute("SELECT COUNT(*) FROM album_links").fetchone()
+            )
+
     # album links -----------------------------------------------------------
     def album_links(self) -> dict[str, str]:
         with self._lock:
@@ -192,6 +249,6 @@ class State:
         """Forget everything (used when switching account or folder)."""
         with self._lock:
             # (what the upload knows about files on this PC stays: it is about those files, not the folder)
-            self._db.executescript("DELETE FROM files; DELETE FROM excluded; DELETE FROM album_links; "
+            self._db.executescript("DELETE FROM files; DELETE FROM excluded; DELETE FROM album_links; DELETE FROM asset_info; "
                                    "DELETE FROM meta WHERE key NOT LIKE 'drive_%' AND key NOT LIKE 'upload_file:%' "
                                    "AND key NOT LIKE 'upload_legacy:%';")
