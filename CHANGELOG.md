@@ -4,6 +4,8 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [1.0.29] - 2026-11-24
+
 ### Added
 - **Connection diagnostics for bug reports** (**Settings → General**). *Record for 30 minutes* writes `connections.log` with only the kind of each request, Apple's status code and how long it took: never a name, a file name, an address, an id, a cookie or a password. It stops by itself after 30 minutes (also if the PC slept), at sign-out and when Skyfold quits, and *Delete* removes the file.
 
