@@ -707,6 +707,10 @@ class Controller(QObject):
         the worker's thread, and closing a window from there froze or crashed Skyfold (1.0.27)."""
         if apple_id != self._notes_account:
             self._close_notes()
+            if self._notes_account:  # another account (not the first sign-in): diagnostics stop
+                from . import netdiag
+
+                netdiag.stop()
         self._notes_account = apple_id
 
     def _forget_login_api(self, *_args) -> None:
@@ -716,6 +720,9 @@ class Controller(QObject):
     def sign_out(self) -> None:
         _close_stale_settings(self)
         self._close_notes()
+        from . import netdiag
+
+        netdiag.stop()  # connection diagnostics end with the account
         self._login_api = None
         self.worker.cancel()  # stop the running pass now; the rest happens on the worker thread
         # Right now, not queued: a sign-in made while the worker is still busy must never be undone by it.
@@ -873,6 +880,9 @@ def main() -> int:
 
     setup_logging()
     setup_crash_log()
+    from . import netpolicy
+
+    netpolicy.install()  # Skyfold's own requests: Apple's iCloud and GitHub's updates only
 
     def _log_uncaught(kind, value, tb) -> None:
         log.error("Unexpected error", exc_info=(kind, value, tb))

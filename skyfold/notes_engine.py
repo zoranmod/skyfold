@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
+from . import motw
 from .config import place_new
 from .engine import Callbacks, Cancelled, SyncError, _is_link, create_marker, known_missing, inside_root, marker_present, now_iso
 from .i18n import t
@@ -185,6 +186,7 @@ class ICloudNotes:
                         log.info("Note image: the full size couldn't be fetched (%s); its preview is used",
                                  brief(exc))
                         path = raw.download_asset_to(preview, directory)
+                    _mark_download(path, directory)
                     ident = _file_identity(Path(path))
                     if ident:
                         made.add(ident)
@@ -206,7 +208,11 @@ class ICloudNotes:
             if not exporter.export(record, output_dir=str(out_dir), filename=filename):
                 raise SyncError(t("Note has no content"))
             page = out_dir / (filename if filename.lower().endswith(".html") else filename + ".html")
-            fetch = lambda url, folder: raw.download_asset_to(url, str(folder))  # noqa: E731
+            def fetch(url, folder):
+                path = raw.download_asset_to(url, str(folder))
+                _mark_download(path, folder)
+                return path
+
             if _SKETCH_FALLBACKS and page.exists():
                 upgrade_sketches(page, dict(_SKETCH_FALLBACKS), fetch, made=made, dirs=dirs)
             if page.exists() and "public.hei" in page.read_text(encoding="utf-8", errors="replace"):
@@ -214,6 +220,17 @@ class ICloudNotes:
             if page.exists():
                 browser_images(page, made=made, dirs=dirs)
         self._call(run)
+
+
+def _mark_download(path, directory) -> None:
+    """Mark an attachment just downloaded from iCloud as coming from the internet: only the one
+    file the download returned, a plain file right in the folder it was downloaded into."""
+    try:
+        p = Path(path)
+        if p.is_file() and not p.is_symlink() and p.resolve().parent == Path(directory).resolve():
+            motw.mark(p)
+    except (OSError, TypeError, ValueError):
+        pass
 
 
 _PATCHED = False

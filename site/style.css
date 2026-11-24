@@ -199,6 +199,7 @@ h2 { margin-top: 10px; font: 700 clamp(32px, 4vw, 48px)/1.08 var(--display); let
 .privacy > div { padding: 24px; border-radius: var(--radius); background: var(--card); border: 1px solid var(--line) }
 .privacy h3 { font-size: 17px; font-weight: 650 }
 .privacy p { margin-top: 8px; font-size: 15px; color: var(--muted) }
+.privacy > div:last-child:nth-child(odd) { grid-column: 1 / -1 }
 
 /* Install */
 .steps { margin-top: 44px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; counter-reset: s; list-style: none; padding: 0 }

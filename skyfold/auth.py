@@ -15,6 +15,7 @@ from .config import PRIVATE_DIR, SESSION_DIR
 
 SIGNED_OUT = PRIVATE_DIR / "signed-out"  # set by Sign out; a session left behind is then never used
 from .i18n import t
+from .netpolicy import NetworkPolicyBlocked
 from .safelog import value
 
 log = logging.getLogger(__name__)
@@ -169,6 +170,9 @@ def _serialize_session_saves() -> None:
     requests at once, so those writes must take turns or the saved sign-in could be corrupted."""
     from pyicloud.session import PyiCloudSession
 
+    from . import netpolicy
+
+    netpolicy.install()  # before the first request: only Apple's iCloud (and GitHub's updates)
     original = PyiCloudSession._save_session_data
     if getattr(original, "_skyfold_locked", False):
         return
@@ -262,6 +266,8 @@ def restore(apple_id: str) -> Any | None:
         api.authenticate()
     except (PyiCloudConnectionException, RequestsConnectionError, Timeout) as exc:
         raise Offline(_describe(exc)) from exc
+    except NetworkPolicyBlocked as exc:  # not "sign in again": the address was refused here
+        raise Offline(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - anything else means "sign in again"
         # pyicloud falls back to a password login when validating the token fails, and a 5xx there
         # then ends as "No password set": an outage seen on the way is still an outage
@@ -316,6 +322,9 @@ def start_login(apple_id: str, password: str) -> LoginStep:
         # token stays, so a trusted PC isn't asked for a 2FA code again.
         api.session.data.pop("session_token", None)
         api.authenticate(force_refresh=True)
+    except NetworkPolicyBlocked as exc:
+        log.warning("Sign-in: a request to an unknown address was blocked")
+        raise LoginError(str(exc)) from exc
     except ex.PyiCloudAcceptTermsException as exc:
         log.warning("Sign-in: Apple's new terms must be accepted first")
         raise LoginError(t("Apple has updated its terms. Accept them on your iPhone (Settings) or at "
