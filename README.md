@@ -181,6 +181,9 @@ Check the Windows Recycle Bin, or "Recently Deleted" in Photos / iCloud Drive (i
 **Can I move my photos folder later?**
 Yes, in Settings. Skyfold also follows files you move around *inside* the folder.
 
+**Can I edit my notes in Skyfold?**
+No. Skyfold shows your notes read-only. Edit them on your iPhone, iPad or Mac; the change reaches the PC with the next sync. Locked notes can't be read, so Skyfold only lists their titles.
+
 **Can I use it on two PCs?**
 Yes, each PC has its own session and sync database.
 
