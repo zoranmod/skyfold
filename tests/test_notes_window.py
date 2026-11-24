@@ -53,7 +53,7 @@ def test_only_the_note_content_is_kept_and_nothing_runs_or_loads():
     assert "<audio" not in body and "<object" not in body
     assert "_assets/n1/memo.m4a" in body and "_assets/n1/doc.pdf" in body  # as links to open
     assert 'href="https://apple.com"' in body
-    assert clean.hidden == 2 and len(clean.images) == 1 + 3 and "skyfold:more:0" in body
+    assert clean.hidden == 0 and len(clean.images) == 1 + 5 and "skyfold:more" not in body  # every page
     full = nv.note_html(page(), all_pages=True)
     assert full.hidden == 0 and len(full.images) == 1 + 5 and "skyfold:more" not in full.body
 
@@ -64,7 +64,8 @@ def test_pictures_reach_the_viewer_only_as_ids():
     assert srcs and all(src.startswith("sfimg:") for src in srcs)
 
 
-def test_more_pages_of_one_scan_only():
+def test_more_pages_of_one_scan_only(monkeypatch):
+    monkeypatch.setattr(nv, "SCAN_PAGES", 3)  # (60 in Skyfold: only a very long scan has a "show more")
     two = scan("a.pdf", 8) + scan("b.pdf", 8)
     first = nv.note_html(page(scans=two))
     assert first.hidden == 10 and "skyfold:more:0" in first.body and "skyfold:more:1" in first.body
@@ -155,8 +156,10 @@ def qapp():
 def _defaults():
     from skyfold.ui.notes_window import NotesWindow
     NotesWindow.zoom, NotesWindow.sort, NotesWindow.own_theme = 1.0, "new", None
+    NotesWindow.resume = None
     yield
     NotesWindow.zoom, NotesWindow.sort, NotesWindow.own_theme = 1.0, "new", None
+    NotesWindow.resume = None
 
 
 def pump(qapp, cond, timeout=5.0):
@@ -491,7 +494,7 @@ def test_assets_folder_that_is_a_link_is_refused(tmp_path, monkeypatch):
     assert nv.resolve_asset(root, pg, "_assets/n1/p.png") is None
 
 
-def test_more_pages_never_show_another_picture(qapp, library):
+def test_more_pages_never_show_another_picture(qapp, library, monkeypatch):
     """After "show more" the same picture id may point to another file: the right one is shown."""
     from PySide6.QtCore import QUrl
     from PySide6.QtGui import QColor, QImage, QTextDocument
@@ -509,13 +512,16 @@ def test_more_pages_never_show_another_picture(qapp, library):
     (root / "Home" / "Groceries.html").write_text(
         f'<div class="note-content"><h1>Groceries</h1><div class="sf-pdf">{pages}</div>'
         f'<img src="../_assets/scan/blue.png"></div>', encoding="utf-8")
+    monkeypatch.setattr(nv, "SCAN_PAGES", 3)
     w = window(qapp, library)
     load = lambda n: w.reader.loadResource(QTextDocument.ImageResource, QUrl(f"sfimg:{n}"))  # noqa: E731
     assert load(3).pixelColor(5, 5) == QColor("#0000ff")  # three pages, then the blue picture
+    assert "Show 2 more pages" in w.reader.toPlainText()
     w._on_link(QUrl("skyfold:more:0"))
     qapp.processEvents()  # the note is shown again right after the click is handled
     assert load(3).pixelColor(5, 5) == QColor("#ff0000")  # now the fourth page of the scan
-    assert load(5).pixelColor(5, 5) == QColor("#0000ff")
+    assert load(5).pixelColor(5, 5) == QColor("#0000ff")  # all 5 pages now, as the link said
+    assert "more pages" not in w.reader.toPlainText()
     w.close()
 
 
@@ -548,7 +554,7 @@ def test_many_big_pictures_get_less_sharp_then_a_note(qapp, library, monkeypatch
     monkeypatch.setattr(nw, "IMAGE_BUDGET", w.reader._bytes)  # full: a visible note instead of the picture
     w.reader._cache.clear()
     note = w.reader.loadResource(QTextDocument.ImageResource, QUrl("sfimg:0"))
-    assert note is not None and not note.isNull() and note.height() < 200
+    assert note is not None and not note.isNull() and note.devicePixelRatio() == 0.5  # cheap, picture-sized
     assert not w.reader._cache  # not kept: tried again next time
     w.close()
 
@@ -665,3 +671,52 @@ def test_account_change_closes_notes_on_the_ui_thread_and_only_for_another_accou
         th.quit()
         th.wait()
     assert rec.closed_in == [True, True]  # same account at start: kept; another one, and signed out: closed
+
+
+def test_a_long_scan_opens_whole_and_loads_pages_as_they_come_into_view(qapp, library, monkeypatch):
+    from PySide6.QtGui import QColor, QImage
+    st, root = library
+    d = root / "_assets" / "long"
+    d.mkdir()
+    img = QImage(600, 850, QImage.Format_RGB32)
+    img.fill(QColor("#ffffff"))
+    for i in range(44):
+        img.save(str(d / f"p{i}.png"))
+    pages = "".join(f'<img class="sf-page" src="../_assets/long/p{i}.png">' for i in range(44))
+    (root / "Home" / "Groceries.html").write_text(
+        f'<div class="note-content"><h1>Groceries</h1><div class="sf-pdf">{pages}</div></div>', encoding="utf-8")
+    w = window(qapp, library)
+    w.resize(1000, 700)
+    calls = []
+    real = w.reader.loadResource
+    monkeypatch.setattr(w.reader, "loadResource", lambda kind, url: (calls.append(url.toString()), real(kind, url))[1])
+    w.current_key = None
+    w._show_current()
+    w.reader.viewport().repaint()
+    qapp.processEvents()
+    assert "more pages" not in w.reader.toPlainText()  # all 44 pages, no "show more"
+    assert 0 < len(set(calls)) < 10  # only the pages in view were read
+    w.reader.verticalScrollBar().setValue(w.reader.verticalScrollBar().maximum())
+    w.reader.viewport().repaint()
+    qapp.processEvents()
+    assert "sfimg:43" in calls  # the last page, once scrolled to
+    w.close()
+
+
+def test_the_window_comes_back_where_it_was_until_sign_out(qapp, library):
+    from PySide6.QtCore import Qt
+    from skyfold.ui.notes_window import NotesWindow
+    w = window(qapp, library)
+    for it in w._folder_items():
+        if it.data(0, Qt.UserRole) == "Home/Private":
+            w.folders.setCurrentItem(it)
+    assert ids(w) == ["d"]
+    w.close()
+    assert NotesWindow.resume and NotesWindow.resume["id"] == "d"
+    w2 = window(qapp, library)
+    assert w2.folder == "Home/Private" and w2.current == "d" and "my private thoughts" in w2.reader.toPlainText()
+    w2.clear()  # Sign out / another Apple ID
+    assert NotesWindow.resume is None
+    w3 = window(qapp, library)
+    assert w3.folder == "" and ids(w3)[0] == "g"
+    w3.close()

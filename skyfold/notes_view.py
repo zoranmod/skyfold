@@ -28,7 +28,7 @@ from .notes_engine import ASSETS, _is_junction
 # ticked one isn't drawn as a colour emoji
 CHECK_ON = '<span class="sf-box sf-done">☑</span> '
 CHECK_OFF = '<span class="sf-box">☐</span> '
-SCAN_PAGES = 3  # pages of a scanned document shown at first; "show more" adds this many each time
+SCAN_PAGES = 60  # pages of a scanned document shown at first (pictures load as you scroll); "show more": all
 MAX_PAGE_BYTES = 8_000_000  # a note page bigger than this is shown from its browser copy only
 IMAGE_SCHEME = "sfimg"
 

@@ -115,6 +115,9 @@ def test_activity_says_moved_updated_or_downloaded(env):
     r.put("n1", "Ivana", folder="F3", body="edited")
     s.run()
     assert seen[-1] == ("download", "Notes: updated Ivana")
+    r.put("n1", "Ivana Stanić", folder="F3", body="edited")  # renamed (a new first line)
+    s.run()
+    assert seen[-1] == ("download", "Notes: renamed Ivana to Ivana Stanić")
     r.put("n2", "A")
     r.put("n3", "B")
     s.run()
@@ -356,3 +359,8 @@ def test_restyle_html_only_touches_old_style_block():
     assert out is not None and "<style>user</style>hi" in out and ne.NOTE_CSS.strip() in out
     assert ne.restyle_note_html(out) is None
     assert ne.restyle_note_html("<html>no style</html>") is None
+
+
+def test_drive_says_updated_for_a_newer_version():
+    from skyfold.ui.flyout import split_activity
+    assert split_activity("Drive: updated: Work/Budget.xlsx", "download") == ("Budget.xlsx", "Updated · iCloud Drive/Work")

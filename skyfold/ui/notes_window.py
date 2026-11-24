@@ -48,7 +48,8 @@ OPENABLE = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".heic", ".heif", ".tif", "
             ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".pages", ".numbers", ".key", ".vcf"}
 HIGHLIGHTS = ("#ba55d3", "#ff5252", "#ffb74d", "#80cbc4", "#64b5f6")  # Apple's five highlight colours
 MAX_MARKS = 300  # search words marked in one note
-IMAGE_BUDGET = 256_000_000  # bytes of decoded pictures for the open note (then less sharp, then a note)
+IMAGE_BUDGET = 400_000_000  # bytes of decoded pictures for the open note (then less sharp, then a note)
+SHARP_SHARE = 0.4  # pictures are decoded for this screen's sharpness until this share of it is used
 RETRY_INDEX = 30.0  # seconds before pages that couldn't be read are tried again
 RETRY_NOTE = 5.0
 
@@ -402,10 +403,10 @@ class _Reader(QTextBrowser):
             scale = dpr
             free = IMAGE_BUDGET - self._bytes
             need = lambda s: 4 * (shown * s / disp.width()) ** 2 * raw.width() * raw.height()  # noqa: E731
-            if need(scale) > free:
+            if self._bytes + need(scale) > IMAGE_BUDGET * SHARP_SHARE:
                 scale = 1.0  # a note with very many big pictures: the rest less sharp, not missing
             if need(scale) > free:
-                return self._placeholder(room, dpr)
+                return self._placeholder(shown, shown * disp.height() / disp.width())
             k = shown * scale / disp.width()
             reader.setScaledSize(QSize(max(1, round(raw.width() * k)), max(1, round(raw.height() * k))))
         elif raw.isValid() or 4 * 4000 * 4000 > IMAGE_BUDGET - self._bytes:
@@ -428,11 +429,12 @@ class _Reader(QTextBrowser):
         self._cache[key] = img
         return img
 
-    def _placeholder(self, room: int, dpr: float) -> QImage:
-        """Shown instead of a picture that doesn't fit in memory any more (not kept)."""
-        w, h = int(min(room, 520)), 64
-        img = QImage(int(w * dpr), int(h * dpr), QImage.Format_RGB32)
-        img.setDevicePixelRatio(dpr)
+    def _placeholder(self, width: float, height: float) -> QImage:
+        """Shown instead of a picture that doesn't fit in memory any more (not kept), as big as the
+        picture would be, drawn at half sharpness to stay small."""
+        w, h = max(120, int(width)), max(64, int(height))
+        img = QImage(max(1, w // 2), max(1, h // 2), QImage.Format_RGB32)
+        img.setDevicePixelRatio(0.5)
         img.fill(QColor(self.win.c["hover"]))
         p = QPainter(img)
         p.setPen(QColor(self.win.c["muted"]))
@@ -452,6 +454,7 @@ class NotesWindow(_Dialog):
     sort = "new"  # new | old | title
     own_theme: str | None = None  # None: as Skyfold; or light | dark | oled for this window only
     THEMES = (None, "light", "dark", "oled")
+    resume: dict | None = None  # folder, note and scroll position when the window was last closed
     ZOOMS = (0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0, 2.4)
 
     def __init__(self, palette: dict[str, str], source) -> None:
@@ -476,6 +479,12 @@ class NotesWindow(_Dialog):
         self._note_failed = 0.0  # when the open note couldn't be read (0 = it could)
         self.folder = ""  # "" = all notes
         self._hl_query = ""
+        self._resume_id: str | None = None
+        self._resume_scroll: int | None = None
+        r = NotesWindow.resume
+        if r:  # back where you were
+            self.folder, self.current = r.get("folder") or "", r.get("id")
+            self._resume_id, self._resume_scroll = r.get("id"), r.get("scroll")
 
         self.indexer = _Indexer()
         self.indexer.batch.connect(self._on_batch)
@@ -750,7 +759,8 @@ class NotesWindow(_Dialog):
         chosen = items.get(keep) or top
         while chosen is not top and chosen.parent() is not None and not chosen.parent().isExpanded():
             chosen.parent().setExpanded(True)
-        self.folder = chosen.data(0, FOLDER_PATH)
+        if keep in items or self.rows:  # (nothing loaded yet: the folder to come back to is kept)
+            self.folder = chosen.data(0, FOLDER_PATH)
         self.folders.setCurrentItem(chosen)
         self.folders.blockSignals(False)
 
@@ -810,7 +820,7 @@ class NotesWindow(_Dialog):
     def _fill_list(self) -> None:
         if self.closed:
             return
-        keep = self.current
+        keep = self.current or self._resume_id
         shown = self._visible_rows()
         self.notes.blockSignals(True)
         self.notes.clear()
@@ -908,17 +918,48 @@ class NotesWindow(_Dialog):
             self._empty(t("This note can't be read right now. Skyfold tries again in a moment."))
             return
         clean = nv.note_html(text, self.shown_pages)
+        clean.body = self._sized(page, clean)
         scroll = self.reader.verticalScrollBar().value() if (same_note and self.reader.page == page) else 0
+        if self._resume_scroll is not None and self._resume_id == row.id:
+            scroll = self._resume_scroll  # where you were when the window was last closed
+        self._resume_scroll = None
+        if self._resume_id == row.id:
+            self._resume_id = None
         font = QFont(QApplication.font())
         base = font.pointSizeF() if font.pointSizeF() > 0 else 10.0
         font.setPointSizeF(base * 1.1 * NotesWindow.zoom)
         self.reader.show_page(page, clean, keep_pictures=same_note, css=self._css(), font=font)
         self._fitted_width = self.reader.viewport().width()
         self.reader.verticalScrollBar().setValue(scroll)
+        if scroll:
+            QTimer.singleShot(0, lambda v=scroll: self.reader.verticalScrollBar().setValue(v))  # after layout
         self.empty.hide()
         self.reader.show()
         self.act_browser.setEnabled(True)
         self._highlight(jump=not same_note or self.search.text() != self._hl_query)
+
+    def _sized(self, page: Path, clean: nv.Page) -> str:
+        """Every picture with its width and height on screen: Qt then lays the note out at once and
+        asks for a picture only when it is drawn (a scan with dozens of pages opens quickly)."""
+        if not clean.images or self.root is None:
+            return clean.body
+        room = max(200, self.reader.viewport().width() - 48)
+        body = clean.body
+        for n, ref in enumerate(clean.images):
+            f = nv.resolve_asset(self.root, page, ref)
+            if f is None:
+                continue
+            reader = QImageReader(str(f))
+            reader.setAutoTransform(True)
+            raw = reader.size()
+            if not raw.isValid() or raw.width() <= 0 or raw.height() <= 0:
+                continue
+            disp = raw.transposed() if reader.transformation() & QImageIOHandler.TransformationRotate90 else raw
+            w = min(room, disp.width() * NotesWindow.zoom)
+            h = w * disp.height() / disp.width()
+            body = body.replace(f'src="{nv.IMAGE_SCHEME}:{n}"',
+                                f'src="{nv.IMAGE_SCHEME}:{n}" width="{round(w)}" height="{round(h)}"', 1)
+        return body
 
     def _empty(self, text: str, browser: bool = False) -> None:
         self.reader.hide()
@@ -986,7 +1027,7 @@ class NotesWindow(_Dialog):
         ref = url.toString()
         if ref.startswith("skyfold:more:") and ref[13:].isdigit():
             n = int(ref[13:])
-            self.shown_pages[n] = self.shown_pages.get(n, nv.SCAN_PAGES) + nv.SCAN_PAGES  # only that scan
+            self.shown_pages[n] = 1_000_000  # all of that scan's pages, as the link says
             self.current_key = None
             QTimer.singleShot(0, self._show_current)  # not inside Qt's own handling of the click
             return
@@ -1134,8 +1175,12 @@ class NotesWindow(_Dialog):
             self.notes.viewport().update()
 
     # --- closing ------------------------------------------------------------------------------
-    def _forget(self) -> None:
-        """Drop every bit of note text and every picture the window holds (any way of closing)."""
+    def _forget(self, remember: bool = True) -> None:
+        """Drop every bit of note text and every picture the window holds (any way of closing).
+        Only which folder and note were open (and how far down) is kept, to come back to."""
+        if not self.closed and remember and self.current:
+            NotesWindow.resume = {"folder": self.folder, "id": self.current,
+                                  "scroll": self.reader.verticalScrollBar().value()}
         self.closed = True
         self.poll.stop()
         self._debounce.stop()
@@ -1169,5 +1214,6 @@ class NotesWindow(_Dialog):
 
     def clear(self) -> None:
         """Signed out or another Apple ID: nothing of the old notes stays on screen or in memory."""
-        self._forget()
+        self._forget(remember=False)
+        NotesWindow.resume = None
         self.close()

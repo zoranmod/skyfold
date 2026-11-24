@@ -548,6 +548,9 @@ class Controller(QObject):
         """Signed out or another Apple ID: the Notes window closes, nothing of the old notes stays."""
         from shiboken6 import isValid
 
+        from .ui.notes_window import NotesWindow
+
+        NotesWindow.resume = None  # where the last window was isn't kept either
         win = self._dialogs.pop("notes", None)
         if win is not None and isValid(win):
             win.clear()

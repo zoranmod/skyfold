@@ -160,6 +160,20 @@ def test_changed_in_icloud_is_downloaded(env):
     assert r.downloaded == 1 and (root / "a.txt").read_bytes() == b"version2"
 
 
+def test_activity_says_updated_for_a_changed_file_and_downloaded_for_a_new_one(env):
+    s, d, root, _ = env
+    seen = []
+    s.cb.activity = lambda kind, text, target="": seen.append(text)
+    d.put("a.txt", b"v1")
+    s.run()
+    assert "Drive: downloaded: a.txt" in seen
+    seen.clear()
+    d.put("a.txt", b"version2")
+    d.put("b.txt", b"new")
+    s.run()
+    assert "Drive: updated: a.txt" in seen and "Drive: downloaded: b.txt" in seen
+
+
 def test_changed_on_pc_replaces_icloud_copy(env):
     s, d, root, _ = env
     d.put("a.txt", b"v1")
