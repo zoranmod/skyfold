@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit, QLi
                                QTextBrowser, QTextEdit, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                                QWidget)
 
+from shiboken6 import isValid
+
 from ..i18n import t
 from ..notes_engine import local_datetime
 from .. import notes_view as nv
@@ -325,24 +327,41 @@ class _Reader(QTextBrowser):
         self._cache.clear()
         self._bytes = 0
 
-    def show_page(self, page: Path, clean: nv.Page, keep_pictures: bool) -> None:
+    def _new_document(self, css: str = "", font: QFont | None = None, body: str = "") -> None:
+        """Every note gets a document of its own. The old one is never emptied in place: Qt may still
+        be laying it out, painting it or answering a screen reader about it, so it is let go and
+        deleted once Qt is done with whatever it was doing (emptying it in place crashed Qt)."""
+        self.setExtraSelections([])
+        doc = QTextDocument(self)  # its pictures are asked from this viewer (loadResource)
+        if css:
+            doc.setDefaultStyleSheet(css)
+        if font is not None:
+            doc.setDefaultFont(font)
+        doc.setHtml(body)
+        old = self.document()
+        self.setDocument(doc)
+        if old is not None and old is not doc and isValid(old) and old.parent() is self:
+            old.deleteLater()  # (Qt itself deletes the first, built-in one)
+
+    def show_page(self, page: Path, clean: nv.Page, keep_pictures: bool, css: str = "",
+                  font: QFont | None = None) -> None:
         if self.page != page or not keep_pictures:
             self._drop_cache()
         self.page = page
         self.images = list(clean.images)
-        self.setHtml(clean.body)
+        self._new_document(css, font, clean.body)
 
     def clear_note(self) -> None:
         self.page = None
         self.images = []
         self._drop_cache()
-        self.document().clear()
-        self.setHtml("")
+        self._new_document()
 
     def wheelEvent(self, e) -> None:  # noqa: N802
         if e.modifiers() & Qt.ControlModifier:  # Ctrl + wheel: zoom, as in a browser
             if e.angleDelta().y():
-                self.win.set_zoom(1 if e.angleDelta().y() > 0 else -1)
+                step = 1 if e.angleDelta().y() > 0 else -1
+                QTimer.singleShot(0, lambda: self.win.set_zoom(step))  # after Qt is done with this event
             e.accept()
             return
         super().wheelEvent(e)
@@ -890,13 +909,10 @@ class NotesWindow(_Dialog):
             return
         clean = nv.note_html(text, self.shown_pages)
         scroll = self.reader.verticalScrollBar().value() if (same_note and self.reader.page == page) else 0
-        doc = self.reader.document()
-        doc.setDefaultStyleSheet(self._css())
         font = QFont(QApplication.font())
         base = font.pointSizeF() if font.pointSizeF() > 0 else 10.0
         font.setPointSizeF(base * 1.1 * NotesWindow.zoom)
-        doc.setDefaultFont(font)
-        self.reader.show_page(page, clean, keep_pictures=same_note)
+        self.reader.show_page(page, clean, keep_pictures=same_note, css=self._css(), font=font)
         self._fitted_width = self.reader.viewport().width()
         self.reader.verticalScrollBar().setValue(scroll)
         self.empty.hide()
@@ -972,7 +988,7 @@ class NotesWindow(_Dialog):
             n = int(ref[13:])
             self.shown_pages[n] = self.shown_pages.get(n, nv.SCAN_PAGES) + nv.SCAN_PAGES  # only that scan
             self.current_key = None
-            self._show_current()
+            QTimer.singleShot(0, self._show_current)  # not inside Qt's own handling of the click
             return
         if url.scheme().lower() in ("http", "https", "mailto"):
             QDesktopServices.openUrl(url)

@@ -513,6 +513,7 @@ def test_more_pages_never_show_another_picture(qapp, library):
     load = lambda n: w.reader.loadResource(QTextDocument.ImageResource, QUrl(f"sfimg:{n}"))  # noqa: E731
     assert load(3).pixelColor(5, 5) == QColor("#0000ff")  # three pages, then the blue picture
     w._on_link(QUrl("skyfold:more:0"))
+    qapp.processEvents()  # the note is shown again right after the click is handled
     assert load(3).pixelColor(5, 5) == QColor("#ff0000")  # now the fourth page of the scan
     assert load(5).pixelColor(5, 5) == QColor("#0000ff")
     w.close()
@@ -608,3 +609,18 @@ def test_sign_out_holds_even_if_its_mark_cannot_be_written(tmp_path, monkeypatch
         m.setattr(Path, "write_text", refuse)
         auth.logout()
     assert auth.signed_out() and not (tmp_path / "signed-out").exists()
+
+
+def test_crash_log_is_set_up(tmp_path, monkeypatch):
+    import faulthandler
+    from skyfold import app
+    calls = []
+    monkeypatch.setattr(app, "LOG_FILE", tmp_path / "skyfold.log")
+    monkeypatch.setattr(faulthandler, "enable", lambda **k: calls.append(k))
+    monkeypatch.setattr(app, "_CRASH_FILE", None)
+    app.setup_crash_log()
+    try:
+        assert calls and calls[0]["all_threads"] and calls[0]["file"] is app._CRASH_FILE
+        assert "started" in (tmp_path / "crash.log").read_text(encoding="utf-8")
+    finally:
+        app._CRASH_FILE.close()

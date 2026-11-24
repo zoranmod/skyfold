@@ -4,6 +4,10 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Fixed
+- **The Notes window could crash Skyfold** while you were reading notes. Each note now gets a fresh page of its own instead of the old one being emptied while Qt might still be using it, and clicking *Show more pages* or zooming with the mouse wheel no longer reloads the note in the middle of Qt's handling of that click or scroll.
+- **If Skyfold ever crashes, it now says where.** A `crash.log` file next to `skyfold.log` (in `%LOCALAPPDATA%\Skyfold`) records which part of the program was running. It contains no note text, file contents or password; attach it to a bug report.
+
 ## [1.0.27] - 2026-11-24
 
 ### Added

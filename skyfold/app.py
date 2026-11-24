@@ -43,6 +43,28 @@ def setup_logging() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
+_CRASH_FILE = None  # kept open: Python writes to it when the program itself crashes
+
+
+def setup_crash_log() -> None:
+    """If Skyfold ever crashes inside Qt or Windows (not a Python error, which goes to the log), the
+    place where it happened is written to crash.log next to the log (function names, no content)."""
+    global _CRASH_FILE
+    import faulthandler
+    from datetime import datetime
+
+    path = LOG_FILE.parent / "crash.log"
+    try:
+        if path.exists() and path.stat().st_size > 300_000:
+            path.unlink()
+        _CRASH_FILE = open(path, "a", encoding="utf-8")
+        _CRASH_FILE.write(f"--- Skyfold {VERSION} started {datetime.now():%Y-%m-%d %H:%M:%S} ---\n")
+        _CRASH_FILE.flush()
+        faulthandler.enable(file=_CRASH_FILE, all_threads=True)
+    except Exception as exc:  # noqa: BLE001 - never stops Skyfold from starting
+        log.warning("Crash log unavailable: %s", exc)
+
+
 class _RedactEmails(logging.Filter):
     """Users attach the log to bug reports: never let an email address (the Apple ID), a cookie or a
     token into it."""
@@ -836,6 +858,7 @@ def main() -> int:
     listen_error = "" if server.listen(instance) else server.errorString()
 
     setup_logging()
+    setup_crash_log()
 
     def _log_uncaught(kind, value, tb) -> None:
         log.error("Unexpected error", exc_info=(kind, value, tb))
