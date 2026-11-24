@@ -4,6 +4,8 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [1.0.28] - 2026-11-24
+
 ### Changed
 - **Scanned documents open with all their pages** (up to 60; *Show more pages* then shows the rest at once, as many as it says). Pictures are loaded as they come into view, so a long scan still opens quickly.
 - **The Notes window comes back where you were.** Close it and open it again (while Skyfold runs) and it shows the same folder and note, scrolled to the same place. Sign out or another Apple ID forgets it.
