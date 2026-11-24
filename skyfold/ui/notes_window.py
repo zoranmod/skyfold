@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRectF, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFont, QImage, QImageReader,
+from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFont, QImage, QImageIOHandler, QImageReader,
                            QKeySequence, QPainter, QPalette, QPen, QShortcut, QTextCharFormat, QTextCursor,
                            QTextDocument)
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -229,8 +229,9 @@ class _Reader(QTextBrowser):
         if n >= len(self.images):
             return None
         dpr = self.devicePixelRatioF() or 1.0
-        room = max(200, min(1600, self.viewport().width() - 48))
-        key = (n, int(room * dpr))
+        room = max(200, self.viewport().width() - 48)
+        zoom = NotesWindow.zoom
+        key = (n, int(room * dpr), zoom)
         if key in self._cache:
             return self._cache[key]
         img = QImage()
@@ -238,9 +239,14 @@ class _Reader(QTextBrowser):
         if f is not None and f.is_file() and self._bytes < IMAGE_BUDGET:
             reader = QImageReader(str(f))
             reader.setAutoTransform(True)
-            size = reader.size()
-            if size.isValid() and size.width() > room * dpr:  # decoded at the size shown
-                reader.setScaledSize(QSize(int(room * dpr), max(1, int(size.height() * room * dpr / size.width()))))
+            raw = reader.size()  # as stored (a photo taken upright may be stored sideways)
+            disp = raw.transposed() if reader.transformation() & QImageIOHandler.TransformationRotate90 else raw
+            if raw.isValid() and disp.width() > 0:
+                # as wide as a browser shows it (one image pixel per screen point), times the zoom,
+                # never wider than the note; decoded at exactly that size for this screen
+                shown = min(room, disp.width() * zoom)
+                k = shown * dpr / disp.width()
+                reader.setScaledSize(QSize(max(1, round(raw.width() * k)), max(1, round(raw.height() * k))))
             img = reader.read()
             if not img.isNull():
                 if img.hasAlphaChannel():

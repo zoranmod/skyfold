@@ -397,3 +397,30 @@ def test_the_window_can_have_its_own_theme(qapp, library):
     w.apply_palette(theme.palette("oled"))  # Skyfold's theme changes: the window keeps its own
     assert w.c is theme.DARK and theme.DARK["text"] in w.reader.document().defaultStyleSheet()
     w.close()
+
+
+def test_pictures_follow_zoom_and_screen_scaling(qapp, library, monkeypatch):
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QColor, QImage, QTextDocument
+    from skyfold.ui.notes_window import NotesWindow
+    st, root = library
+    small = QImage(300, 200, QImage.Format_RGB32)
+    small.fill(QColor("#336699"))
+    small.save(str(root / "_assets" / "n1" / "photo.png"))
+    w = window(qapp, library)
+    monkeypatch.setattr(w.reader, "devicePixelRatioF", lambda: 2.0)
+    load = lambda: w.reader.loadResource(QTextDocument.ImageResource, QUrl("sfimg:0"))  # noqa: E731
+    img = load()
+    assert img.width() == 600 and img.deviceIndependentSize().width() == 300  # as big as in a browser
+    w.set_zoom(1)
+    w.set_zoom(1)  # 125 %
+    img = load()
+    assert round(img.deviceIndependentSize().width()) == 375
+    NotesWindow.zoom = 2.4
+    assert load().deviceIndependentSize().width() <= w.reader.viewport().width()  # never wider than the note
+    w.close()
+
+
+def test_first_line_skips_attachment_labels():
+    text = "Kitchen\nOpen the original PDF\n\U0001F4CE Audio recording memo.m4a\nUkupno 200 KM"
+    assert nv.snippet(text, nv.fold(text), "Kitchen") == "Ukupno 200 KM"

@@ -419,9 +419,10 @@ def snippet(text: str, folded: str, title: str, query: str = "", width: int = 12
             cut = text[start:start + width].replace("\n", " · ")
             return ("…" if start else "") + cut
     head = fold(title.strip())
+    labels = {fold(t(x)) for x in ("Open the original PDF", *_MEDIA_TEXT.values())}
     for line in text.splitlines()[:20]:
         line = line.strip()
-        if line and fold(line) != head:
+        if line and fold(line) != head and fold(line) not in labels and not line.startswith("📎"):
             return line[:width]
     return ""
 
