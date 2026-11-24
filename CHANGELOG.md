@@ -4,6 +4,12 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [1.0.30] - 2026-11-24
+
+### Changed
+- **Fewer false virus alarms.** Skyfold.exe now starts with its own small starter program, compiled from PyInstaller's source when the release is built, instead of the ready-made one that countless other programs (malware included) share. Antivirus programs that judge by resemblance, like Windows Defender's `!ml` detections, had flagged Skyfold because of it.
+- **Start with Windows is written only when you switch it on.** Skyfold no longer rewrites Windows' autostart entry by itself at every start (antivirus programs treat a program that keeps re-adding itself there as suspicious). If the entry points at an older copy or was removed, *Settings → Start with Windows* shows it off; switch it on to point Windows at this copy.
+
 ## [1.0.29] - 2026-11-24
 
 ### Added

@@ -14,7 +14,8 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from . import auth
-from .config import APP_ID, APP_NAME, VERSION, LOG_FILE, Settings, migrate_private_files, set_start_with_windows
+from .config import (APP_ID, APP_NAME, VERSION, LOG_FILE, Settings, migrate_private_files, set_start_with_windows,
+                     starts_with_windows)
 from .i18n import set_language, t
 from .ui import theme
 from .ui.dialogs import ask, inform, warn
@@ -670,7 +671,7 @@ class Controller(QObject):
                 return
             new = dlg.result_settings()
             new.apple_id = self.settings.apple_id  # who is signed in is decided by signing in, never here
-            if new.start_with_windows != self.settings.start_with_windows:
+            if new.start_with_windows != starts_with_windows(self.settings.start_with_windows):
                 try:
                     set_start_with_windows(new.start_with_windows)
                 except OSError as exc:
@@ -823,11 +824,11 @@ class Controller(QObject):
 
     def start(self, show: bool) -> None:
         self._browser_link()
-        if self.settings.start_with_windows:
-            try:  # the app may have been moved or renamed: point Windows at the current exe
-                set_start_with_windows(True)
-            except OSError as exc:
-                log.warning("Could not refresh autostart: %s", exc)
+        # Start with Windows is never rewritten here: a program that re-adds itself to Run at every
+        # start looks like malware to antivirus programs. If the entry points elsewhere (an older
+        # copy, or it was removed), Settings shows it off and switching it on writes it again.
+        if self.settings.start_with_windows and not starts_with_windows(True):
+            log.info("Start with Windows is on in the settings, but Windows' entry doesn't start this copy")
         if not self.settings.photos_dir_confirmed:
             QTimer.singleShot(400, self.open_setup)
         elif not self.settings.apple_id:

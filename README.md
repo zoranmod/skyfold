@@ -103,12 +103,13 @@ Apple's app does things Skyfold doesn't: passwords/keychain, two-way bookmark sy
 3. Run **`Skyfold.exe`**.
    - Skyfold isn't code-signed, so Windows SmartScreen may say *"Windows protected your PC"*. Click **More info → Run anyway**. The zip is built from this repository by GitHub Actions; its SHA-256 is attached to every release.
    - Unzip first: don't run it from inside the zip. On a new Windows 11 PC, *Smart App Control* may block unsigned apps altogether.
+   - If your antivirus flags `Skyfold.exe` (for example a Defender name ending in `!ml`, a guess by resemblance), it is most likely a false alarm. Check the download against the release's SHA-256 or with `gh attestation verify`, and please report it in an issue.
    - The Skyfold icon appears in the system tray. On Windows 11 it may be hidden behind the **^** arrow; drag it onto the taskbar to keep it visible.
 4. Choose where your photos should go and accept the no-warranty notice.
 5. Sign in with your Apple ID and enter the 6-digit code from your iPhone, iPad or Mac (or the SMS code).
 6. Optional: turn on **iCloud Drive** and **Notes** in Settings.
 
-To start Skyfold with Windows, turn on **Settings → General → Start with Windows**.
+To start Skyfold with Windows, turn on **Settings → General → Start with Windows**. Skyfold writes that entry only when you switch it on, never by itself; if you move the Skyfold folder, the switch shows off until you turn it on again.
 **Updates:** from version 1.0.10 on, Skyfold checks for a new version about a minute after it starts and then once a day, and updates itself with one click (**Settings → About → Check for updates** checks right away). It downloads the release from this repository and checks its SHA-256 and that GitHub's build attestation names this repository's release workflow and tag. Then it replaces only the program (`Skyfold.exe` and `_internal`); your `data` folder and synced files are never touched, and if anything goes wrong the previous version is put back. To update by hand (e.g. from 1.0.9 or older): quit Skyfold, replace `Skyfold.exe` and the `_internal` folder with the ones from the new zip, and keep the `data` folder.
 To uninstall, first turn off *Start with Windows* and *Safari bookmarks* in Settings and click **Save** (so Skyfold removes its startup entry and browser link), quit Skyfold, then delete the program folder and `%LOCALAPPDATA%\Skyfold`. Your synced photos, Drive and notes folders are left untouched.
 
