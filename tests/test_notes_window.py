@@ -237,6 +237,7 @@ def test_sort_zoom_and_full_screen(qapp, library):
     from skyfold.ui import theme
     from skyfold.ui.notes_window import NotesWindow
     st, root = library
+    NotesWindow.zoom, NotesWindow.sort = 1.0, "new"
     w = NotesWindow(theme.palette("dark"), lambda: (st, root))
     w.show()
     assert pump(qapp, lambda: not w.indexing)

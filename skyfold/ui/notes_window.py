@@ -558,8 +558,8 @@ class NotesWindow(_Dialog):
         self.reader.clear_note()
         self.reader.page = page
         self.reader.document().setDefaultStyleSheet(self._css())
-        font = QFont(self.font())
-        base = self.font().pointSizeF() if self.font().pointSizeF() > 0 else 10.0
+        font = QFont(QApplication.font())
+        base = font.pointSizeF() if font.pointSizeF() > 0 else 10.0
         font.setPointSizeF(base * 1.1 * NotesWindow.zoom)
         self.reader.document().setDefaultFont(font)
         self._fitted_width = self.reader.viewport().width()
