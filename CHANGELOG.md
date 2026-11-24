@@ -5,7 +5,7 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 ## [Unreleased]
 
 ### Added
-- **Read your notes inside Skyfold.** Click *Notes* in the panel (or *Notes* in the tray menu) for a Notes window: folders on the left, your notes newest first with their date and first line, and the note itself on the right, with its checklists, tables, pictures and scans. Search finds words in the titles, folders and the text of your notes, with or without č, ć, đ, š, ž, and marks them in the note. Attachments open in their usual app; *Open in browser* shows the note's web page as before. Locked notes are listed but never shown, and a note that gets locked or deleted disappears from the window at once. `Ctrl+K` searches, `F6` moves between the parts of the window.
+- **Read your notes inside Skyfold.** Click *Notes* in the panel (or *Notes* in the tray menu) for a Notes window: folders on the left, your notes newest first with their date and first line, and the note itself on the right, with its checklists, tables, pictures and scans. Search finds words in the titles, folders and the text of your notes, with or without č, ć, đ, š, ž, and marks them in the note. Attachments open in their usual app; *Open in browser* shows the note's web page as before. Locked notes are listed but never shown, and a note that gets locked or deleted disappears from the window at once. Sort the list by newest, oldest or title. Make the text larger or smaller (`Ctrl +`, `Ctrl -`, `Ctrl 0` or `Ctrl` + mouse wheel), fill the screen (maximize, or `F11` for full screen), and give the window its own theme (light, dark or OLED) with the *Theme* button. `Ctrl+K` searches, `F6` moves between the parts of the window.
 
 ## [1.0.26] - 2026-11-24
 

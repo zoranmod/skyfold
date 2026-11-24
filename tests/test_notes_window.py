@@ -229,3 +229,61 @@ def test_theme_change_and_keyboard(qapp, library):
 def Qt_UserRole():  # noqa: N802
     from PySide6.QtCore import Qt
     return Qt.UserRole
+
+
+def test_sort_zoom_and_full_screen(qapp, library):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from skyfold.ui import theme
+    from skyfold.ui.notes_window import NotesWindow
+    st, root = library
+    w = NotesWindow(theme.palette("dark"), lambda: (st, root))
+    w.show()
+    assert pump(qapp, lambda: not w.indexing)
+    ids = lambda: [w.notes.item(i).data(Qt.UserRole) for i in range(w.notes.count())]  # noqa: E731
+    assert ids() == ["g", "d", "l"]  # newest first
+    w.sorter.setCurrentIndex(w.sorter.findData("old"))
+    assert ids() == ["l", "d", "g"]
+    w.sorter.setCurrentIndex(w.sorter.findData("title"))
+    assert ids() == ["l", "d", "g"]  # Bank, Diary, Groceries
+    w.sorter.setCurrentIndex(w.sorter.findData("new"))
+    # zoom: larger text, never past the limits, back to 100%
+    before = w.reader.document().defaultFont().pointSizeF()
+    QTest.keyClick(w, Qt.Key_Plus, Qt.ControlModifier)
+    assert w.reader.document().defaultFont().pointSizeF() > before and w.zoom_reset.text() == "110%"
+    for _ in range(30):
+        w.set_zoom(1)
+    assert w.zoom_reset.text() == "240%" and "Buy" in w.reader.toPlainText()
+    QTest.keyClick(w, Qt.Key_0, Qt.ControlModifier)
+    assert w.zoom_reset.text() == "100%"
+    assert abs(w.reader.document().defaultFont().pointSizeF() - before) < 0.01
+    # full screen and back (Esc leaves it before it would close the window)
+    assert w.windowFlags() & Qt.WindowMaximizeButtonHint
+    w.toggle_full_screen()
+    assert w.isFullScreen()
+    QTest.keyClick(w, Qt.Key_Escape)
+    assert not w.isFullScreen() and w.isVisible()
+    w.close()
+
+
+def test_the_window_can_have_its_own_theme(qapp, library):
+    from skyfold.ui import theme
+    from skyfold.ui.notes_window import NotesWindow
+    st, root = library
+    light = theme.palette("light")
+    w = NotesWindow(light, lambda: (st, root))
+    w.show()
+    qapp.processEvents()
+    assert NotesWindow.own_theme is None and w.c is light and "Skyfold" in w.theme_btn.text()
+    seen = []
+    for _ in range(4):
+        w._cycle_theme()
+        seen.append((NotesWindow.own_theme, w.c["bg"]))
+    assert seen == [("light", theme.LIGHT["bg"]), ("dark", theme.DARK["bg"]), ("oled", theme.OLED["bg"]),
+                    (None, light["bg"])]
+    w._cycle_theme()
+    w._cycle_theme()  # dark for this window
+    w.apply_palette(theme.palette("oled"))  # Skyfold's theme changes: the window keeps its own
+    assert w.c is theme.DARK and theme.DARK["text"] in w.reader.document().defaultStyleSheet()
+    NotesWindow.own_theme = None
+    w.close()

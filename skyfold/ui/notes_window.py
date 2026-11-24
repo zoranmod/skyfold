@@ -18,14 +18,14 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QImage, QKeySequence, QPainter, QPen, QShortcut,
                            QTextCharFormat, QTextCursor, QTextDocument)
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton,
+from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton,
                                QSplitter, QStyle, QStyledItemDelegate, QTextBrowser, QTextEdit, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from ..i18n import t
 from ..notes_engine import local_datetime
 from .. import notes_view as nv
-from .dialogs import _Dialog
+from .dialogs import Combo, _Dialog
 from .icons import glyph
 from .theme import service_color
 
@@ -167,6 +167,14 @@ class _Reader(QTextBrowser):
         self.page: Path | None = None
         self._images: dict[str, QImage] = {}
 
+    def wheelEvent(self, e) -> None:  # noqa: N802
+        if e.modifiers() & Qt.ControlModifier:  # Ctrl + wheel: zoom, as in a browser
+            if e.angleDelta().y():
+                self.win.set_zoom(1 if e.angleDelta().y() > 0 else -1)
+            e.accept()
+            return
+        super().wheelEvent(e)
+
     def clear_note(self) -> None:
         self.page = None
         self._images.clear()
@@ -185,7 +193,7 @@ class _Reader(QTextBrowser):
             img = QImage()
         else:
             dpr = self.devicePixelRatioF() or 1.0
-            room = max(200, min(900, self.viewport().width() - 48))
+            room = max(200, min(1600, self.viewport().width() - 48))
             if img.width() > room * dpr:
                 img = img.scaledToWidth(int(room * dpr), Qt.SmoothTransformation)
             if img.hasAlphaChannel():
@@ -203,10 +211,19 @@ class _Reader(QTextBrowser):
 class NotesWindow(_Dialog):
     """source() gives (Notes database, Notes folder), or None when Notes isn't set up."""
 
+    # kept while Skyfold runs (for every Notes window)
+    zoom = 1.0  # text size of the note
+    sort = "new"  # new | old | title
+    own_theme: str | None = None  # None: as Skyfold; or light | dark | oled for this window only
+    THEMES = (None, "light", "dark", "oled")
+    ZOOMS = (0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0, 2.4)
+
     def __init__(self, palette: dict[str, str], source) -> None:
         super().__init__(t("Notes") + " \u2013 Skyfold")
+        self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint)  # can fill the screen
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.c = palette
+        self.app_c = palette  # Skyfold's own theme (followed unless the window has its own)
         self.source = source
         self.root: Path | None = None
         self.rows: list[nv.Row] = []
@@ -253,6 +270,19 @@ class NotesWindow(_Dialog):
         self.notes.setMinimumWidth(220)
         self.notes.setVerticalScrollMode(QListWidget.ScrollPerPixel)
 
+        middle = QWidget()
+        ml = QVBoxLayout(middle)
+        ml.setContentsMargins(0, 0, 0, 0)
+        ml.setSpacing(6)
+        self.sorter = Combo()
+        self.sorter.setAccessibleName(t("Sort notes"))
+        for key, label in (("new", t("Newest first")), ("old", t("Oldest first")), ("title", t("Title A–Z"))):
+            self.sorter.addItem(label, key)
+        self.sorter.setCurrentIndex(max(0, self.sorter.findData(NotesWindow.sort)))
+        self.sorter.currentIndexChanged.connect(self._on_sort)
+        ml.addWidget(self.sorter)
+        ml.addWidget(self.notes, 1)
+
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
@@ -262,6 +292,19 @@ class NotesWindow(_Dialog):
         self.meta.setObjectName("Hint")
         self.meta.setTextInteractionFlags(Qt.TextSelectableByMouse)
         bar.addWidget(self.meta, 1)
+        self.zoom_out = self._bar_button("\u2212", t("Smaller text (Ctrl \u2212)"), lambda: self.set_zoom(-1))
+        self.zoom_reset = self._bar_button(f"{round(NotesWindow.zoom * 100)}%", t("Back to normal size (Ctrl 0)"),
+                                           lambda: self.set_zoom(0))
+        self.zoom_in = self._bar_button("+", t("Larger text (Ctrl +)"), lambda: self.set_zoom(1))
+        for b in (self.zoom_out, self.zoom_reset, self.zoom_in):
+            bar.addWidget(b)
+        self.theme_btn = self._bar_button("", t("Theme of this window"), self._cycle_theme)
+        bar.addSpacing(12)
+        bar.addWidget(self.theme_btn)
+        self.full = self._bar_button(t("Full screen"), t("Full screen (F11)"), self.toggle_full_screen)
+        bar.addSpacing(12)
+        bar.addWidget(self.full)
+        bar.addSpacing(12)
         self.open_browser = QPushButton(t("Open in browser"))
         self.open_browser.setObjectName("Link")
         self.open_browser.setCursor(Qt.PointingHandCursor)
@@ -278,7 +321,7 @@ class NotesWindow(_Dialog):
         self.empty.setWordWrap(True)
         rl.addWidget(self.empty, 1)
 
-        for w in (self.folders, self.notes, right):
+        for w in (self.folders, middle, right):
             self.split.addWidget(w)
         self.split.setStretchFactor(0, 0)
         self.split.setStretchFactor(1, 0)
@@ -297,6 +340,14 @@ class NotesWindow(_Dialog):
         self.search.textChanged.connect(lambda *_: self._debounce.start())
         for keys in ("Ctrl+K", "Ctrl+F"):
             QShortcut(QKeySequence(keys), self, activated=self._focus_search)
+        for keys, step in (("Ctrl++", 1), ("Ctrl+=", 1), ("Ctrl+-", -1), ("Ctrl+0", 0)):
+            QShortcut(QKeySequence(keys), self, activated=lambda s=step: self.set_zoom(s))
+        QShortcut(QKeySequence("F11"), self, activated=self.toggle_full_screen)
+        self._refit = QTimer(self)  # pictures fitted again after the window got wider or narrower
+        self._refit.setSingleShot(True)
+        self._refit.setInterval(250)
+        self._refit.timeout.connect(self._refit_pictures)
+        self._fitted_width = 0
         QShortcut(QKeySequence("F6"), self, activated=lambda: self._cycle(1))
         QShortcut(QKeySequence("Shift+F6"), self, activated=lambda: self._cycle(-1))
 
@@ -410,8 +461,12 @@ class NotesWindow(_Dialog):
             rank = nv.matches(r, entry[2] if entry else None, terms)
             if rank:
                 out.append((rank, r))
+        if NotesWindow.sort == "old":
+            out.sort(key=lambda x: (x[1].modified or "", x[1].title.lower()))
+        elif NotesWindow.sort == "title":
+            out.sort(key=lambda x: (nv.fold(x[1].title or t("Untitled")), x[1].title))
         if terms:
-            out.sort(key=lambda x: -x[0])  # stable: newest first within a rank
+            out.sort(key=lambda x: -x[0])  # stable: in the chosen order within a rank
         return out
 
     def _snippet(self, r: nv.Row) -> str:
@@ -503,6 +558,11 @@ class NotesWindow(_Dialog):
         self.reader.clear_note()
         self.reader.page = page
         self.reader.document().setDefaultStyleSheet(self._css())
+        font = QFont(self.font())
+        base = self.font().pointSizeF() if self.font().pointSizeF() > 0 else 10.0
+        font.setPointSizeF(base * 1.1 * NotesWindow.zoom)
+        self.reader.document().setDefaultFont(font)
+        self._fitted_width = self.reader.viewport().width()
         self.reader.setHtml(body)
         self.reader.verticalScrollBar().setValue(scroll)
         self.empty.hide()
@@ -591,6 +651,53 @@ class NotesWindow(_Dialog):
         if page is not None and page.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(page)))
 
+    # --- order and size ---------------------------------------------------------------------------
+    def _on_sort(self, *_args) -> None:
+        NotesWindow.sort = self.sorter.currentData() or "new"
+        self._fill_list()
+        it = self.notes.currentItem()
+        if it is not None:
+            self.notes.scrollToItem(it)
+
+    def _bar_button(self, text: str, tip: str, fn) -> QPushButton:
+        b = QPushButton(text)
+        b.setObjectName("Link")
+        b.setCursor(Qt.PointingHandCursor)
+        b.setToolTip(tip)
+        b.setAccessibleName(tip)
+        b.clicked.connect(fn)
+        return b
+
+    def set_zoom(self, step: int) -> None:
+        """Text of the note larger (1), smaller (-1) or back to normal (0)."""
+        zooms = NotesWindow.ZOOMS
+        now = min(range(len(zooms)), key=lambda i: abs(zooms[i] - NotesWindow.zoom))
+        NotesWindow.zoom = 1.0 if step == 0 else zooms[max(0, min(len(zooms) - 1, now + step))]
+        self.zoom_reset.setText(f"{round(NotesWindow.zoom * 100)}%")
+        self.current_key = None
+        self._show_current()
+
+    def toggle_full_screen(self) -> None:
+        if self.isFullScreen():
+            if getattr(self, "_was_maximized", False):
+                self.showMaximized()
+            else:
+                self.showNormal()
+        else:
+            self._was_maximized = self.isMaximized()
+            self.showFullScreen()
+        self.full.setText(t("Exit full screen") if self.isFullScreen() else t("Full screen"))
+
+    def resizeEvent(self, e) -> None:  # noqa: N802
+        super().resizeEvent(e)
+        if hasattr(self, "_refit"):
+            self._refit.start()
+
+    def _refit_pictures(self) -> None:
+        if self.reader.page is not None and abs(self.reader.viewport().width() - self._fitted_width) > 40:
+            self.current_key = None
+            self._show_current()
+
     # --- keyboard -----------------------------------------------------------------------------
     def _focus_search(self) -> None:
         self.search.setFocus()
@@ -605,13 +712,41 @@ class NotesWindow(_Dialog):
         if e.key() == Qt.Key_Escape and self.search.text():
             self.search.clear()
             return
+        if e.key() == Qt.Key_Escape and self.isFullScreen():
+            self.toggle_full_screen()
+            return
         if e.key() in (Qt.Key_Return, Qt.Key_Enter) and self.notes.hasFocus():
             self.reader.setFocus()
             return
         super().keyPressEvent(e)
 
     # --- look ---------------------------------------------------------------------------------
+    def _theme_name(self) -> str:
+        return {None: t("As Skyfold"), "light": t("Light"), "dark": t("Dark"), "oled": "OLED"}[NotesWindow.own_theme]
+
+    def _cycle_theme(self) -> None:
+        order = NotesWindow.THEMES
+        NotesWindow.own_theme = order[(order.index(NotesWindow.own_theme) + 1) % len(order)]
+        self.apply_palette(self.app_c)
+
     def apply_palette(self, palette: dict[str, str]) -> None:
+        """Skyfold's theme changed (or this window's own): restyle everything in the window."""
+        from . import theme
+
+        self.app_c = palette
+        own = NotesWindow.own_theme
+        if own is None:
+            self.setStyleSheet("")
+            self.setPalette(QApplication.palette())
+        else:
+            palette = theme.palette(own)
+            self.setStyleSheet(theme.stylesheet(palette))
+            self.setPalette(theme.qpalette(palette))
+        if hasattr(self, "theme_btn"):
+            self.theme_btn.setText(t("Theme: {name}", name=self._theme_name()))
+        self._apply(palette)
+
+    def _apply(self, palette: dict[str, str]) -> None:
         c = self.c = palette
         self.notes.setStyleSheet(f"QListWidget{{background:{c['surface']};border:1px solid {c['border']};"
                                  f"border-radius:8px;padding:4px;outline:0}}"
