@@ -264,6 +264,7 @@ class Controller(QObject):
         self.state = "idle"
         self._spin = 0
         self._dialogs: dict[str, object] = {}
+        self._notes_account = self.settings.apple_id  # whose notes a Notes window may show
         self._pending = None
         self.server = None  # single-instance server, set by main()
 
@@ -319,7 +320,7 @@ class Controller(QObject):
         w.notify.connect(self._notify, q)
         w.accountChanged.connect(f.set_account, q)
         w.accountChanged.connect(self._forget_login_api, q)
-        w.accountChanged.connect(lambda *_: self._close_notes(), q)
+        w.accountChanged.connect(self._on_account_changed, q)  # a method, never a lambda: see _on_account_changed
         f.syncNow.connect(lambda: self.req.syncNow.emit(True))
         f.clearActivity.connect(lambda: self.req.clearActivity.emit())
         # Cancel must not wait in the busy worker's queue: set the flag right here.
@@ -694,6 +695,16 @@ class Controller(QObject):
         dlg.signOut.connect(self.sign_out)
         dlg.restoreExcluded.connect(lambda: self.req.restoreExcluded.emit())
         self._show_dialog("settings", dlg)
+
+    def _on_account_changed(self, apple_id: str) -> None:
+        """Another Apple ID (or none): its notes are never left on screen. The same Apple ID signing in
+        again, as at every start, keeps an open Notes window.
+
+        Connected as a method of this UI-thread object: a lambda connected to a worker signal runs in
+        the worker's thread, and closing a window from there froze or crashed Skyfold (1.0.27)."""
+        if apple_id != self._notes_account:
+            self._close_notes()
+        self._notes_account = apple_id
 
     def _forget_login_api(self, *_args) -> None:
         """The worker now holds the newest sign-in (or renewed it): Find My follows the worker."""

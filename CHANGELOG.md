@@ -5,7 +5,7 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 ## [Unreleased]
 
 ### Fixed
-- **The Notes window could crash Skyfold** while you were reading notes. Each note now gets a fresh page of its own instead of the old one being emptied while Qt might still be using it, and clicking *Show more pages* or zooming with the mouse wheel no longer reloads the note in the middle of Qt's handling of that click or scroll.
+- **Skyfold could crash or freeze with the Notes window open** shortly after it started. When the saved sign-in was restored, the Notes window was closed from Skyfold's background thread instead of its window thread, which Qt doesn't allow. It is now closed on the right thread, and only when another Apple ID signs in (or you sign out); the same Apple ID signing in again, as at every start, keeps the window open. Each note also gets a fresh page of its own, and *Show more pages* and `Ctrl` + mouse wheel reload the note only after Qt has finished handling the click or scroll.
 - **If Skyfold ever crashes, it now says where.** A `crash.log` file next to `skyfold.log` (in `%LOCALAPPDATA%\Skyfold`) records which part of the program was running. It contains no note text, file contents or password; attach it to a bug report.
 
 ## [1.0.27] - 2026-11-24

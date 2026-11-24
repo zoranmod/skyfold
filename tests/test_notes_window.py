@@ -624,3 +624,44 @@ def test_crash_log_is_set_up(tmp_path, monkeypatch):
         assert "started" in (tmp_path / "crash.log").read_text(encoding="utf-8")
     finally:
         app._CRASH_FILE.close()
+
+
+def test_account_change_closes_notes_on_the_ui_thread_and_only_for_another_account(qapp):
+    """A worker signal handled by a lambda ran in the worker's thread: closing the Notes window from
+    there froze or crashed Skyfold (1.0.27). The handler is a method of a UI-thread object."""
+    import re
+    import threading
+    from pathlib import Path
+    from PySide6.QtCore import QObject, QThread, Qt, Signal
+    from skyfold import app
+
+    src = Path(app.__file__).read_text(encoding="utf-8")
+    assert not re.search(r"\b(?:w|self\.worker)\.\w+\.connect\(\s*lambda", src)  # every worker signal: a method
+
+    class Receiver(QObject):
+        _on_account_changed = app.Controller._on_account_changed
+
+        def __init__(self):
+            super().__init__()
+            self._notes_account = "a@example.invalid"
+            self.closed_in = []
+
+        def _close_notes(self):
+            self.closed_in.append(threading.current_thread() is threading.main_thread())
+
+    class Sender(QObject):
+        accountChanged = Signal(str)
+
+    rec, snd, th = Receiver(), Sender(), QThread()
+    snd.moveToThread(th)
+    snd.accountChanged.connect(rec._on_account_changed, Qt.QueuedConnection)
+    th.start()
+    try:
+        for who in ("a@example.invalid", "b@example.invalid", "b@example.invalid", ""):
+            threading.Thread(target=snd.accountChanged.emit, args=(who,)).start()
+            assert pump(qapp, lambda: rec._notes_account == who, 2.0)
+            qapp.processEvents()
+    finally:
+        th.quit()
+        th.wait()
+    assert rec.closed_in == [True, True]  # same account at start: kept; another one, and signed out: closed
