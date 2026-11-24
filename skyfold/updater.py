@@ -116,6 +116,9 @@ def _get(url: str, *, stream: bool = False, timeout: float = 20, follow: bool = 
 
     import requests
 
+    from . import netpolicy
+
+    netpolicy.install()
     session = requests.Session()
     for _ in range(6):
         parts = urlsplit(url)

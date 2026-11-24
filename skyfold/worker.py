@@ -745,7 +745,11 @@ class SyncWorker(QObject):
             self._authLost.emit(failed_api)
             return False
         text = brief(exc)  # Skyfold's own messages as they are; Apple's answers only by kind and code
-        if isinstance(exc, (RemoteUnavailable, SyncError)):
+        from .netpolicy import NetworkPolicyBlocked
+
+        if isinstance(exc, NetworkPolicyBlocked):
+            text = str(exc)  # Skyfold's own text (the address is never shown or logged)
+        if isinstance(exc, (RemoteUnavailable, SyncError, NetworkPolicyBlocked)):
             problems.append(f"{service}: {text}")
             self.log("error", f"{service}: {text}")
             return True

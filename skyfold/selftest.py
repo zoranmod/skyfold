@@ -47,6 +47,45 @@ def main(report: str) -> int:
 
     check("certifi bundle", certs)
 
+    def network_rules() -> str:
+        """Allowed, refused and a redirect elsewhere, against a stand-in for the network (offline)."""
+        import requests
+        from requests.adapters import BaseAdapter
+
+        from skyfold import netpolicy
+
+        class Fake(BaseAdapter):
+            sent: list = []
+
+            def send(self, request, **kwargs):
+                self.sent.append(request.url)
+                r = requests.Response()
+                r.request, r.url, r._content = request, request.url, b""
+                r.status_code = 302 if request.url.endswith("/hop") else 200
+                if r.status_code == 302:
+                    r.headers["Location"] = "https://example.com/elsewhere"
+                return r
+
+            def close(self):
+                pass
+
+        netpolicy.install()
+        fake = Fake()
+        s = requests.Session()
+        s.trust_env = False
+        s.mount("https://", fake)
+        assert s.get("https://setup.icloud.com/x").status_code == 200
+        for url in ("https://example.com/x", "https://setup.icloud.com/hop"):
+            try:
+                s.get(url)
+                raise AssertionError("not refused: " + url)
+            except netpolicy.NetworkPolicyBlocked:
+                pass
+        assert fake.sent == ["https://setup.icloud.com/x", "https://setup.icloud.com/hop"], fake.sent
+        return "Apple allowed, others refused before sending"
+
+    check("network rules", network_rules)
+
     def psl() -> str:
         from fido2 import rpid
 

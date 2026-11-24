@@ -51,3 +51,19 @@ def _no_modal_account_notice(monkeypatch):
     from skyfold import app
 
     monkeypatch.setattr(app, "inform", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def _network_policy_per_test():
+    """The network rules patch Requests for the whole process: each test starts and ends without
+    them (tests talk to local servers), and tests that want them install them."""
+    import requests
+
+    from skyfold import netdiag, netpolicy
+
+    send = requests.Session.send
+    installed = netpolicy._INSTALLED
+    yield
+    requests.Session.send = send
+    netpolicy._INSTALLED = installed
+    netdiag._until = 0.0

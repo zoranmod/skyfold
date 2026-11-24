@@ -133,6 +133,14 @@ def _open_url(url: str) -> None:
     QDesktopServices.openUrl(QUrl(url))
 
 
+class _ReleaseNotes(QTextBrowser):
+    """The "What's new" text: links open in the browser when clicked, but nothing is loaded by
+    itself (no picture from the internet or from a network share)."""
+
+    def loadResource(self, kind, url):  # noqa: N802
+        return None
+
+
 def _show_log() -> None:
     import os
     import subprocess
@@ -1156,9 +1164,75 @@ class SettingsDialog(_Dialog):
         log_btn.setCursor(Qt.PointingHandCursor)
         log_btn.clicked.connect(_show_log)
         links.addWidget(log_btn, 0, Qt.AlignLeft)
+        self._diagnostics(lay)
         lay.addWidget(_label(t("Skyfold is not made by Apple. It uses the same web services as iCloud.com."),
                              "Hint", True))
         lay.addStretch(1)
+
+    def _diagnostics(self, lay) -> None:
+        """Connection diagnostics for a bug report: off at every start, 30 minutes when turned on."""
+        from PySide6.QtCore import QTimer
+
+        from .. import netdiag
+
+        card = self._card(lay, t("CONNECTION DIAGNOSTICS"))
+        card.addWidget(_label(t("For a bug report about syncing: records for {n} minutes what kind of "
+                                "request Skyfold sent to Apple and how Apple answered, never names, file "
+                                "names, addresses or passwords. The file stays on this PC until you "
+                                "attach it to a report.", n=netdiag.MINUTES), "Hint", True))
+        state = _label("", None, True)
+        card.addWidget(state)
+        row = QHBoxLayout()
+        toggle = QPushButton()
+        show = QPushButton(t("Show the file"))
+        remove = QPushButton(t("Delete"))
+        for b in (toggle, show, remove):
+            row.addWidget(b)
+        row.addStretch(1)
+        card.addLayout(row)
+
+        def refresh() -> None:
+            import time as _time
+
+            end = netdiag.until()
+            if end:
+                state.setText(t("Recording until {time}.", time=_time.strftime("%H:%M", _time.localtime(end))))
+                toggle.setText(t("Stop recording"))
+            else:
+                state.setText(t("Not recording."))
+                toggle.setText(t("Record for {n} minutes", n=netdiag.MINUTES))
+            has = bool(netdiag.files())
+            show.setEnabled(has)
+            remove.setEnabled(has)
+
+        def flip() -> None:
+            if netdiag.on():
+                netdiag.stop()
+            else:
+                netdiag.start()
+            refresh()
+
+        def reveal() -> None:
+            import os
+            import subprocess
+
+            got = netdiag.files()
+            if got:
+                subprocess.Popen([os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "explorer.exe"),
+                                  "/select,", str(got[0])])
+
+        def wipe() -> None:
+            netdiag.delete()
+            refresh()
+
+        toggle.clicked.connect(flip)
+        show.clicked.connect(reveal)
+        remove.clicked.connect(wipe)
+        timer = QTimer(self)
+        timer.timeout.connect(refresh)
+        timer.start(15_000)
+        self._diag_refresh = refresh
+        refresh()
 
     # actions ------------------------------------------------------------------------------
     def _sign_out(self) -> None:
@@ -1829,7 +1903,7 @@ class UpdateDialog(_Dialog):
         head.addLayout(col, 1)
         lay.addLayout(head)
         lay.addWidget(_label(t("What's new"), "Muted"))
-        self.notes = QTextBrowser()
+        self.notes = _ReleaseNotes()
         self.notes.setOpenExternalLinks(True)
         from ..updater import whats_new
 

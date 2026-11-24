@@ -137,11 +137,14 @@ To uninstall, first turn off *Start with Windows* and *Safari bookmarks* in Sett
 ## Privacy and security
 
 - **Your password is never stored.** It is only used to sign in, with Apple's own sign-in protocol and two-factor authentication.
-- **Skyfold talks to Apple, and once a day to GitHub.** There is no Skyfold server, no telemetry, no analytics and no crash reporting. The daily update check asks GitHub's public API for the latest Skyfold release (and, before an update, its build attestation) and sends nothing about you (only the client name "Skyfold/<version>"); turn it off in **Settings → General**. The only other thing it opens is Google Maps in your browser, and only when you click **Map** in Find My.
+- **Skyfold talks to Apple, and once a day to GitHub.** There is no Skyfold server, no telemetry, no analytics and no crash reporting. The daily update check asks GitHub's public API for the latest Skyfold release (and, before an update, its build attestation) and sends nothing about you (only the client name "Skyfold/<version>"); turn it off in **Settings → General**.
+- **Checked before every request.** Skyfold checks the address of each of its own requests, and of each redirect, before anything is sent: Apple's iCloud servers or GitHub's update servers, over HTTPS, and nothing else. Any other address is refused and the panel says so. (A proxy you set up in Windows is still used, as by any program.)
+- **Links you choose to open** (iCloud.com, GitHub, links in your notes) open in your browser or default app. Clicking **Map** in Find My sends the device's shown location to Google Maps in your browser.
 - **What is stored on your PC:**
   - Apple's session cookies and the sync database: `%LOCALAPPDATA%\Skyfold` (this PC only, never next to the app, so they aren't uploaded if the app sits in OneDrive or iCloud Drive). The session lasts about two months.
   - Settings, including your Apple ID email: the `data` folder next to `Skyfold.exe` (or `%LOCALAPPDATA%\Skyfold\data` if the program folder can't be written, e.g. under Program Files).
-  - A log file: `%LOCALAPPDATA%\Skyfold\skyfold.log` (max. about 3 MB, rotated). It contains file and folder names but no password.
+  - A log file: `%LOCALAPPDATA%\Skyfold\skyfold.log` (max. about 3 MB, rotated). It contains file and folder names, album names and note titles, but no password.
+  - Only while you record connection diagnostics: `%LOCALAPPDATA%\Skyfold\connections.log` (two files of at most 512 KB). It has only the kind of each request (sign-in, iCloud service, iCloud download, update), Apple's status code and how long it took: no names, file names, addresses, ids, cookies or passwords. **Settings → General → Delete** removes it.
   - If Skyfold ever crashes: `%LOCALAPPDATA%\Skyfold\crash.log`, with the parts of the program that were running (no note text, file contents or password).
   - With Safari bookmarks on: your bookmarks' titles and addresses in `%LOCALAPPDATA%\Skyfold\safari-bookmarks.json` (for the browser extension), besides the exported HTML file.
 - **Anyone who can read `%LOCALAPPDATA%\Skyfold\session` can access your iCloud** until the session expires, like a browser that's still signed in. Use Skyfold on a PC you trust. **Settings → General → Sign out** deletes the session.
@@ -201,6 +204,8 @@ Open an [issue](../../issues/new/choose) and attach the relevant part of the log
 
 If Skyfold closed by itself (crashed), attach `crash.log` from the same folder too.
 
+**Syncing fails or hangs?** In **Settings → General → Connection diagnostics**, click *Record for 30 minutes*, then *Sync now* and wait for the problem. *Show the file* opens `connections.log`; attach it as it is (it holds no personal data). It stops by itself after 30 minutes, when you sign out or quit Skyfold.
+
 Paste `%LOCALAPPDATA%\Skyfold` into the Explorer address bar to open the folder. **Before posting, remove personal data**: your Apple ID email, your Windows user name in paths, and file, album or note names you don't want to share.
 
 ## Contributing
@@ -247,6 +252,8 @@ Skyfold is not affiliated with, endorsed by or sponsored by Apple Inc. Apple, iC
 - **Slanje slika s računara (po želji):** Postavke → Fotografije → *Šalji u iCloud slike i videe koje dodam u ovaj folder*. Slike i videi koje ubaciš u folder sa slikama šalju se u iCloud Photos i pojave se na telefonu, uključujući one koji su već u folderu kad je uključiš. Slanje je jednosmjerno: fajl ostaje običan fajl na računaru, a brisanje na jednoj strani ne briše na drugoj. Opcija je po defaultu isključena.
 - **Jedan folder za slike po Apple ID-u:** kad se prijaviš drugim Apple ID-om, Skyfold traži da mu izabereš folder. Skyfold prati preimenovane i premještene slike dok Windows zadrži ID fajla; ako uređivač zamijeni fajl i preimenuješ ga prije sljedeće provjere, Skyfold to može protumačiti kao brisanje.
 - **Bilješke čitaš i pretražuješ u Skyfoldu:** klikni *Bilješke* u panelu. Vidiš foldere, bilješke i samu bilješku sa slikama, a pretraga traži i po tekstu bilješki. Bilješke se čuvaju i kao web stranice s bibliotekom (Notes.html) koja se otvara u pregledniku.
+- **Skyfold provjeri svaki svoj zahtjev prije slanja:** ide samo Appleovom iCloudu i GitHubu za ažuriranja.
+- **Dijagnostika veze za prijavu greške:** Postavke → Općenito → *Bilježi 30 minuta*. Fajl `connections.log` nema imena, nazive fajlova, adrese ni lozinke, pa ga možeš priložiti prijavi takav kakav je.
 - **Skyfold se sam ažurira:** javi kad izađe nova verzija, pokaže šta je novo i ažurira se jednim klikom (od verzije 1.0.10).
 - **Program je besplatan i prenosiv.** Raspakuj ga, pokreni `Skyfold.exe` i prijavi se Apple ID-jem.
 - **Jezik** se mijenja u Postavke → Općenito → Jezik.

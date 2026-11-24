@@ -215,6 +215,9 @@ def test_truncated_content_reply_aborts_before_trashing_replacements(drive_env, 
 
 def test_overlapping_body_posts_and_metadata_persist_a_restorable_current_session(tmp_path, monkeypatch):
     # Real requests, cookie extraction, pyicloud response processing and atomic saves.
+    from skyfold import netpolicy
+
+    monkeypatch.setattr(netpolicy, "check", lambda url, **kw: None)  # a local server stands in for Apple
     auth._serialize_session_saves()
     gate = threading.Barrier(4, timeout=8)
 
