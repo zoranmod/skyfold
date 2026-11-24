@@ -45,7 +45,7 @@
 ## Screenshots
 
 <p>
-  <img src="docs/screenshots/notes-window.png" width="880" alt="The Notes window: folders, your notes and the open note with a checklist, a table and a picture">
+  <img src="docs/screenshots/notes-window.png" width="880" alt="The Notes window: folders, your notes and the open note with a checklist and a table">
 </p>
 <p>
   <img src="docs/screenshots/first-run.png" width="360" alt="First run: choose the photos folder and layout">

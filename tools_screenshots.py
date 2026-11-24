@@ -161,39 +161,12 @@ def notes_window(mode: str, name: str) -> None:
     import tempfile
     import time
 
-    from PySide6.QtCore import QPointF, QRectF
-    from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPen
-
     from skyfold.notes_engine import NotesState, polish_note_html
     from skyfold.ui.notes_window import NotesWindow
 
     c = use(mode)
     tmp = Path(tempfile.mkdtemp(prefix="skyfold-shot-"))
     root = tmp / "Notes"
-    (root / "_assets" / "n1").mkdir(parents=True)
-    img = QImage(1400, 760, QImage.Format_RGB32)  # a made-up sketch of a garden
-    p = QPainter(img)
-    p.setRenderHint(QPainter.Antialiasing)
-    sky = QLinearGradient(0, 0, 0, 760)
-    sky.setColorAt(0, QColor("#bfe0ff"))
-    sky.setColorAt(1, QColor("#f4fbff"))
-    p.fillRect(img.rect(), sky)
-    p.setPen(Qt.NoPen)
-    p.setBrush(QColor("#8cc56b"))
-    p.drawEllipse(QRectF(-300, 470, 1200, 600))
-    p.setBrush(QColor("#6aa84f"))
-    p.drawEllipse(QRectF(500, 430, 1300, 700))
-    p.setBrush(QColor("#ffd34d"))
-    p.drawEllipse(QRectF(1130, 80, 130, 130))
-    p.setBrush(QColor("#7a5230"))
-    p.drawRect(QRectF(330, 330, 34, 190))
-    p.setBrush(QColor("#3f8f3a"))
-    p.drawEllipse(QRectF(230, 190, 240, 200))
-    for x in (720, 800, 880, 960):
-        p.setPen(QPen(QColor("#8a6a45"), 8))
-        p.drawLine(QPointF(x, 560), QPointF(x, 450))
-    p.end()
-    img.save(str(root / "_assets" / "n1" / "garden.png"))
     garden = """<div class="note-content"><h1>Garden plan</h1>
 <p>Spring jobs for the back garden, before the end of April.</p><h2>To do</h2>
 <ul><li><input type="checkbox" disabled checked> Prune the apple tree</li>
@@ -202,7 +175,9 @@ def notes_window(mode: str, name: str) -> None:
 <h2>Budget</h2><table><tr><th>Item</th><th>Price</th></tr><tr><td>Seedlings</td><td>12 €</td></tr>
 <tr><td>Fence boards</td><td>48 €</td></tr><tr><td>Compost</td><td>9 €</td></tr></table>
 <p><span style="background-color:var(--hl3-bg)">Ask the neighbour about the ladder.</span></p>
-<img src="../_assets/n1/garden.png" alt="garden"></div>"""
+<h2>Notes</h2><ol><li>Water in the evening, not at noon.</li>
+<li>Beans go next to the fence, tomatoes by the wall.</li></ol>
+<p><b>Next weekend:</b> plant the beans if it stays dry.</p></div>"""
     st = NotesState(tmp / "notes.db")
     ago = lambda d, h=0: (NOW - timedelta(days=d, hours=h)).strftime("%Y-%m-%dT%H:%M:%S")  # noqa: E731
     rows = [("g", "Home/Garden plan.html", "Garden plan", "Home", ago(0, 2), False, garden),
