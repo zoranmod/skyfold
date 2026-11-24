@@ -19,7 +19,7 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFont, QImage, QImageIOHandler, QImageReader,
                            QKeySequence, QPainter, QPalette, QPen, QShortcut, QTextCharFormat, QTextCursor,
                            QTextDocument)
@@ -179,6 +179,96 @@ class _NoteDelegate(QStyledItemDelegate):
         p.restore()
 
 
+FOLDER_COUNT = Qt.UserRole + 1
+FOLDER_KIND = Qt.UserRole + 2  # "all" | "trash" | "folder"
+CHEVRON = 26  # px at the right end of a folder row that has subfolders: click to fold it
+
+
+class _FolderTree(QTreeWidget):
+    """Folders as in Apple Notes: one rounded highlight over the whole row (no separate box for
+    the indent), the count on the right, a chevron on the right for folders with subfolders."""
+
+    def mousePressEvent(self, e) -> None:  # noqa: N802
+        it = self.itemAt(e.position().toPoint())
+        if (it is not None and it.childCount() and e.button() == Qt.LeftButton
+                and e.position().x() >= self.viewport().width() - CHEVRON - 6):
+            it.setExpanded(not it.isExpanded())
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+
+class _FolderDelegate(QStyledItemDelegate):
+    def __init__(self, win: "NotesWindow") -> None:
+        super().__init__(win)
+        self.win = win
+
+    def sizeHint(self, opt, idx) -> QSize:  # noqa: N802
+        return QSize(120, opt.fontMetrics.height() + 16)
+
+    def paint(self, p: QPainter, opt, idx) -> None:
+        c = self.win.c
+        tree = self.win.folders
+        if high_contrast():
+            pal = QApplication.palette()
+            text, muted, sel, hover = (pal.color(QPalette.Text), pal.color(QPalette.Text),
+                                       pal.color(QPalette.Highlight), pal.color(QPalette.Highlight))
+            sel_text, focus = pal.color(QPalette.HighlightedText), pal.color(QPalette.HighlightedText)
+        else:
+            text, muted, sel, hover = QColor(c["text"]), QColor(c["muted"]), QColor(c["accent_soft"]), QColor(c["hover"])
+            sel_text, focus = None, QColor(c["focus_ring"])
+        depth, parent = 0, idx.parent()
+        while parent.isValid():
+            depth, parent = depth + 1, parent.parent()
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(0, opt.rect.top(), tree.viewport().width(), opt.rect.height()).adjusted(4, 2, -4, -2)
+        selected = bool(opt.state & QStyle.State_Selected)
+        if selected or opt.state & QStyle.State_MouseOver:
+            p.setPen(Qt.NoPen)
+            p.setBrush(sel if selected else hover)
+            p.drawRoundedRect(r, 8, 8)
+        if selected and sel_text is not None:
+            text = muted = sel_text
+        if selected and tree.hasFocus():
+            p.setPen(QPen(focus, 2))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 8, 8)
+        fm = opt.fontMetrics
+        x = r.left() + 10 + depth * 18
+        right = r.right() - 8
+        has_kids = idx.model().hasChildren(idx)
+        if has_kids:  # chevron: down when open, right when folded
+            cx, cy = right - CHEVRON / 2 + 4, r.center().y()
+            pen = QPen(muted, 1.6)
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
+            p.setPen(pen)
+            if tree.isExpanded(idx):
+                p.drawPolyline([QPointF(cx - 4, cy - 2), QPointF(cx, cy + 2), QPointF(cx + 4, cy - 2)])
+            else:
+                p.drawPolyline([QPointF(cx - 2, cy - 4), QPointF(cx + 2, cy), QPointF(cx - 2, cy + 4)])
+            right -= CHEVRON
+        icon = idx.data(Qt.DecorationRole)
+        if icon is not None:
+            icon.paint(p, int(x), int(r.center().y() - 9), 18, 18)
+            x += 26
+        count = idx.data(FOLDER_COUNT)
+        cw = 0
+        if count is not None:
+            label = str(count)
+            cw = fm.horizontalAdvance(label) + 6
+            p.setPen(muted)
+            p.setFont(opt.font)
+            p.drawText(QRectF(right - cw, r.top(), cw, r.height()), Qt.AlignRight | Qt.AlignVCenter, label)
+        p.setPen(text)
+        p.setFont(opt.font)
+        room = max(0, right - cw - 6 - x)
+        p.drawText(QRectF(x, r.top(), room, r.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                   fm.elidedText(idx.data(Qt.DisplayRole) or "", Qt.ElideRight, int(room)))
+        p.restore()
+
+
 class _Reader(QTextBrowser):
     """The note itself. Pictures arrive as sfimg:<n> ids only (never file names), each mapped to a
     file checked to be in the Notes folder's _assets; decoded at the size shown, on white so
@@ -321,8 +411,14 @@ class NotesWindow(_Dialog):
 
         self.split = QSplitter(Qt.Horizontal)
         self.split.setHandleWidth(10)
-        self.folders = QTreeWidget()
+        self.folders = _FolderTree()
         self.folders.setHeaderHidden(True)
+        self.folders.setIndentation(0)  # the delegate indents; the highlight spans the whole row
+        self.folders.setRootIsDecorated(False)
+        self.folders.setItemDelegate(_FolderDelegate(self))
+        self.folders.setMouseTracking(True)
+        self.folders.itemExpanded.connect(lambda _it: self.folders.viewport().update())
+        self.folders.itemCollapsed.connect(self._on_fold)
         self.folders.setAccessibleName(t("Folders"))
         self.folders.setMinimumWidth(110)
         self.notes = QListWidget()
@@ -523,19 +619,31 @@ class NotesWindow(_Dialog):
                 counts.setdefault("/".join(parts[:i]), 0)
             counts["/".join(parts)] += 1
         keep = self.folder
+        folded = {it.data(0, FOLDER_PATH) for it in self._folder_items() if it.childCount() and not it.isExpanded()}
         self.folders.blockSignals(True)
         self.folders.clear()
-        top = QTreeWidgetItem([f"{t('All notes')}  ({len(self.rows)})"])
+        yellow = service_color(self.c, "note")
+        top = QTreeWidgetItem([t("All notes")])
         top.setData(0, FOLDER_PATH, "")
-        top.setIcon(0, glyph("note", service_color(self.c, "note"), 16))
+        top.setData(0, FOLDER_COUNT, len(self.rows))
+        top.setData(0, Qt.AccessibleTextRole, t("{name}, {n} notes", name=t("All notes"), n=len(self.rows)))
+        top.setIcon(0, glyph("note", yellow, 18))
         self.folders.addTopLevelItem(top)
         items = {"": top}
-        folder_icon = glyph("folder", self.c["muted"], 16)
-        for path in sorted(counts, key=lambda s: s.lower()):
+        folder_icon = glyph("folder", yellow, 18)
+        trash_icon = glyph("trash", yellow, 18)
+        trash = {"Recently Deleted", t("Recently Deleted")}
+
+        def order(path: str) -> tuple:  # as in Apple Notes: Notes first, Recently Deleted last
+            first = path.split("/")[0]
+            return (first in trash, first != "Notes", path.lower())
+
+        for path in sorted(counts, key=order):
             parent_path, _, name = path.rpartition("/")
-            it = QTreeWidgetItem([f"{name}  ({counts[path]})" if counts[path] else name])
+            it = QTreeWidgetItem([name])
             it.setData(0, FOLDER_PATH, path)
-            it.setIcon(0, folder_icon)
+            it.setData(0, FOLDER_COUNT, counts[path])
+            it.setIcon(0, trash_icon if not parent_path and name in trash else folder_icon)
             it.setData(0, Qt.AccessibleTextRole, t("{name}, {n} notes", name=name, n=counts[path]))
             parent = items.get(parent_path) if parent_path else None
             if parent is not None:
@@ -544,10 +652,32 @@ class NotesWindow(_Dialog):
                 self.folders.addTopLevelItem(it)
             items[path] = it
         self.folders.expandAll()
+        for path in folded:
+            if path in items:
+                items[path].setExpanded(False)
         chosen = items.get(keep) or top
+        while chosen is not top and chosen.parent() is not None and not chosen.parent().isExpanded():
+            chosen.parent().setExpanded(True)
         self.folder = chosen.data(0, FOLDER_PATH)
         self.folders.setCurrentItem(chosen)
         self.folders.blockSignals(False)
+
+    def _folder_items(self) -> list:
+        out, stack = [], [self.folders.topLevelItem(i) for i in range(self.folders.topLevelItemCount())]
+        while stack:
+            it = stack.pop()
+            out.append(it)
+            stack.extend(it.child(i) for i in range(it.childCount()))
+        return out
+
+    def _on_fold(self, item) -> None:
+        """A folded folder takes over the choice of a subfolder hidden inside it."""
+        cur = self.folders.currentItem()
+        while cur is not None and cur is not item:
+            cur = cur.parent()
+        if cur is item and self.folders.currentItem() is not item:
+            self.folders.setCurrentItem(item)
+        self.folders.viewport().update()
 
     def _on_folder(self, item, _prev=None) -> None:
         if item is None:
@@ -896,7 +1026,9 @@ class NotesWindow(_Dialog):
         self.reader.setStyleSheet(f"QTextBrowser{{background:{c['surface']};border:1px solid {c['border']};"
                                   f"border-radius:8px;padding:12px 18px;selection-background-color:{c['accent']};"
                                   f"selection-color:{c['accent_text']}}}")
-        self.folders.setStyleSheet("QTreeView{show-decoration-selected:0}")
+        self.folders.setStyleSheet(f"QTreeView{{background:{c['surface']};border:1px solid {c['border']};"
+                                   f"border-radius:8px;padding:4px;outline:0;show-decoration-selected:0}}"
+                                   f"QTreeView::item,QTreeView::branch{{border:none;background:transparent}}")
         self.more.setStyleSheet(f"QToolButton{{border:none;color:{c['accent_fg']};font-size:16px;padding:0 6px}}"
                                 f"QToolButton::menu-indicator{{image:none}}")
         if not self.closed:

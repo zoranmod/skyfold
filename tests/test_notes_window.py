@@ -209,6 +209,35 @@ def select(w, nid):
             w.notes.setCurrentRow(i)
 
 
+def test_folders_look_like_apple_notes(qapp, library):
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QImage, QMouseEvent
+    from skyfold.ui.notes_window import FOLDER_COUNT, FOLDER_PATH
+    st, root = library
+    st.put("x", None, "Gone", "Recently Deleted", "2026-11-01T10:00:00", True)
+    w = window(qapp, library)
+    tops = [w.folders.topLevelItem(i) for i in range(w.folders.topLevelItemCount())]
+    # name and count apart (count drawn on the right); Notes first, Recently Deleted last
+    assert [i.text(0) for i in tops] == ["All notes", "Notes", "Home", "Recently Deleted"]
+    assert [i.data(0, FOLDER_COUNT) for i in tops] == [4, 1, 1, 1]
+    assert w.folders.indentation() == 0 and not w.folders.rootIsDecorated()  # one highlight per row
+    home = tops[2]
+    assert home.childCount() == 1 and home.isExpanded()
+    w.folders.setCurrentItem(home.child(0))
+    img = QImage(w.folders.size(), QImage.Format_ARGB32)
+    w.folders.render(img)  # the delegate paints without errors
+    # a click on the chevron folds a folder; the fold survives a refresh
+    rect = w.folders.visualItemRect(home)
+    pos = QPointF(w.folders.viewport().width() - 12, rect.center().y())
+    ev = QMouseEvent(QEvent.MouseButtonPress, pos, pos, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    w.folders.mousePressEvent(ev)
+    assert not home.isExpanded() and w.folders.currentItem() is home and w.folder == "Home"
+    w._fill_folders()
+    home = [w.folders.topLevelItem(i) for i in range(w.folders.topLevelItemCount())][2]
+    assert home.data(0, FOLDER_PATH) == "Home" and not home.isExpanded()
+    w.close()
+
+
 def test_window_lists_reads_and_searches(qapp, library):
     from PySide6.QtCore import QUrl
     from PySide6.QtGui import QTextDocument
