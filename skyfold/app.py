@@ -487,8 +487,8 @@ class Controller(QObject):
     def _notes_source(self):
         """(Notes database, Notes folder) for the Notes window, or None when Notes isn't set up here."""
         state = self.worker.notes_state
-        if not self.settings.notes_enabled or state is None:
-            return None
+        if not self.settings.notes_enabled or state is None or auth.signed_out():
+            return None  # after Sign out the notes stay in their folder, but Skyfold doesn't show them
         root = Path(self.settings.notes_dir)
         last = state.get("root")
         if last is not None and Path(last) != root:
@@ -502,6 +502,9 @@ class Controller(QObject):
         if not self.settings.notes_enabled:
             self.open_settings(page=3)
             return
+        if auth.signed_out():
+            self.open_login()  # the notes of whoever signed out aren't shown until someone signs in
+            return
         old = self._dialogs.get("notes")
         if old is not None and isValid(old) and old.isVisible():
             self._show_dialog("notes", old)  # brought to the front
@@ -514,7 +517,7 @@ class Controller(QObject):
         """Signed out or another Apple ID: the Notes window closes, nothing of the old notes stays."""
         from shiboken6 import isValid
 
-        win = self._dialogs.get("notes")
+        win = self._dialogs.pop("notes", None)
         if win is not None and isValid(win):
             win.clear()
 

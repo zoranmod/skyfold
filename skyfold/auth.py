@@ -235,6 +235,11 @@ def _known_missing(p: Path) -> bool:
     return False
 
 
+def signed_out() -> bool:
+    """Signed out with Sign out (and not signed in since). A mark that can't be looked at counts as there."""
+    return not _known_missing(SIGNED_OUT)
+
+
 def restore(apple_id: str) -> Any | None:
     """Reuse the saved session. Returns None when the user has to sign in again."""
     from pyicloud import PyiCloudService

@@ -4,7 +4,10 @@ Folders on the left, the notes in the middle (newest first, with date and first 
 on the right; search covers titles, folders and the text of the notes. Read-only. The notes come
 from the Notes database (which notes exist, and which are locked) and the exported pages (what is
 read); see notes_view. The window looks again every two seconds while it is open, so a note that
-gets locked, deleted, renamed or moved during a sync is updated (or cleared) right away.
+gets locked, deleted, renamed or moved during a sync is updated (or cleared) within moments.
+
+Private text is held only while the window is open: however it is closed (Esc, the close button,
+signing out, another Apple ID), the index, the shown note and its pictures are dropped at once.
 """
 
 from __future__ import annotations
@@ -13,14 +16,17 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRectF, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import (QColor, QDesktopServices, QFont, QImage, QKeySequence, QPainter, QPen, QShortcut,
-                           QTextCharFormat, QTextCursor, QTextDocument)
-from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton,
-                               QSplitter, QStyle, QStyledItemDelegate, QTextBrowser, QTextEdit, QTreeWidget,
-                               QTreeWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFont, QImage, QImageReader,
+                           QKeySequence, QPainter, QPalette, QPen, QShortcut, QTextCharFormat, QTextCursor,
+                           QTextDocument)
+from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+                               QMenu, QPushButton, QSizePolicy, QSplitter, QStyle, QStyledItemDelegate,
+                               QTextBrowser, QTextEdit, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+                               QWidget)
 
 from ..i18n import t
 from ..notes_engine import local_datetime
@@ -38,6 +44,10 @@ OPENABLE = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".heic", ".heif", ".tif", "
             ".m4a", ".mp3", ".wav", ".aac", ".caf", ".mov", ".mp4", ".m4v", ".txt", ".csv", ".rtf",
             ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".pages", ".numbers", ".key", ".vcf"}
 HIGHLIGHTS = ("#ba55d3", "#ff5252", "#ffb74d", "#80cbc4", "#64b5f6")  # Apple's five highlight colours
+MAX_MARKS = 300  # search words marked in one note
+IMAGE_BUDGET = 120_000_000  # bytes of decoded pictures kept for the open note
+RETRY_INDEX = 30.0  # seconds before pages that couldn't be read are tried again
+RETRY_NOTE = 5.0
 
 
 def _blend(a: str, b: str, f: float) -> str:
@@ -46,8 +56,20 @@ def _blend(a: str, b: str, f: float) -> str:
                   round(ca.blue() * (1 - f) + cb.blue() * f)).name()
 
 
+def high_contrast() -> bool:
+    try:
+        return QApplication.styleHints().accessibility().contrastPreference() == Qt.ContrastPreference.HighContrast
+    except Exception:  # noqa: BLE001 - older Qt
+        return False
+
+
+def _key(r: nv.Row) -> tuple:
+    return (r.rel, r.modified)
+
+
 class _Indexer(QObject):
-    """Reads the note pages in the background for search and the first lines in the list."""
+    """Reads the note pages in the background for search and the first lines in the list. Results
+    carry a generation: anything from an earlier one (the list changed since) is thrown away."""
 
     batch = Signal(int, object)  # generation, {id: (key, text, folded)}
     done = Signal(int)
@@ -59,7 +81,6 @@ class _Indexer(QObject):
 
     def start(self, root: Path, rows: list, known: dict) -> int:
         self.stop()
-        self.gen += 1
         gen, stop = self.gen, threading.Event()
         self._stop = stop
         todo = [r for r in rows if not r.locked and r.rel and known.get(r.id, (None,))[0] != _key(r)]
@@ -69,14 +90,15 @@ class _Indexer(QObject):
             for r in todo:
                 if stop.is_set():
                     return
-                text = ""
                 p = nv.page_path(root, r)
                 try:
-                    if p is not None and p.stat().st_size <= nv.MAX_PAGE_BYTES:
-                        body, _ = nv.note_html(p.read_text(encoding="utf-8", errors="replace"), all_pages=True)
-                        text = nv.plain_text(body)
+                    if p is None or p.stat().st_size > nv.MAX_PAGE_BYTES:
+                        text = ""  # nothing to read (or too big): known, not tried again
+                    else:
+                        text = nv.plain_text(nv.note_html(p.read_text(encoding="utf-8", errors="replace"),
+                                                          all_pages=True).body)
                 except OSError:
-                    text = ""
+                    continue  # can't be read right now: tried again later
                 out[r.id] = (_key(r), text, nv.fold(text))
                 if len(out) >= 40:
                     self.batch.emit(gen, out)
@@ -90,11 +112,9 @@ class _Indexer(QObject):
         return gen
 
     def stop(self) -> None:
+        """Results still on their way are ignored from now on."""
         self._stop.set()
-
-
-def _key(r: nv.Row) -> tuple:
-    return (r.rel, r.modified)
+        self.gen += 1
 
 
 class _NoteDelegate(QStyledItemDelegate):
@@ -104,27 +124,33 @@ class _NoteDelegate(QStyledItemDelegate):
 
     def sizeHint(self, opt, idx) -> QSize:  # noqa: N802
         fm = opt.fontMetrics
-        return QSize(200, 2 * fm.height() + 24)
+        return QSize(160, 2 * fm.height() + 24)
 
     def paint(self, p: QPainter, opt, idx) -> None:
-        c = self.win.c
         row: nv.Row | None = self.win.row_by_id.get(idx.data(ROW_ID))
         if row is None:
             return
+        c = self.win.c
+        if high_contrast():  # the Windows contrast theme's own colours
+            pal = QApplication.palette()
+            text, muted, sel, sel_text = (pal.color(QPalette.Text), pal.color(QPalette.Text),
+                                          pal.color(QPalette.Highlight), pal.color(QPalette.HighlightedText))
+            hover, focus = pal.color(QPalette.Highlight), pal.color(QPalette.HighlightedText)
+        else:
+            text, muted, sel, sel_text = QColor(c["text"]), QColor(c["muted"]), QColor(c["accent_soft"]), None
+            hover, focus = QColor(c["hover"]), QColor(c["focus_ring"])
         p.save()
         p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(opt.rect).adjusted(4, 2, -4, -2)
         selected = bool(opt.state & QStyle.State_Selected)
-        if selected:
+        if selected or opt.state & QStyle.State_MouseOver:
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(c["accent_soft"]))
+            p.setBrush(sel if selected else hover)
             p.drawRoundedRect(r, 8, 8)
-        elif opt.state & QStyle.State_MouseOver:
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(c["hover"]))
-            p.drawRoundedRect(r, 8, 8)
-        if selected and opt.state & QStyle.State_HasFocus and self.win.notes.hasFocus():
-            p.setPen(QPen(QColor(c["focus_ring"]), 2))
+        if selected and sel_text is not None:
+            text = muted = sel_text
+        if selected and self.win.notes.hasFocus():
+            p.setPen(QPen(focus, 2))
             p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 8, 8)
         fm = opt.fontMetrics
@@ -135,27 +161,28 @@ class _NoteDelegate(QStyledItemDelegate):
         f = QFont(opt.font)
         p.setFont(f)
         dw = fm.horizontalAdvance(when) + 8 if when else 0
-        p.setPen(QColor(c["muted"]))
+        p.setPen(muted)
         if when:
             p.drawText(QRectF(x + w - dw, top, dw, line), Qt.AlignRight | Qt.AlignVCenter, when)
         bold = QFont(opt.font)
         bold.setWeight(QFont.DemiBold)
         p.setFont(bold)
-        p.setPen(QColor(c["text"]))
+        p.setPen(text)
         title = row.title or t("Untitled")
-        p.drawText(QRectF(x, top, w - dw, line), Qt.AlignLeft | Qt.AlignVCenter,
-                   p.fontMetrics().elidedText(title, Qt.ElideRight, int(w - dw)))
+        p.drawText(QRectF(x, top, max(0, w - dw), line), Qt.AlignLeft | Qt.AlignVCenter,
+                   p.fontMetrics().elidedText(title, Qt.ElideRight, int(max(0, w - dw))))
         p.setFont(f)
-        p.setPen(QColor(c["muted"]))
+        p.setPen(muted)
         second = ("\U0001F512 " + t("Locked note")) if row.locked else (idx.data(ROW_SNIPPET) or "")
         p.drawText(QRectF(x, top + line + 4, w, line), Qt.AlignLeft | Qt.AlignVCenter,
-                   fm.elidedText(second, Qt.ElideRight, int(w)))
+                   fm.elidedText(second, Qt.ElideRight, int(max(0, w))))
         p.restore()
 
 
 class _Reader(QTextBrowser):
-    """The note itself. Loads pictures only from the Notes folder's _assets (fitted to the width,
-    on white so drawings and scans stay readable in dark themes); links open only on a click."""
+    """The note itself. Pictures arrive as sfimg:<n> ids only (never file names), each mapped to a
+    file checked to be in the Notes folder's _assets; decoded at the size shown, on white so
+    drawings and scans stay readable in dark themes. Links open only on a click."""
 
     def __init__(self, win: "NotesWindow") -> None:
         super().__init__()
@@ -165,7 +192,25 @@ class _Reader(QTextBrowser):
         self.setReadOnly(True)
         self.setTextInteractionFlags(Qt.TextBrowserInteraction)
         self.page: Path | None = None
-        self._images: dict[str, QImage] = {}
+        self.images: list[str] = []
+        self._cache: dict[tuple, QImage] = {}
+        self._bytes = 0
+
+    def show_page(self, page: Path, clean: nv.Page, keep_pictures: bool) -> None:
+        if self.page != page or not keep_pictures:
+            self._cache.clear()
+            self._bytes = 0
+        self.page = page
+        self.images = list(clean.images)
+        self.setHtml(clean.body)
+
+    def clear_note(self) -> None:
+        self.page = None
+        self.images = []
+        self._cache.clear()
+        self._bytes = 0
+        self.document().clear()
+        self.setHtml("")
 
     def wheelEvent(self, e) -> None:  # noqa: N802
         if e.modifiers() & Qt.ControlModifier:  # Ctrl + wheel: zoom, as in a browser
@@ -175,41 +220,45 @@ class _Reader(QTextBrowser):
             return
         super().wheelEvent(e)
 
-    def clear_note(self) -> None:
-        self.page = None
-        self._images.clear()
-        self.document().clear()
-        self.setHtml("")
-
     def loadResource(self, kind: int, url: QUrl):  # noqa: N802
         if kind != QTextDocument.ImageResource or self.page is None or self.win.root is None:
             return None
-        ref = url.toString()
-        if ref in self._images:
-            return self._images[ref]
-        f = nv.resolve_asset(self.win.root, self.page, ref)
-        img = QImage(str(f)) if f is not None and f.is_file() else QImage()
-        if img.isNull():
-            img = QImage()
-        else:
-            dpr = self.devicePixelRatioF() or 1.0
-            room = max(200, min(1600, self.viewport().width() - 48))
-            if img.width() > room * dpr:
-                img = img.scaledToWidth(int(room * dpr), Qt.SmoothTransformation)
-            if img.hasAlphaChannel():
-                base = QImage(img.size(), QImage.Format_RGB32)
-                base.fill(QColor("#ffffff"))
-                q = QPainter(base)
-                q.drawImage(0, 0, img)
-                q.end()
-                img = base
-            img.setDevicePixelRatio(dpr)
-        self._images[ref] = img
+        if url.scheme() != nv.IMAGE_SCHEME or not url.path().isdigit():
+            return None
+        n = int(url.path())
+        if n >= len(self.images):
+            return None
+        dpr = self.devicePixelRatioF() or 1.0
+        room = max(200, min(1600, self.viewport().width() - 48))
+        key = (n, int(room * dpr))
+        if key in self._cache:
+            return self._cache[key]
+        img = QImage()
+        f = nv.resolve_asset(self.win.root, self.page, self.images[n])
+        if f is not None and f.is_file() and self._bytes < IMAGE_BUDGET:
+            reader = QImageReader(str(f))
+            reader.setAutoTransform(True)
+            size = reader.size()
+            if size.isValid() and size.width() > room * dpr:  # decoded at the size shown
+                reader.setScaledSize(QSize(int(room * dpr), max(1, int(size.height() * room * dpr / size.width()))))
+            img = reader.read()
+            if not img.isNull():
+                if img.hasAlphaChannel():
+                    base = QImage(img.size(), QImage.Format_RGB32)
+                    base.fill(QColor("#ffffff"))
+                    q = QPainter(base)
+                    q.drawImage(0, 0, img)
+                    q.end()
+                    img = base
+                img.setDevicePixelRatio(dpr)
+                self._bytes += img.sizeInBytes()
+        self._cache[key] = img
         return img
 
 
 class NotesWindow(_Dialog):
-    """source() gives (Notes database, Notes folder), or None when Notes isn't set up."""
+    """source() gives (Notes database, Notes folder), or None when Notes isn't set up or nobody
+    is signed in."""
 
     # kept while Skyfold runs (for every Notes window)
     zoom = 1.0  # text size of the note
@@ -230,10 +279,14 @@ class NotesWindow(_Dialog):
         self.row_by_id: dict[str, nv.Row] = {}
         self.texts: dict[str, tuple] = {}  # id -> (key, text, folded)
         self.indexing = False
+        self.off = False
+        self.closed = False
         self.current: str | None = None  # id of the note shown
         self.current_key: tuple | None = None
-        self.all_pages = False
+        self.shown_pages: dict[int, int] = {}  # scanned document -> pages shown (open note)
         self._fingerprint = None
+        self._index_started = 0.0
+        self._note_failed = 0.0  # when the open note couldn't be read (0 = it could)
         self.folder = ""  # "" = all notes
         self._hl_query = ""
 
@@ -249,33 +302,39 @@ class NotesWindow(_Dialog):
         self.search.setPlaceholderText(t("Search notes (Ctrl+K)"))
         self.search.setClearButtonEnabled(True)
         self.search.setAccessibleName(t("Search notes"))
+        self.search.setMinimumWidth(160)
+        self.search.returnPressed.connect(lambda: self.notes.setFocus())
         top.addWidget(self.search, 1)
         self.status = QLabel("")
         self.status.setObjectName("Hint")
+        self.status.setMaximumWidth(380)
+        self.status.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        self.status.setMinimumWidth(0)
         top.addWidget(self.status)
         lay.addLayout(top)
 
         self.split = QSplitter(Qt.Horizontal)
-        self.split.setChildrenCollapsible(False)
         self.split.setHandleWidth(10)
         self.folders = QTreeWidget()
         self.folders.setHeaderHidden(True)
         self.folders.setAccessibleName(t("Folders"))
-        self.folders.setMinimumWidth(140)
+        self.folders.setMinimumWidth(110)
         self.notes = QListWidget()
         self.notes.setAccessibleName(t("Notes"))
         self.notes.setItemDelegate(_NoteDelegate(self))
         self.notes.setMouseTracking(True)
         self.notes.setUniformItemSizes(True)
-        self.notes.setMinimumWidth(220)
         self.notes.setVerticalScrollMode(QListWidget.ScrollPerPixel)
 
         middle = QWidget()
+        middle.setMinimumWidth(190)
         ml = QVBoxLayout(middle)
         ml.setContentsMargins(0, 0, 0, 0)
         ml.setSpacing(6)
         self.sorter = Combo()
         self.sorter.setAccessibleName(t("Sort notes"))
+        self.sorter.setSizeAdjustPolicy(Combo.AdjustToMinimumContentsLengthWithIcon)
+        self.sorter.setMinimumContentsLength(8)
         for key, label in (("new", t("Newest first")), ("old", t("Oldest first")), ("title", t("Title A–Z"))):
             self.sorter.addItem(label, key)
         self.sorter.setCurrentIndex(max(0, self.sorter.findData(NotesWindow.sort)))
@@ -284,13 +343,14 @@ class NotesWindow(_Dialog):
         ml.addWidget(self.notes, 1)
 
         right = QWidget()
+        right.setMinimumWidth(260)
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(6)
         bar = QHBoxLayout()
         self.meta = QLabel("")
         self.meta.setObjectName("Hint")
-        self.meta.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.meta.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)  # long folder paths never widen the window
         bar.addWidget(self.meta, 1)
         self.zoom_out = self._bar_button("\u2212", t("Smaller text (Ctrl \u2212)"), lambda: self.set_zoom(-1))
         self.zoom_reset = self._bar_button(f"{round(NotesWindow.zoom * 100)}%", t("Back to normal size (Ctrl 0)"),
@@ -298,18 +358,31 @@ class NotesWindow(_Dialog):
         self.zoom_in = self._bar_button("+", t("Larger text (Ctrl +)"), lambda: self.set_zoom(1))
         for b in (self.zoom_out, self.zoom_reset, self.zoom_in):
             bar.addWidget(b)
-        self.theme_btn = self._bar_button("", t("Theme of this window"), self._cycle_theme)
-        bar.addSpacing(12)
-        bar.addWidget(self.theme_btn)
-        self.full = self._bar_button(t("Full screen"), t("Full screen (F11)"), self.toggle_full_screen)
-        bar.addSpacing(12)
-        bar.addWidget(self.full)
-        bar.addSpacing(12)
-        self.open_browser = QPushButton(t("Open in browser"))
-        self.open_browser.setObjectName("Link")
-        self.open_browser.setCursor(Qt.PointingHandCursor)
-        self.open_browser.clicked.connect(self._open_in_browser)
-        bar.addWidget(self.open_browser)
+        # the rest in one menu, so the window fits small screens
+        self.more = QToolButton()
+        self.more.setText("\u22ef")
+        self.more.setToolTip(t("More"))
+        self.more.setAccessibleName(t("More"))
+        self.more.setPopupMode(QToolButton.InstantPopup)
+        self.more.setCursor(Qt.PointingHandCursor)
+        self.more.setAutoRaise(True)
+        menu = QMenu(self.more)
+        self.act_browser = menu.addAction(t("Open in browser"), self._open_in_browser)
+        self.act_full = menu.addAction(t("Full screen"), self.toggle_full_screen)
+        self.act_full.setShortcut(QKeySequence("F11"))
+        self.act_full.setShortcutContext(Qt.WidgetShortcut)  # F11 itself is handled below (once)
+        themes = menu.addMenu(t("Theme of this window"))
+        group = QActionGroup(self)
+        self.theme_actions: dict = {}
+        for key in NotesWindow.THEMES:
+            act = QAction(self._theme_name(key), group, checkable=True)
+            act.triggered.connect(lambda _=False, k=key: self.set_theme(k))
+            themes.addAction(act)
+            self.theme_actions[key] = act
+        self.theme_actions[NotesWindow.own_theme].setChecked(True)
+        self.more.setMenu(menu)
+        bar.addSpacing(6)
+        bar.addWidget(self.more)
         rl.addLayout(bar)
         self.reader = _Reader(self)
         self.reader.setAccessibleName(t("Note"))
@@ -319,10 +392,14 @@ class NotesWindow(_Dialog):
         self.empty.setObjectName("Muted")
         self.empty.setAlignment(Qt.AlignCenter)
         self.empty.setWordWrap(True)
+        self.empty.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         rl.addWidget(self.empty, 1)
 
         for w in (self.folders, middle, right):
             self.split.addWidget(w)
+        self.split.setCollapsible(0, True)  # the folders give way first on a small screen
+        self.split.setCollapsible(1, False)
+        self.split.setCollapsible(2, False)
         self.split.setStretchFactor(0, 0)
         self.split.setStretchFactor(1, 0)
         self.split.setStretchFactor(2, 1)
@@ -332,7 +409,7 @@ class NotesWindow(_Dialog):
 
         self.folders.currentItemChanged.connect(self._on_folder)
         self.notes.currentItemChanged.connect(lambda *_: self._show_current())
-        self.notes.itemActivated.connect(lambda *_: self.reader.setFocus())
+        self.notes.itemActivated.connect(lambda *_: self._focus_reader())
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(180)
@@ -343,13 +420,13 @@ class NotesWindow(_Dialog):
         for keys, step in (("Ctrl++", 1), ("Ctrl+=", 1), ("Ctrl+-", -1), ("Ctrl+0", 0)):
             QShortcut(QKeySequence(keys), self, activated=lambda s=step: self.set_zoom(s))
         QShortcut(QKeySequence("F11"), self, activated=self.toggle_full_screen)
+        QShortcut(QKeySequence("F6"), self, activated=lambda: self._cycle(1))
+        QShortcut(QKeySequence("Shift+F6"), self, activated=lambda: self._cycle(-1))
         self._refit = QTimer(self)  # pictures fitted again after the window got wider or narrower
         self._refit.setSingleShot(True)
         self._refit.setInterval(250)
         self._refit.timeout.connect(self._refit_pictures)
         self._fitted_width = 0
-        QShortcut(QKeySequence("F6"), self, activated=lambda: self._cycle(1))
-        QShortcut(QKeySequence("Shift+F6"), self, activated=lambda: self._cycle(-1))
 
         self.poll = QTimer(self)
         self.poll.setInterval(2000)
@@ -362,7 +439,8 @@ class NotesWindow(_Dialog):
     # --- data ---------------------------------------------------------------------------------
     def refresh(self) -> None:
         """Read the list of notes again; change only what changed."""
-        src = None
+        if self.closed:
+            return
         try:
             src = self.source()
         except Exception:  # noqa: BLE001 - e.g. the database is being replaced right now
@@ -380,32 +458,52 @@ class NotesWindow(_Dialog):
                 return
         fingerprint = (str(root), tuple(rows))
         if fingerprint == self._fingerprint:
+            self._retry()
             return
+        self.indexer.stop()  # whatever it was reading belongs to the old list
         if root != self.root:
             self.texts.clear()
-            self.indexer.stop()
         self._fingerprint = fingerprint
         self.root = root
         self.rows = rows
         self.row_by_id = {r.id: r for r in rows}
-        # a note that got locked (or deleted) takes its text with it, also out of search
-        self.texts = {k: v for k, v in self.texts.items() if k in self.row_by_id and not self.row_by_id[k].locked}
-        if root is not None and rows:
-            self.indexing = True
-            self.indexer.start(root, rows, self.texts)
+        # a note that got locked, deleted, changed or moved takes its old text with it, also out of search
+        self.texts = {k: v for k, v in self.texts.items()
+                      if (r := self.row_by_id.get(k)) is not None and not r.locked and v[0] == _key(r)}
+        self._start_index()
         self._fill_folders()
         self._fill_list()
 
+    def _start_index(self) -> None:
+        todo = self.root is not None and any(
+            not r.locked and r.rel and r.id not in self.texts for r in self.rows)
+        self.indexing = bool(todo)
+        if todo:
+            self._index_started = time.monotonic()
+            self.indexer.start(self.root, self.rows, self.texts)
+
+    def _retry(self) -> None:
+        """Pages that couldn't be read (a folder briefly unavailable) are tried again now and then."""
+        now = time.monotonic()
+        if not self.indexing and now - self._index_started > RETRY_INDEX:
+            self._start_index()
+        if self._note_failed and now - self._note_failed > RETRY_NOTE:
+            self.current_key = None
+            self._show_current()
+
     def _on_batch(self, gen: int, out: dict) -> None:
-        if gen != self.indexer.gen:
+        if gen != self.indexer.gen or self.closed:
             return
-        self.texts.update(out)
+        for nid, entry in out.items():
+            r = self.row_by_id.get(nid)
+            if r is not None and not r.locked and entry[0] == _key(r):  # still the same note, still readable
+                self.texts[nid] = entry
         self._refresh_snippets()
         if self.search.text().strip():
             self._debounce.start()
 
     def _on_index_done(self, gen: int) -> None:
-        if gen != self.indexer.gen:
+        if gen != self.indexer.gen or self.closed:
             return
         self.indexing = False
         self._fill_list()
@@ -421,10 +519,9 @@ class NotesWindow(_Dialog):
         keep = self.folder
         self.folders.blockSignals(True)
         self.folders.clear()
-        icon = glyph("note", service_color(self.c, "note"), 16)
         top = QTreeWidgetItem([f"{t('All notes')}  ({len(self.rows)})"])
         top.setData(0, FOLDER_PATH, "")
-        top.setIcon(0, icon)
+        top.setIcon(0, glyph("note", service_color(self.c, "note"), 16))
         self.folders.addTopLevelItem(top)
         items = {"": top}
         folder_icon = glyph("folder", self.c["muted"], 16)
@@ -434,7 +531,11 @@ class NotesWindow(_Dialog):
             it.setData(0, FOLDER_PATH, path)
             it.setIcon(0, folder_icon)
             it.setData(0, Qt.AccessibleTextRole, t("{name}, {n} notes", name=name, n=counts[path]))
-            (items.get(parent_path) or top).addChild(it) if parent_path else self.folders.addTopLevelItem(it)
+            parent = items.get(parent_path) if parent_path else None
+            if parent is not None:
+                parent.addChild(it)
+            else:
+                self.folders.addTopLevelItem(it)
             items[path] = it
         self.folders.expandAll()
         chosen = items.get(keep) or top
@@ -449,8 +550,11 @@ class NotesWindow(_Dialog):
         self._fill_list()
 
     # --- list ---------------------------------------------------------------------------------
+    def _terms(self) -> list[str]:
+        return [w for w in (nv.fold(x) for x in self.search.text().split()) if w]
+
     def _visible_rows(self) -> list[tuple[int, nv.Row]]:
-        terms = [nv.fold(w) for w in self.search.text().split() if w.strip()]
+        terms = self._terms()
         out = []
         for r in self.rows:
             if not terms and self.folder:
@@ -473,9 +577,11 @@ class NotesWindow(_Dialog):
         entry = self.texts.get(r.id)
         if r.locked or entry is None:
             return ""
-        return nv.snippet(entry[1], r.title, self.search.text())
+        return nv.snippet(entry[1], entry[2], r.title, self.search.text())
 
     def _fill_list(self) -> None:
+        if self.closed:
+            return
         keep = self.current
         shown = self._visible_rows()
         self.notes.blockSignals(True)
@@ -484,12 +590,14 @@ class NotesWindow(_Dialog):
         for _, r in shown:
             it = QListWidgetItem()
             it.setData(ROW_ID, r.id)
-            it.setData(ROW_SNIPPET, self._snippet(r))
+            snip = self._snippet(r)
+            it.setData(ROW_SNIPPET, snip)
             when = local_datetime(r.modified) if r.modified else ""
             folder = r.folder.replace("/", " \u203a ")
             text = ", ".join(x for x in (r.title or t("Untitled"), when, folder,
                                           t("Locked note") if r.locked else "") if x)
             it.setData(Qt.AccessibleTextRole, text)
+            it.setData(Qt.AccessibleDescriptionRole, snip)
             it.setToolTip(r.title or t("Untitled"))
             self.notes.addItem(it)
             if r.id == keep:
@@ -513,16 +621,21 @@ class NotesWindow(_Dialog):
             it = self.notes.item(i)
             r = self.row_by_id.get(it.data(ROW_ID))
             if r is not None and not it.data(ROW_SNIPPET):
-                it.setData(ROW_SNIPPET, self._snippet(r))
+                snip = self._snippet(r)
+                it.setData(ROW_SNIPPET, snip)
+                it.setData(Qt.AccessibleDescriptionRole, snip)
 
     # --- the note -----------------------------------------------------------------------------
     def _show_current(self) -> None:
+        if self.closed:
+            return
         it = self.notes.currentItem()
         row = self.row_by_id.get(it.data(ROW_ID)) if it is not None else None
         if row is None:
             self.current = self.current_key = None
+            self._note_failed = 0.0
             self.reader.clear_note()
-            self._empty(t("Notes are turned off in Settings.") if getattr(self, "off", False) else
+            self._empty(t("Notes are turned off in Settings.") if self.off else
                         t("Your notes will appear here after the first sync.") if not self.rows
                         else t("No notes found."))
             return
@@ -530,59 +643,70 @@ class NotesWindow(_Dialog):
         if key == self.current_key and self.reader.page is not None:
             self._highlight(jump=self.search.text() != self._hl_query)
             return
-        if row.id != self.current:
-            self.all_pages = False
+        same_note = row.id == self.current
+        if not same_note:
+            self.shown_pages = {}
         self.current, self.current_key = row.id, key
         when = local_datetime(row.modified) if row.modified else ""
         folder = row.folder.replace("/", " \u203a ")
         self.meta.setText("  \u00b7  ".join(x for x in (folder, when) if x))
+        self.meta.setToolTip(self.meta.text())
+        self._note_failed = 0.0
         if row.locked:
             self.reader.clear_note()
             self._empty("\U0001F512 " + t("This note is locked. Skyfold can't read locked notes; open it on your "
                                          "iPhone, iPad or Mac."))
             return
         page = nv.page_path(self.root, row) if self.root else None
-        try:
-            if page is None or page.stat().st_size > nv.MAX_PAGE_BYTES:
-                raise OSError
-            text = page.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        if page is None:
             self.reader.clear_note()
-            self._empty(t("This note isn't on this PC yet. It will be after the next sync.")
-                        if page is None or not page.exists() else
-                        t("This note is too big to show here. Open it in your browser."),
-                        browser=page is not None and page.exists())
+            self._empty(t("This note isn't on this PC yet. It will be after the next sync."))
             return
-        body, _hidden = nv.note_html(text, all_pages=self.all_pages)
-        scroll = self.reader.verticalScrollBar().value() if self.reader.page == page else 0
-        self.reader.clear_note()
-        self.reader.page = page
-        self.reader.document().setDefaultStyleSheet(self._css())
+        try:
+            size = page.stat().st_size
+            if size > nv.MAX_PAGE_BYTES:
+                self.reader.clear_note()
+                self._empty(t("This note is too big to show here. Open it in your browser."), browser=True)
+                return
+            text = page.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            self.reader.clear_note()
+            self._empty(t("This note isn't on this PC yet. It will be after the next sync."))
+            return
+        except OSError:
+            self._note_failed = time.monotonic()  # tried again in a moment
+            self.reader.clear_note()
+            self._empty(t("This note can't be read right now. Skyfold tries again in a moment."))
+            return
+        clean = nv.note_html(text, self.shown_pages)
+        scroll = self.reader.verticalScrollBar().value() if (same_note and self.reader.page == page) else 0
+        doc = self.reader.document()
+        doc.setDefaultStyleSheet(self._css())
         font = QFont(QApplication.font())
         base = font.pointSizeF() if font.pointSizeF() > 0 else 10.0
         font.setPointSizeF(base * 1.1 * NotesWindow.zoom)
-        self.reader.document().setDefaultFont(font)
+        doc.setDefaultFont(font)
+        self.reader.show_page(page, clean, keep_pictures=same_note)
         self._fitted_width = self.reader.viewport().width()
-        self.reader.setHtml(body)
         self.reader.verticalScrollBar().setValue(scroll)
         self.empty.hide()
         self.reader.show()
-        self.open_browser.show()
-        self._highlight(jump=True)
+        self.act_browser.setEnabled(True)
+        self._highlight(jump=not same_note or self.search.text() != self._hl_query)
 
     def _empty(self, text: str, browser: bool = False) -> None:
         self.reader.hide()
         self.empty.setText(text)
         self.empty.show()
-        self.open_browser.setVisible(browser)
+        self.act_browser.setEnabled(browser)
         if not self.current:
             self.meta.setText("")
 
     def _highlight(self, jump: bool) -> None:
         """Mark the searched words in the open note (without changing the note); with jump, scroll
-        to the first one (not again while the list is only being refreshed)."""
+        to the first one. Positions are counted the way Qt counts them (an emoji is two)."""
         self._hl_query = self.search.text()
-        terms = [nv.fold(w) for w in self.search.text().split() if w.strip()]
+        terms = self._terms()
         sels = []
         fmt = QTextCharFormat()
         fmt.setBackground(QColor(_blend(self.c["bg"], service_color(self.c, "note"), 0.45)))
@@ -590,18 +714,19 @@ class NotesWindow(_Dialog):
         first = None
         doc = self.reader.document()
         block = doc.begin()
-        while terms and block.isValid():
-            folded = nv.fold(block.text())
+        while terms and block.isValid() and len(sels) < MAX_MARKS:
+            text = block.text()
+            folded, pos = nv.fold_map(text)
             for w in terms:
                 i = folded.find(w)
-                while i >= 0:
+                while i >= 0 and len(sels) < MAX_MARKS:
                     cur = QTextCursor(doc)
-                    cur.setPosition(block.position() + i)
-                    cur.setPosition(block.position() + i + len(w), QTextCursor.KeepAnchor)
+                    cur.setPosition(block.position() + pos[i])
+                    cur.setPosition(block.position() + pos[i + len(w)], QTextCursor.KeepAnchor)
                     sel = QTextEdit.ExtraSelection()
                     sel.cursor, sel.format = cur, fmt
                     sels.append(sel)
-                    first = first if first is not None else block.position() + i
+                    first = first if first is not None else block.position() + pos[i]
                     i = folded.find(w, i + len(w))
             block = block.next()
         self.reader.setExtraSelections(sels)
@@ -627,8 +752,9 @@ class NotesWindow(_Dialog):
     # --- links --------------------------------------------------------------------------------
     def _on_link(self, url: QUrl) -> None:
         ref = url.toString()
-        if ref == "skyfold:all-pages":
-            self.all_pages = True
+        if ref.startswith("skyfold:more:") and ref[13:].isdigit():
+            n = int(ref[13:])
+            self.shown_pages[n] = self.shown_pages.get(n, nv.SCAN_PAGES) + nv.SCAN_PAGES  # only that scan
             self.current_key = None
             self._show_current()
             return
@@ -651,7 +777,7 @@ class NotesWindow(_Dialog):
         if page is not None and page.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(page)))
 
-    # --- order and size ---------------------------------------------------------------------------
+    # --- order and size -----------------------------------------------------------------------
     def _on_sort(self, *_args) -> None:
         NotesWindow.sort = self.sorter.currentData() or "new"
         self._fill_list()
@@ -665,6 +791,8 @@ class NotesWindow(_Dialog):
         b.setCursor(Qt.PointingHandCursor)
         b.setToolTip(tip)
         b.setAccessibleName(tip)
+        b.setAutoDefault(False)  # Enter in the search box never presses it
+        b.setDefault(False)
         b.clicked.connect(fn)
         return b
 
@@ -674,7 +802,7 @@ class NotesWindow(_Dialog):
         now = min(range(len(zooms)), key=lambda i: abs(zooms[i] - NotesWindow.zoom))
         NotesWindow.zoom = 1.0 if step == 0 else zooms[max(0, min(len(zooms) - 1, now + step))]
         self.zoom_reset.setText(f"{round(NotesWindow.zoom * 100)}%")
-        self.current_key = None
+        self.current_key = None  # same note: its pictures are kept, only the text changes size
         self._show_current()
 
     def toggle_full_screen(self) -> None:
@@ -686,7 +814,7 @@ class NotesWindow(_Dialog):
         else:
             self._was_maximized = self.isMaximized()
             self.showFullScreen()
-        self.full.setText(t("Exit full screen") if self.isFullScreen() else t("Full screen"))
+        self.act_full.setText(t("Exit full screen") if self.isFullScreen() else t("Full screen"))
 
     def resizeEvent(self, e) -> None:  # noqa: N802
         super().resizeEvent(e)
@@ -703,10 +831,16 @@ class NotesWindow(_Dialog):
         self.search.setFocus()
         self.search.selectAll()
 
+    def _focus_reader(self) -> None:
+        (self.reader if self.reader.isVisible() else self.notes).setFocus()
+
     def _cycle(self, step: int) -> None:
-        order = [self.search, self.folders, self.notes, self.reader if self.reader.isVisible() else self.notes]
-        now = next((i for i, w in enumerate(order) if w.hasFocus()), -1)
-        order[(now + step) % len(order)].setFocus()
+        order = [w for w in (self.search, self.folders, self.notes, self.reader)
+                 if w.isVisible() and w.isEnabled() and w.width() > 0]
+        now = next((i for i, w in enumerate(order) if w.hasFocus() or w.isAncestorOf(QApplication.focusWidget())),
+                   -1)
+        if order:
+            order[(now + step) % len(order)].setFocus()
 
     def keyPressEvent(self, e) -> None:  # noqa: N802
         if e.key() == Qt.Key_Escape and self.search.text():
@@ -715,19 +849,23 @@ class NotesWindow(_Dialog):
         if e.key() == Qt.Key_Escape and self.isFullScreen():
             self.toggle_full_screen()
             return
-        if e.key() in (Qt.Key_Return, Qt.Key_Enter) and self.notes.hasFocus():
-            self.reader.setFocus()
-            return
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter):
+            return  # never a dialog's default button (Enter on a note opens it: itemActivated)
         super().keyPressEvent(e)
 
     # --- look ---------------------------------------------------------------------------------
-    def _theme_name(self) -> str:
-        return {None: t("As Skyfold"), "light": t("Light"), "dark": t("Dark"), "oled": "OLED"}[NotesWindow.own_theme]
+    @staticmethod
+    def _theme_name(key) -> str:
+        return {None: t("As Skyfold"), "light": t("Light"), "dark": t("Dark"), "oled": "OLED"}[key]
+
+    def set_theme(self, key) -> None:
+        NotesWindow.own_theme = key
+        self.theme_actions[key].setChecked(True)
+        self.apply_palette(self.app_c)
 
     def _cycle_theme(self) -> None:
         order = NotesWindow.THEMES
-        NotesWindow.own_theme = order[(order.index(NotesWindow.own_theme) + 1) % len(order)]
-        self.apply_palette(self.app_c)
+        self.set_theme(order[(order.index(NotesWindow.own_theme) + 1) % len(order)])
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         """Skyfold's theme changed (or this window's own): restyle everything in the window."""
@@ -742,8 +880,6 @@ class NotesWindow(_Dialog):
             palette = theme.palette(own)
             self.setStyleSheet(theme.stylesheet(palette))
             self.setPalette(theme.qpalette(palette))
-        if hasattr(self, "theme_btn"):
-            self.theme_btn.setText(t("Theme: {name}", name=self._theme_name()))
         self._apply(palette)
 
     def _apply(self, palette: dict[str, str]) -> None:
@@ -755,23 +891,42 @@ class NotesWindow(_Dialog):
                                   f"border-radius:8px;padding:12px 18px;selection-background-color:{c['accent']};"
                                   f"selection-color:{c['accent_text']}}}")
         self.folders.setStyleSheet("QTreeView{show-decoration-selected:0}")
-        if hasattr(self, "rows"):
+        self.more.setStyleSheet(f"QToolButton{{border:none;color:{c['accent_fg']};font-size:16px;padding:0 6px}}"
+                                f"QToolButton::menu-indicator{{image:none}}")
+        if not self.closed:
             self._fill_folders()
             self.current_key = None
             self._show_current()
             self.notes.viewport().update()
 
-    def closeEvent(self, e) -> None:  # noqa: N802
+    # --- closing ------------------------------------------------------------------------------
+    def _forget(self) -> None:
+        """Drop every bit of note text and every picture the window holds (any way of closing)."""
+        self.closed = True
         self.poll.stop()
+        self._debounce.stop()
+        self._refit.stop()
         self.indexer.stop()
+        self.indexing = False
+        self.texts = {}
+        self.rows, self.row_by_id = [], {}
+        self.current = self.current_key = None
         self.reader.clear_note()
-        self.texts.clear()
+        self.notes.clear()
+        self.folders.clear()
+        self.search.clear()
+
+    def reject(self) -> None:
+        """Esc, and the dialog's other ways of closing: everything is dropped, then the window goes."""
+        self._forget()
+        super().reject()
+        self.deleteLater()
+
+    def closeEvent(self, e) -> None:  # noqa: N802
+        self._forget()
         super().closeEvent(e)
 
     def clear(self) -> None:
-        """Signed out or another account: nothing of the old notes stays on screen."""
-        self.indexer.stop()
-        self.texts.clear()
-        self.rows, self.row_by_id = [], {}
-        self.reader.clear_note()
+        """Signed out or another Apple ID: nothing of the old notes stays on screen or in memory."""
+        self._forget()
         self.close()
