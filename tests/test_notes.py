@@ -121,11 +121,17 @@ def test_activity_says_moved_updated_or_downloaded(env):
     r.put("n2", "A")
     r.put("n3", "B")
     s.run()
-    assert seen[-1] == ("download", "Notes: downloaded 2")
-    r.put("n2", "A", folder="F2")
-    r.put("n3", "B", folder="F2")
+    assert sorted(seen[-2:]) == [("download", "Notes: downloaded A"), ("download", "Notes: downloaded B")]
+    seen.clear()
+    r.put("n2", "A2")  # renamed
+    r.put("n3", "B", folder="F2")  # moved, in the same sync
     s.run()
-    assert seen[-1] == ("move", "Notes: moved 2 notes to other folders")
+    assert sorted(seen) == [("download", "Notes: renamed A to A2"), ("move", "Notes: moved B to Recepti")]
+    seen.clear()
+    for i in range(10):  # many at once: one line
+        r.put(f"m{i}", f"M{i}")
+    s.run()
+    assert seen == [("download", "Notes: downloaded 10")]
 
 
 def test_deleted_note_goes_to_recycle_bin(env):

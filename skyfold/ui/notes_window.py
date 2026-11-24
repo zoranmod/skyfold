@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFont, QImage, QImageIOHandler, QImageReader,
                            QKeySequence, QPainter, QPalette, QPen, QShortcut, QTextCharFormat, QTextCursor,
                            QTextDocument)
@@ -480,11 +480,12 @@ class NotesWindow(_Dialog):
         self.folder = ""  # "" = all notes
         self._hl_query = ""
         self._resume_id: str | None = None
-        self._resume_scroll: int | None = None
+        self._resume_pos: int | None = None
+        self._pending_anchor: int | None = None
         r = NotesWindow.resume
         if r:  # back where you were
             self.folder, self.current = r.get("folder") or "", r.get("id")
-            self._resume_id, self._resume_scroll = r.get("id"), r.get("scroll")
+            self._resume_id, self._resume_pos = r.get("id"), r.get("pos")
 
         self.indexer = _Indexer()
         self.indexer.batch.connect(self._on_batch)
@@ -919,10 +920,12 @@ class NotesWindow(_Dialog):
             return
         clean = nv.note_html(text, self.shown_pages)
         clean.body = self._sized(page, clean)
-        scroll = self.reader.verticalScrollBar().value() if (same_note and self.reader.page == page) else 0
-        if self._resume_scroll is not None and self._resume_id == row.id:
-            scroll = self._resume_scroll  # where you were when the window was last closed
-        self._resume_scroll = None
+        # the same note shown again (zoom, a wider window, more pages): it stays at the same text,
+        # not the same number of pixels; a reopened window: back where it was closed
+        anchor = self._top_position() if (same_note and self.reader.page == page) else None
+        if self._resume_pos is not None and self._resume_id == row.id:
+            anchor = self._resume_pos
+        self._resume_pos = None
         if self._resume_id == row.id:
             self._resume_id = None
         font = QFont(QApplication.font())
@@ -930,13 +933,51 @@ class NotesWindow(_Dialog):
         font.setPointSizeF(base * 1.1 * NotesWindow.zoom)
         self.reader.show_page(page, clean, keep_pictures=same_note, css=self._css(), font=font)
         self._fitted_width = self.reader.viewport().width()
-        self.reader.verticalScrollBar().setValue(scroll)
-        if scroll:
-            QTimer.singleShot(0, lambda v=scroll: self.reader.verticalScrollBar().setValue(v))  # after layout
+        self._pending_anchor = anchor if (anchor and not self.isVisible()) else None
+        self._scroll_to_position(anchor or 0)
         self.empty.hide()
         self.reader.show()
         self.act_browser.setEnabled(True)
         self._highlight(jump=not same_note or self.search.text() != self._hl_query)
+
+    def _top_position(self) -> int:
+        """Where in the note's text the top of the view is (a character, or a picture)."""
+        if not self.reader.isVisible() or self.reader.page is None:
+            return 0
+        return self.reader.cursorForPosition(QPoint(4, 4)).position()
+
+    def _scroll_to_position(self, pos: int) -> None:
+        """Put that place of the note at the top of the view at once: the whole note is laid out
+        first (pictures have their size already), so it doesn't arrive in steps."""
+        doc = self.reader.document()
+        layout = doc.documentLayout()
+        layout.documentSize()  # lays out the whole note now (and sets the scrollbar's range)
+        y = 0.0
+        if pos > 0:
+            block = doc.findBlock(pos)
+            if block.isValid():
+                y = layout.blockBoundingRect(block).top()
+                lines = block.layout()
+                if lines is not None and lines.lineCount():
+                    line = lines.lineForTextPosition(max(0, pos - block.position()))
+                    if line.isValid():
+                        y += line.y()
+        self.reader.verticalScrollBar().setValue(int(y))
+
+    def showEvent(self, e) -> None:  # noqa: N802
+        """The window has its real size only now, before anything is drawn: the note is fitted to it
+        and put at its place here, so it appears there at once (no jump, no scrolling into place)."""
+        super().showEvent(e)
+        anchor, self._pending_anchor = getattr(self, "_pending_anchor", None), None
+        if self.closed or self.reader.page is None:
+            return
+        if abs(self.reader.viewport().width() - self._fitted_width) > 40:
+            if anchor:
+                self._resume_id, self._resume_pos = self.current, anchor
+            self.current_key = None
+            self._show_current()
+        elif anchor:
+            self._scroll_to_position(anchor)
 
     def _sized(self, page: Path, clean: nv.Page) -> str:
         """Every picture with its width and height on screen: Qt then lays the note out at once and
@@ -1179,8 +1220,7 @@ class NotesWindow(_Dialog):
         """Drop every bit of note text and every picture the window holds (any way of closing).
         Only which folder and note were open (and how far down) is kept, to come back to."""
         if not self.closed and remember and self.current:
-            NotesWindow.resume = {"folder": self.folder, "id": self.current,
-                                  "scroll": self.reader.verticalScrollBar().value()}
+            NotesWindow.resume = {"folder": self.folder, "id": self.current, "pos": self._top_position()}
         self.closed = True
         self.poll.stop()
         self._debounce.stop()

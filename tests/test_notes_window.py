@@ -720,3 +720,30 @@ def test_the_window_comes_back_where_it_was_until_sign_out(qapp, library):
     w3 = window(qapp, library)
     assert w3.folder == "" and ids(w3)[0] == "g"
     w3.close()
+
+
+def test_reopened_window_is_at_the_same_place_at_once(qapp, library):
+    from skyfold.ui.notes_window import NotesWindow
+    st, root = library
+    paras = "".join(f"<p>Line {i} of a long note</p>" for i in range(400))
+    (root / "Home" / "Groceries.html").write_text(f'<div class="note-content"><h1>Groceries</h1>{paras}</div>',
+                                                  encoding="utf-8")
+    w = window(qapp, library)
+    bar = w.reader.verticalScrollBar()
+    bar.setValue(bar.maximum() // 2)
+    qapp.processEvents()
+    pos = w._top_position()
+    assert pos > 1000
+    w.close()
+    assert NotesWindow.resume["pos"] == pos
+    w2 = NotesWindow(w.app_c, w.source)
+    seen = []
+    w2.reader.verticalScrollBar().valueChanged.connect(seen.append)
+    w2.show()
+    qapp.processEvents()
+    assert abs(w2._top_position() - pos) < 60  # the same line (or the one next to it)
+    assert len(set(seen)) <= 2  # put there, not scrolled there step by step
+    w2.set_zoom(1)  # zooming keeps the same text in view
+    qapp.processEvents()
+    assert abs(w2._top_position() - pos) < 60
+    w2.close()
