@@ -12,6 +12,7 @@ pictures get generated ids, mapped to files that were checked first.
 from __future__ import annotations
 
 import html
+import os
 import posixpath
 import re
 import unicodedata
@@ -21,7 +22,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from .i18n import t
-from .notes_engine import ASSETS
+from .notes_engine import ASSETS, _is_junction
 
 # checklist boxes as text (read out by screen readers, found by search), in Segoe UI Symbol so the
 # ticked one isn't drawn as a colour emoji
@@ -91,9 +92,14 @@ def resolve_asset(root: Path, page: Path, ref: str) -> Path | None:
     if len(parts) < 2 or parts[0] != ASSETS or ".." in parts:
         return None
     try:
-        top = (root_r / ASSETS).resolve()
+        top = root_r / ASSETS
+        # _assets itself must be a real folder in the Notes folder, not a link or junction to
+        # somewhere else (it is the boundary everything below is checked against)
+        if os.path.islink(top) or _is_junction(top) or os.path.normcase(top.resolve()) != os.path.normcase(top):
+            return None
         target = (root_r / rel).resolve()
         target.relative_to(top)
+        target.relative_to(root_r)
     except (OSError, ValueError, RuntimeError):
         return None
     return target
@@ -113,7 +119,9 @@ _HL = re.compile(r"var\(--hl([1-5])-bg\)")
 _ALIGN = re.compile(r"text-align\s*:\s*(left|right|center|justify)", re.IGNORECASE)
 _MEDIA_TEXT = {"audio": "Audio recording", "video": "Video", "object": "Open the PDF",
                "embed": "Open the PDF", "iframe": "Open the attachment"}
-_WRAPPER = re.compile(r"""<div\b[^>]*\bclass\s*=\s*(["'])(?:[^"']*\s)?note-content(?:\s[^"']*)?\1""", re.IGNORECASE)
+_WRAPPER = re.compile(r"""<div\b[^>]*\bclass\s*=\s*(?:(["'])(?:[^"']*\s)?note-content(?:\s[^"']*)?\1"""
+                      r"""|note-content(?=[\s/>]))""", re.IGNORECASE)  # quoted, or unquoted (class=note-content)
+LABEL = "⁣"  # (invisible) starts a line that Skyfold added, such as an attachment link: never a first line
 
 
 @dataclass
@@ -253,10 +261,10 @@ class _Clean(HTMLParser):
     def _attachment(self, kind: str, src: str) -> None:
         label = t(_MEDIA_TEXT.get(kind, "Open the attachment"))
         if not src or _SCHEME.match(src):
-            self.out.append(f"<p><i>{html.escape(t('Attachment unavailable on this PC'))}</i></p>")
+            self.out.append(f'<p class="sf-att"><i>{html.escape(t("Attachment unavailable on this PC"))}</i></p>')
             return
         name = urllib.parse.unquote(src.split("#", 1)[0].split("?", 1)[0]).replace("\\", "/").rsplit("/", 1)[-1]
-        self.out.append(f'<p>\U0001F4CE <a href="{html.escape(src, quote=True)}">{html.escape(label)}</a>'
+        self.out.append(f'<p class="sf-att">\U0001F4CE <a href="{html.escape(src, quote=True)}">{html.escape(label)}</a>'
                         f' <span class="sf-file">{html.escape(name)}</span></p>')
 
     def _img(self, a: dict, classes: list[str]) -> None:
@@ -338,6 +346,8 @@ class _Text(HTMLParser):
     def handle_starttag(self, tag, attrs):
         if tag in ("script", "style", "head", "title"):
             self.skip += 1
+        elif tag == "p" and ("class", "sf-att") in attrs:
+            self.parts.append("\n" + LABEL)
         elif tag in _BLOCK or tag in ("td", "th"):
             self.parts.append("\n" if tag not in ("td", "th") else " ")
 
@@ -407,6 +417,41 @@ def fold_map(text: str) -> tuple[str, list[int]]:
     return "".join(out), pos
 
 
+def fold_positions(text: str, wanted: list[int]) -> list[int]:
+    """Where the folded characters at the given positions (in fold(text)) start in text, counted in
+    UTF-16 units as Qt counts them; len(fold(text)) gives the end. Walks the text once without
+    building a table for all of it (a long paragraph stays cheap)."""
+    order = sorted(set(wanted))
+    found: dict[int, int] = {}
+    k = 0  # folded characters so far
+    at = 0  # UTF-16 units so far
+    j = 0
+    for ch in text:
+        if j >= len(order):
+            break
+        if _TABLE[ord(ch)]:
+            while j < len(order) and order[j] == k:
+                found[order[j]] = at
+                j += 1
+            k += 1
+        at += 2 if ord(ch) > 0xFFFF else 1
+    while j < len(order):
+        found[order[j]] = at
+        j += 1
+    return [found[w] for w in wanted]
+
+
+def _source_index(text: str, folded_i: int) -> int:
+    """Index in text (Python characters) of the folded character folded_i."""
+    k = 0
+    for i, ch in enumerate(text):
+        if _TABLE[ord(ch)]:
+            if k == folded_i:
+                return i
+            k += 1
+    return len(text)
+
+
 def snippet(text: str, folded: str, title: str, query: str = "", width: int = 120) -> str:
     """The first line of the note that isn't its title, or the passage that matches the search.
     folded is fold(text), kept from the index (folding again for every search would be slow)."""
@@ -414,15 +459,15 @@ def snippet(text: str, folded: str, title: str, query: str = "", width: int = 12
         q = fold(query.strip())
         i = folded.find(q) if q else -1
         if i >= 0:
-            i = min(i, len(text))  # positions match unless the text has lone accents (then close)
+            i = _source_index(text, i)  # lone accents make the two strings differ in length
             start = max(0, i - 30)
-            cut = text[start:start + width].replace("\n", " · ")
+            cut = text[start:start + width].replace(LABEL, "").replace("\n", " · ")
             return ("…" if start else "") + cut
     head = fold(title.strip())
-    labels = {fold(t(x)) for x in ("Open the original PDF", *_MEDIA_TEXT.values())}
+    labels = {fold(t("Open the original PDF"))}
     for line in text.splitlines()[:20]:
         line = line.strip()
-        if line and fold(line) != head and fold(line) not in labels and not line.startswith("📎"):
+        if line and not line.startswith(LABEL) and fold(line) != head and fold(line) not in labels:
             return line[:width]
     return ""
 

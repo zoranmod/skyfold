@@ -735,7 +735,9 @@ BS: dict[str, str] = {
     "Note": "Bilješka",
     "Open in browser": "Otvori u pregledniku",
     "All notes": "Sve bilješke",
-    "Recently Deleted": "Nedavno obrisano",
+    "All notes in every folder, {n} notes": "Sve bilješke iz svih foldera, bilješki: {n}",
+    "Too many large pictures to show here. Open the note in your browser to see this one.":
+        "Previše velikih slika za prikaz ovdje. Otvori bilješku u pregledniku da vidiš ovu.",
     "{name}, {n} notes": "{name}, bilješki: {n}",
     "Searching titles now · indexing note text…": "Pretražujem naslove · indeksiram tekst bilješki…",
     "{n} found": "Pronađeno: {n}",

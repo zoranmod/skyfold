@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -45,7 +46,7 @@ OPENABLE = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".heic", ".heif", ".tif", "
             ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".pages", ".numbers", ".key", ".vcf"}
 HIGHLIGHTS = ("#ba55d3", "#ff5252", "#ffb74d", "#80cbc4", "#64b5f6")  # Apple's five highlight colours
 MAX_MARKS = 300  # search words marked in one note
-IMAGE_BUDGET = 120_000_000  # bytes of decoded pictures kept for the open note
+IMAGE_BUDGET = 256_000_000  # bytes of decoded pictures for the open note (then less sharp, then a note)
 RETRY_INDEX = 30.0  # seconds before pages that couldn't be read are tried again
 RETRY_NOTE = 5.0
 
@@ -58,9 +59,46 @@ def _blend(a: str, b: str, f: float) -> str:
 
 def high_contrast() -> bool:
     try:
-        return QApplication.styleHints().accessibility().contrastPreference() == Qt.ContrastPreference.HighContrast
+        hints = QApplication.styleHints()  # kept in a variable: a temporary would be deleted too soon
+        acc = hints.accessibility()
+        return acc.contrastPreference() == Qt.ContrastPreference.HighContrast
     except Exception:  # noqa: BLE001 - older Qt
         return False
+
+
+def contrast_colors() -> dict[str, QColor] | None:
+    """The Windows contrast theme's own colours (window, text, highlight, highlighted text), or
+    None when no contrast theme is on. Read from Windows itself: Skyfold's palette replaces Qt's."""
+    if not high_contrast():
+        return None
+    pal = QApplication.style().standardPalette()
+    out = {"window": pal.color(QPalette.Base), "text": pal.color(QPalette.Text),
+           "high": pal.color(QPalette.Highlight), "high_text": pal.color(QPalette.HighlightedText)}
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            get = ctypes.windll.user32.GetSysColor
+
+            def col(i: int) -> QColor:
+                v = get(i)
+                return QColor(v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF)
+
+            out = {"window": col(5), "text": col(8), "high": col(13), "high_text": col(14)}
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
+def _row_colors(c: dict[str, str]) -> dict:
+    """Colours of a row in the folder and note lists. With a contrast theme: its own colours, and a
+    highlighted row (hovered or chosen) always pairs the highlight with the highlighted text."""
+    hc = contrast_colors()
+    if hc is not None:
+        return {"bg": hc["window"], "text": hc["text"], "muted": hc["text"], "sel": hc["high"],
+                "hover": hc["high"], "on": hc["high_text"], "focus": hc["high_text"]}
+    return {"bg": None, "text": QColor(c["text"]), "muted": QColor(c["muted"]), "sel": QColor(c["accent_soft"]),
+            "hover": QColor(c["hover"]), "on": None, "focus": QColor(c["focus_ring"])}
 
 
 def _key(r: nv.Row) -> tuple:
@@ -130,25 +168,21 @@ class _NoteDelegate(QStyledItemDelegate):
         row: nv.Row | None = self.win.row_by_id.get(idx.data(ROW_ID))
         if row is None:
             return
-        c = self.win.c
-        if high_contrast():  # the Windows contrast theme's own colours
-            pal = QApplication.palette()
-            text, muted, sel, sel_text = (pal.color(QPalette.Text), pal.color(QPalette.Text),
-                                          pal.color(QPalette.Highlight), pal.color(QPalette.HighlightedText))
-            hover, focus = pal.color(QPalette.Highlight), pal.color(QPalette.HighlightedText)
-        else:
-            text, muted, sel, sel_text = QColor(c["text"]), QColor(c["muted"]), QColor(c["accent_soft"]), None
-            hover, focus = QColor(c["hover"]), QColor(c["focus_ring"])
+        k = _row_colors(self.win.c)
+        text, muted, sel, hover, focus = k["text"], k["muted"], k["sel"], k["hover"], k["focus"]
         p.save()
         p.setRenderHint(QPainter.Antialiasing)
+        if k["bg"] is not None:
+            p.fillRect(opt.rect, k["bg"])
         r = QRectF(opt.rect).adjusted(4, 2, -4, -2)
         selected = bool(opt.state & QStyle.State_Selected)
-        if selected or opt.state & QStyle.State_MouseOver:
+        lit = selected or bool(opt.state & QStyle.State_MouseOver)
+        if lit:
             p.setPen(Qt.NoPen)
             p.setBrush(sel if selected else hover)
             p.drawRoundedRect(r, 8, 8)
-        if selected and sel_text is not None:
-            text = muted = sel_text
+        if lit and k["on"] is not None:
+            text = muted = k["on"]
         if selected and self.win.notes.hasFocus():
             p.setPen(QPen(focus, 2))
             p.setBrush(Qt.NoBrush)
@@ -207,36 +241,34 @@ class _FolderDelegate(QStyledItemDelegate):
         return QSize(120, opt.fontMetrics.height() + 16)
 
     def paint(self, p: QPainter, opt, idx) -> None:
-        c = self.win.c
         tree = self.win.folders
-        if high_contrast():
-            pal = QApplication.palette()
-            text, muted, sel, hover = (pal.color(QPalette.Text), pal.color(QPalette.Text),
-                                       pal.color(QPalette.Highlight), pal.color(QPalette.Highlight))
-            sel_text, focus = pal.color(QPalette.HighlightedText), pal.color(QPalette.HighlightedText)
-        else:
-            text, muted, sel, hover = QColor(c["text"]), QColor(c["muted"]), QColor(c["accent_soft"]), QColor(c["hover"])
-            sel_text, focus = None, QColor(c["focus_ring"])
+        k = _row_colors(self.win.c)
+        text, muted, sel, hover, focus = k["text"], k["muted"], k["sel"], k["hover"], k["focus"]
         depth, parent = 0, idx.parent()
         while parent.isValid():
             depth, parent = depth + 1, parent.parent()
         p.save()
         p.setRenderHint(QPainter.Antialiasing)
-        r = QRectF(0, opt.rect.top(), tree.viewport().width(), opt.rect.height()).adjusted(4, 2, -4, -2)
+        full = QRectF(0, opt.rect.top(), tree.viewport().width(), opt.rect.height())
+        if k["bg"] is not None:
+            p.fillRect(full, k["bg"])
+        r = full.adjusted(4, 2, -4, -2)
         selected = bool(opt.state & QStyle.State_Selected)
-        if selected or opt.state & QStyle.State_MouseOver:
+        lit = selected or bool(opt.state & QStyle.State_MouseOver)
+        if lit:
             p.setPen(Qt.NoPen)
             p.setBrush(sel if selected else hover)
             p.drawRoundedRect(r, 8, 8)
-        if selected and sel_text is not None:
-            text = muted = sel_text
+        if lit and k["on"] is not None:
+            text = muted = k["on"]
         if selected and tree.hasFocus():
             p.setPen(QPen(focus, 2))
             p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 8, 8)
         fm = opt.fontMetrics
-        x = r.left() + 10 + depth * 18
         right = r.right() - 8
+        room_for_indent = max(0.0, r.width() - 10 - 8 - CHEVRON - 26 - 70)  # a name keeps at least ~70 px
+        x = r.left() + 10 + min(depth * 18, room_for_indent)
         has_kids = idx.model().hasChildren(idx)
         if has_kids:  # chevron: down when open, right when folded
             cx, cy = right - CHEVRON / 2 + 4, r.center().y()
@@ -283,13 +315,19 @@ class _Reader(QTextBrowser):
         self.setTextInteractionFlags(Qt.TextBrowserInteraction)
         self.page: Path | None = None
         self.images: list[str] = []
+        # decoded pictures by (file, its size and time, width decoded at, zoom): a picture id can
+        # point to another file after "show more", so ids are never the key
         self._cache: dict[tuple, QImage] = {}
+        self._bytes = 0
+        self._geometry: tuple = ()
+
+    def _drop_cache(self) -> None:
+        self._cache.clear()
         self._bytes = 0
 
     def show_page(self, page: Path, clean: nv.Page, keep_pictures: bool) -> None:
         if self.page != page or not keep_pictures:
-            self._cache.clear()
-            self._bytes = 0
+            self._drop_cache()
         self.page = page
         self.images = list(clean.images)
         self.setHtml(clean.body)
@@ -297,8 +335,7 @@ class _Reader(QTextBrowser):
     def clear_note(self) -> None:
         self.page = None
         self.images = []
-        self._cache.clear()
-        self._bytes = 0
+        self._drop_cache()
         self.document().clear()
         self.setHtml("")
 
@@ -321,34 +358,69 @@ class _Reader(QTextBrowser):
         dpr = self.devicePixelRatioF() or 1.0
         room = max(200, self.viewport().width() - 48)
         zoom = NotesWindow.zoom
-        key = (n, int(room * dpr), zoom)
+        geometry = (int(room * dpr), zoom)
+        if geometry != self._geometry:  # pictures decoded for another width or zoom aren't shown again
+            self._drop_cache()
+            self._geometry = geometry
+        f = nv.resolve_asset(self.win.root, self.page, self.images[n])
+        try:
+            st = f.stat() if f is not None else None
+        except OSError:
+            st = None
+        if st is None or not f.is_file():
+            return None
+        key = (str(f), st.st_size, st.st_mtime_ns)
         if key in self._cache:
             return self._cache[key]
-        img = QImage()
-        f = nv.resolve_asset(self.win.root, self.page, self.images[n])
-        if f is not None and f.is_file() and self._bytes < IMAGE_BUDGET:
-            reader = QImageReader(str(f))
-            reader.setAutoTransform(True)
-            raw = reader.size()  # as stored (a photo taken upright may be stored sideways)
-            disp = raw.transposed() if reader.transformation() & QImageIOHandler.TransformationRotate90 else raw
-            if raw.isValid() and disp.width() > 0:
-                # as wide as a browser shows it (one image pixel per screen point), times the zoom,
-                # never wider than the note; decoded at exactly that size for this screen
-                shown = min(room, disp.width() * zoom)
-                k = shown * dpr / disp.width()
-                reader.setScaledSize(QSize(max(1, round(raw.width() * k)), max(1, round(raw.height() * k))))
-            img = reader.read()
-            if not img.isNull():
-                if img.hasAlphaChannel():
-                    base = QImage(img.size(), QImage.Format_RGB32)
-                    base.fill(QColor("#ffffff"))
-                    q = QPainter(base)
-                    q.drawImage(0, 0, img)
-                    q.end()
-                    img = base
-                img.setDevicePixelRatio(dpr)
-                self._bytes += img.sizeInBytes()
+        reader = QImageReader(str(f))
+        reader.setAutoTransform(True)
+        raw = reader.size()  # as stored (a photo taken upright may be stored sideways)
+        disp = raw.transposed() if reader.transformation() & QImageIOHandler.TransformationRotate90 else raw
+        if raw.isValid() and disp.width() > 0:
+            # as wide as a browser shows it (one image pixel per screen point), times the zoom,
+            # never wider than the note; decoded at exactly that size for this screen
+            shown = min(room, disp.width() * zoom)
+            scale = dpr
+            free = IMAGE_BUDGET - self._bytes
+            need = lambda s: 4 * (shown * s / disp.width()) ** 2 * raw.width() * raw.height()  # noqa: E731
+            if need(scale) > free:
+                scale = 1.0  # a note with very many big pictures: the rest less sharp, not missing
+            if need(scale) > free:
+                return self._placeholder(room, dpr)
+            k = shown * scale / disp.width()
+            reader.setScaledSize(QSize(max(1, round(raw.width() * k)), max(1, round(raw.height() * k))))
+        elif raw.isValid() or 4 * 4000 * 4000 > IMAGE_BUDGET - self._bytes:
+            return None
+        img = reader.read()
+        if img.isNull():
+            return None  # not cached: tried again next time the note is shown
+        if img.hasAlphaChannel():
+            base = QImage(img.size(), QImage.Format_RGB32)
+            base.fill(QColor("#ffffff"))
+            q = QPainter(base)
+            q.drawImage(0, 0, img)
+            q.end()
+            img = base
+        if raw.isValid() and disp.width() > 0:
+            img.setDevicePixelRatio(img.width() / min(room, disp.width() * zoom))
+        else:
+            img.setDevicePixelRatio(dpr)
+        self._bytes += img.sizeInBytes()
         self._cache[key] = img
+        return img
+
+    def _placeholder(self, room: int, dpr: float) -> QImage:
+        """Shown instead of a picture that doesn't fit in memory any more (not kept)."""
+        w, h = int(min(room, 520)), 64
+        img = QImage(int(w * dpr), int(h * dpr), QImage.Format_RGB32)
+        img.setDevicePixelRatio(dpr)
+        img.fill(QColor(self.win.c["hover"]))
+        p = QPainter(img)
+        p.setPen(QColor(self.win.c["muted"]))
+        p.drawRect(0, 0, w - 1, h - 1)
+        p.drawText(QRectF(12, 0, w - 24, h), Qt.AlignVCenter | Qt.TextWordWrap,
+                   t("Too many large pictures to show here. Open the note in your browser to see this one."))
+        p.end()
         return img
 
 
@@ -626,24 +698,25 @@ class NotesWindow(_Dialog):
         top = QTreeWidgetItem([t("All notes")])
         top.setData(0, FOLDER_PATH, "")
         top.setData(0, FOLDER_COUNT, len(self.rows))
-        top.setData(0, Qt.AccessibleTextRole, t("{name}, {n} notes", name=t("All notes"), n=len(self.rows)))
+        top.setData(0, Qt.AccessibleTextRole, t("All notes in every folder, {n} notes", n=len(self.rows)))
         top.setIcon(0, glyph("note", yellow, 18))
         self.folders.addTopLevelItem(top)
         items = {"": top}
         folder_icon = glyph("folder", yellow, 18)
-        trash_icon = glyph("trash", yellow, 18)
-        trash = {"Recently Deleted", t("Recently Deleted")}
 
         def order(path: str) -> tuple:  # as in Apple Notes: Notes first, Recently Deleted last
             first = path.split("/")[0]
-            return (first in trash, first != "Notes", path.lower())
+            return (first == "Recently Deleted", first != "Notes", path.lower())
 
         for path in sorted(counts, key=order):
             parent_path, _, name = path.rpartition("/")
             it = QTreeWidgetItem([name])
             it.setData(0, FOLDER_PATH, path)
             it.setData(0, FOLDER_COUNT, counts[path])
-            it.setIcon(0, trash_icon if not parent_path and name in trash else folder_icon)
+            it.setIcon(0, folder_icon)
+            full = path.replace("/", " › ")
+            it.setData(0, Qt.ToolTipRole, full)
+            it.setData(0, Qt.AccessibleDescriptionRole, full)
             it.setData(0, Qt.AccessibleTextRole, t("{name}, {n} notes", name=name, n=counts[path]))
             parent = items.get(parent_path) if parent_path else None
             if parent is not None:
@@ -806,6 +879,7 @@ class NotesWindow(_Dialog):
                 return
             text = page.read_text(encoding="utf-8", errors="replace")
         except FileNotFoundError:
+            self._note_failed = time.monotonic()  # it may be back in a moment (a folder briefly away)
             self.reader.clear_note()
             self._empty(t("This note isn't on this PC yet. It will be after the next sync."))
             return
@@ -852,18 +926,24 @@ class NotesWindow(_Dialog):
         block = doc.begin()
         while terms and block.isValid() and len(sels) < MAX_MARKS:
             text = block.text()
-            folded, pos = nv.fold_map(text)
+            folded = nv.fold(text)
+            spans = []  # (start, end) in the folded text; positions in the block looked up only for these
             for w in terms:
                 i = folded.find(w)
-                while i >= 0 and len(sels) < MAX_MARKS:
+                while i >= 0 and len(spans) + len(sels) < MAX_MARKS:
+                    spans.append((i, i + len(w)))
+                    i = folded.find(w, i + len(w))
+            if spans:
+                pos = nv.fold_positions(text, [x for span in spans for x in span])
+                for k in range(len(spans)):
+                    a, b = block.position() + pos[2 * k], block.position() + pos[2 * k + 1]
                     cur = QTextCursor(doc)
-                    cur.setPosition(block.position() + pos[i])
-                    cur.setPosition(block.position() + pos[i + len(w)], QTextCursor.KeepAnchor)
+                    cur.setPosition(a)
+                    cur.setPosition(b, QTextCursor.KeepAnchor)
                     sel = QTextEdit.ExtraSelection()
                     sel.cursor, sel.format = cur, fmt
                     sels.append(sel)
-                    first = first if first is not None else block.position() + pos[i]
-                    i = folded.find(w, i + len(w))
+                    first = a if first is None else min(first, a)
             block = block.next()
         self.reader.setExtraSelections(sels)
         if first is not None and jump:
@@ -1049,6 +1129,13 @@ class NotesWindow(_Dialog):
         self.texts = {}
         self.rows, self.row_by_id = [], {}
         self.current = self.current_key = None
+        self._fingerprint = None  # holds the titles
+        self._hl_query = ""
+        self.folder = ""
+        self.shown_pages = {}
+        self.meta.setText("")
+        self.meta.setToolTip("")
+        self.empty.setText("")
         self.reader.clear_note()
         self.notes.clear()
         self.folders.clear()

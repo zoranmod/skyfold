@@ -235,16 +235,19 @@ def _known_missing(p: Path) -> bool:
     return False
 
 
+_SIGNED_OUT_NOW = False  # Sign out in this run (holds even when the mark couldn't be written)
+
+
 def signed_out() -> bool:
     """Signed out with Sign out (and not signed in since). A mark that can't be looked at counts as there."""
-    return not _known_missing(SIGNED_OUT)
+    return _SIGNED_OUT_NOW or not _known_missing(SIGNED_OUT)
 
 
 def restore(apple_id: str) -> Any | None:
     """Reuse the saved session. Returns None when the user has to sign in again."""
     from pyicloud import PyiCloudService
 
-    if not apple_id or not SESSION_DIR.exists() or not _known_missing(SIGNED_OUT):
+    if not apple_id or not SESSION_DIR.exists() or signed_out():
         return None  # (a sign-out mark that can't be looked at counts as there: never restored past it)
     from pyicloud.exceptions import PyiCloudConnectionException
     from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout
@@ -386,7 +389,9 @@ def submit_code(api: Any, code: str) -> None:
 
 def commit_login(api: Any) -> None:
     """The user's sign-in is complete and accepted: it becomes the one in use."""
+    global _SIGNED_OUT_NOW
     with _SAVE_LOCK:
+        _SIGNED_OUT_NOW = False
         SIGNED_OUT.unlink(missing_ok=True)
         make_current(api)
         _remove_other_sessions(api)
@@ -413,9 +418,10 @@ def _remove_other_sessions(api: Any) -> None:
 
 
 def logout() -> None:
-    global _CURRENT
+    global _CURRENT, _SIGNED_OUT_NOW
     with _SAVE_LOCK:  # a save already waiting for the lock then sees it is no longer current
         _CURRENT = object()  # no session object may save itself again after this
+        _SIGNED_OUT_NOW = True  # at once, whether or not the mark below can be written
         try:
             SIGNED_OUT.parent.mkdir(parents=True, exist_ok=True)
             SIGNED_OUT.write_text("", encoding="utf-8")  # even if a session file can't be deleted, it's never used

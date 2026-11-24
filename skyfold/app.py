@@ -511,7 +511,15 @@ class Controller(QObject):
             return
         from .ui.notes_window import NotesWindow
 
-        self._show_dialog("notes", NotesWindow(self.c, self._notes_source))
+        win = NotesWindow(self.c, self._notes_source)
+
+        def gone(*_args, w=win) -> None:  # closed: Skyfold keeps no reference to it (only to a newer one)
+            if self._dialogs.get("notes") is w:
+                self._dialogs.pop("notes", None)
+
+        win.finished.connect(gone)
+        win.destroyed.connect(gone)
+        self._show_dialog("notes", win)
 
     def _close_notes(self) -> None:
         """Signed out or another Apple ID: the Notes window closes, nothing of the old notes stays."""

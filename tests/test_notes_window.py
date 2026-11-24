@@ -451,5 +451,160 @@ def test_pictures_follow_zoom_and_screen_scaling(qapp, library, monkeypatch):
 
 
 def test_first_line_skips_attachment_labels():
-    text = "Kitchen\nOpen the original PDF\n\U0001F4CE Audio recording memo.m4a\nUkupno 200 KM"
+    page = ('<div class="note-content"><h1>Kitchen</h1><p><a class="sf-open" href="x.pdf">Open the original PDF</a></p>'
+            '<audio src="../_assets/a/memo.m4a"></audio><p>Ukupno 200 KM</p></div>')
+    text = nv.plain_text(nv.note_html(page, all_pages=True).body)
     assert nv.snippet(text, nv.fold(text), "Kitchen") == "Ukupno 200 KM"
+    own = nv.plain_text(nv.note_html('<div class="note-content"><p>\U0001F4CE Bring a passport</p></div>').body)
+    assert nv.snippet(own, nv.fold(own), "Trip") == "\U0001F4CE Bring a passport"  # the note's own line stays
+
+
+def test_search_preview_contains_the_match_after_lone_accents():
+    text = "Č" * 200 + " the passport is here"
+    snip = nv.snippet(text, nv.fold(text), "T", query="passport")
+    assert "passport" in snip
+
+
+def test_positions_for_a_long_paragraph_are_cheap_and_right():
+    text = "\U0001F600 Čaj " * 50_000 + "kraj"
+    folded = nv.fold(text)
+    i = folded.find("kraj")
+    a, b = nv.fold_positions(text, [i, i + 4])
+    _f, pos = nv.fold_map(text)
+    assert (a, b) == (pos[i], pos[i + 4])
+    assert nv.fold_positions("", [0]) == [0]
+
+
+def test_unquoted_wrapper_hides_the_page_header():
+    page = '<p>Header text</p><div class=note-content><p>Body</p></div><p>Footer text</p>'
+    body = nv.note_html(page).body
+    assert "Body" in body and "Header" not in body and "Footer" not in body
+
+
+def test_assets_folder_that_is_a_link_is_refused(tmp_path, monkeypatch):
+    root = tmp_path / "Notes"
+    (root / "_assets" / "n1").mkdir(parents=True)
+    (root / "_assets" / "n1" / "p.png").write_bytes(b"x")
+    pg = root / "a.html"
+    assert nv.resolve_asset(root, pg, "_assets/n1/p.png") is not None
+    monkeypatch.setattr(nv, "_is_junction", lambda p: p.name == "_assets")  # _assets is a junction
+    assert nv.resolve_asset(root, pg, "_assets/n1/p.png") is None
+
+
+def test_more_pages_never_show_another_picture(qapp, library):
+    """After "show more" the same picture id may point to another file: the right one is shown."""
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QColor, QImage, QTextDocument
+    st, root = library
+    d = root / "_assets" / "scan"
+    d.mkdir()
+    for i in range(5):
+        img = QImage(40, 40, QImage.Format_RGB32)
+        img.fill(QColor("#ff0000"))
+        img.save(str(d / f"p{i}.png"))
+    blue = QImage(40, 40, QImage.Format_RGB32)
+    blue.fill(QColor("#0000ff"))
+    blue.save(str(d / "blue.png"))
+    pages = "".join(f'<img class="sf-page" src="../_assets/scan/p{i}.png">' for i in range(5))
+    (root / "Home" / "Groceries.html").write_text(
+        f'<div class="note-content"><h1>Groceries</h1><div class="sf-pdf">{pages}</div>'
+        f'<img src="../_assets/scan/blue.png"></div>', encoding="utf-8")
+    w = window(qapp, library)
+    load = lambda n: w.reader.loadResource(QTextDocument.ImageResource, QUrl(f"sfimg:{n}"))  # noqa: E731
+    assert load(3).pixelColor(5, 5) == QColor("#0000ff")  # three pages, then the blue picture
+    w._on_link(QUrl("skyfold:more:0"))
+    assert load(3).pixelColor(5, 5) == QColor("#ff0000")  # now the fourth page of the scan
+    assert load(5).pixelColor(5, 5) == QColor("#0000ff")
+    w.close()
+
+
+def test_many_big_pictures_get_less_sharp_then_a_note(qapp, library, monkeypatch):
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QColor, QImage, QTextDocument
+    from skyfold.ui import notes_window as nw
+    st, root = library
+    d = root / "_assets" / "many"
+    d.mkdir()
+    for i in range(12):
+        img = QImage(600, 850, QImage.Format_RGB32)
+        img.fill(QColor("#00aa00"))
+        img.save(str(d / f"{i}.png"))
+    imgs = "".join(f'<img src="../_assets/many/{i}.png">' for i in range(12))
+    (root / "Home" / "Groceries.html").write_text(f'<div class="note-content"><p>Pics</p>{imgs}</div>',
+                                                  encoding="utf-8")
+    monkeypatch.setattr(nw, "IMAGE_BUDGET", 30_000_000)
+    w = window(qapp, library)
+    w.resize(1100, 700)
+    qapp.processEvents()
+    monkeypatch.setattr(w.reader, "devicePixelRatioF", lambda: 2.0)
+    w.reader._drop_cache()
+    got = [w.reader.loadResource(QTextDocument.ImageResource, QUrl(f"sfimg:{i}")) for i in range(12)]
+    assert all(g is not None and not g.isNull() for g in got)  # nothing simply missing
+    sizes = [(g.width(), round(g.deviceIndependentSize().width())) for g in got]
+    assert sizes[0][0] == 2 * sizes[0][1]  # sharp while there is room
+    assert any(px == pt for px, pt in sizes) and len({pt for _px, pt in sizes}) == 1  # then less sharp, same size
+    assert w.reader._bytes <= 30_000_000
+    monkeypatch.setattr(nw, "IMAGE_BUDGET", w.reader._bytes)  # full: a visible note instead of the picture
+    w.reader._cache.clear()
+    note = w.reader.loadResource(QTextDocument.ImageResource, QUrl("sfimg:0"))
+    assert note is not None and not note.isNull() and note.height() < 200
+    assert not w.reader._cache  # not kept: tried again next time
+    w.close()
+
+
+def test_closing_forgets_search_and_titles(qapp, library):
+    w = window(qapp, library)
+    w.search.setText("private thoughts")
+    assert pump(qapp, lambda: ids(w) == ["d"])
+    w.close()
+    assert w._hl_query == "" and w._fingerprint is None and not w.texts and w.folder == ""
+
+
+def test_a_note_that_comes_back_is_shown_again(qapp, library, monkeypatch):
+    from skyfold.ui import notes_window as nw
+    st, root = library
+    w = window(qapp, library)
+    page = root / "Home" / "Groceries.html"
+    saved = page.read_text(encoding="utf-8")
+    page.unlink()
+    w.current_key = None
+    w._show_current()
+    assert not w.reader.isVisible()
+    page.write_text(saved, encoding="utf-8")
+    monkeypatch.setattr(nw, "RETRY_NOTE", -1.0)
+    w._retry()
+    assert w.reader.isVisible() and "Buy" in w.reader.toPlainText()
+    w.close()
+
+
+def test_deep_folders_keep_their_names_visible(qapp, library):
+    from PySide6.QtCore import Qt
+    st, root = library
+    deep = "/".join(f"Level{i}" for i in range(18))
+    st.put("z", None, "Deep", deep, "2026-11-01T10:00:00", True)
+    w = window(qapp, library)
+    leaf = [it for it in w._folder_items() if it.text(0) == "Level17"][0]
+    assert "Level0 › Level1" in leaf.data(0, Qt.ToolTipRole)
+    assert leaf.data(0, Qt.AccessibleDescriptionRole) == leaf.data(0, Qt.ToolTipRole)
+    w.folders.setFixedWidth(190)
+    w.folders.setCurrentItem(leaf)
+    qapp.processEvents()
+    assert not w.folders.grab().toImage().isNull()
+    w.close()
+
+
+def test_sign_out_holds_even_if_its_mark_cannot_be_written(tmp_path, monkeypatch):
+    from pathlib import Path
+    from skyfold import auth
+    monkeypatch.setattr(auth, "SIGNED_OUT", tmp_path / "signed-out")
+    monkeypatch.setattr(auth, "SESSION_DIR", tmp_path / "session")
+    monkeypatch.setattr(auth, "_CURRENT", auth._CURRENT)  # put back afterwards (Sign out replaces it)
+
+    def refuse(*a, **k):
+        raise PermissionError("no")
+
+    assert not auth.signed_out()
+    with monkeypatch.context() as m:
+        m.setattr(Path, "write_text", refuse)
+        auth.logout()
+    assert auth.signed_out() and not (tmp_path / "signed-out").exists()
