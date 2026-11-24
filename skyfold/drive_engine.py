@@ -32,7 +32,6 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
-from . import motw
 from .config import save_text
 from .drive_remote import UPLOAD_WORKERS, WORKERS, DriveItem, DriveRemote, MacPackage, is_transient
 from .engine import (Callbacks, Cancelled, SyncError, THROTTLE, check_free_space, create_marker, known_missing, inside_root,
@@ -2419,10 +2418,6 @@ class DriveSyncer:
                         # iCloud holds exactly the synced content (only its tag is new). What is on this
                         # PC now is this PC's own change: it stays and goes up (time -1 = "changed here").
                         return target, b.lsize, -1.0, digest, False
-                # new content from iCloud: marked as coming from the internet (before its time is set
-                # and remembered: writing the mark changes the file's time); a file the user marked
-                # "restricted" stays restricted
-                motw.mark(tmp_path, 4 if motw.zone(target) == 4 else motw.INTERNET)
                 if item.mtime:
                     os.utime(tmp_path, (item.mtime, item.mtime))  # kept by the rename below
                 self._touch_own(target)

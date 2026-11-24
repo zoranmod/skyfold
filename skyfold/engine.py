@@ -23,7 +23,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
-from . import motw
 from .config import Settings
 from .i18n import t
 from .safelog import brief
@@ -1610,7 +1609,6 @@ class Syncer:
                             self._note_file_id(a.id, res.key, rel)
                             taken.add(rel.lower())
                             continue
-                        motw.mark(tmp_path)  # came from iCloud: marked as from the internet (before its time is set)
                         for _attempt in range(20):
                             try:
                                 os.rename(tmp_path, target)  # fails if a file appeared there: never overwrites
@@ -1751,7 +1749,6 @@ class Syncer:
                     os.close(fd)
                     try:
                         shutil.copy2(src, tmp)
-                        motw.copy_mark(src, tmp)  # the copy is marked like its photo (a link shares it)
                         os.rename(tmp, target)  # refuses an existing name: nothing is overwritten
                     except FileExistsError:
                         log.info("Album folder: %s appeared meanwhile; left as it is", rel)

@@ -5,7 +5,6 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 ## [Unreleased]
 
 ### Added
-- **Files from iCloud are marked as coming from the internet**, like an email attachment: iCloud Drive files, photos and videos, and note attachments Skyfold downloads. Windows SmartScreen, Office's Protected View and other programs can then check them before they open. Only the mark is written (no address of where the file came from), before Skyfold notes the file's time, so marking (or *Unblock* later) never looks like an edit and nothing is uploaded again. Files you made on this PC are never marked; on a disk that can't hold the mark (FAT32, exFAT, some network drives) files simply arrive unmarked.
 - **Connection diagnostics for bug reports** (**Settings → General**). *Record for 30 minutes* writes `connections.log` with only the kind of each request, Apple's status code and how long it took: never a name, a file name, an address, an id, a cookie or a password. It stops by itself after 30 minutes (also if the PC slept), at sign-out and when Skyfold quits, and *Delete* removes the file.
 
 ### Security
