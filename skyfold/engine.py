@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 
 MARKER = ".skyfold"
 OWNER_FILE = ".skyfold-account"  # which Apple ID the photos folder was set up for (a short fingerprint)
-INFO_KEY = "asset_info_v1"  # set once a full read has stored every photo's details
+INFO_KEY = "asset_info_v2"  # set once a full read has stored every photo's details (v2: lengths in seconds)
 ALBUMS_DIR = "Albums"  # album mirror inside the photos folder (hard links)
 ALBUM_REFRESH_SECONDS = 30 * 60
 LEGACY_MARKERS = (".isync", ".galerija-sync")

@@ -249,3 +249,13 @@ def test_worker_sets_the_favourite_in_icloud_then_in_the_database(tmp_path):
     remote.set_favorite = refuse
     SyncWorker.set_favorite(fake, "Q", False)
     assert said[-1][0] == "Q" and said[-1][1] is True and said[-1][2]  # unchanged, with the reason
+
+
+def test_video_length_from_icloud_is_read_as_milliseconds():
+    from skyfold.remote import _info
+
+    rec = {"fields": {"duration": {"value": 66282}, "isFavorite": {"value": 1}, "assetSubtypeV2": {"value": 0}}}
+    asset = SimpleNamespace(asset_record=rec, added_date=datetime(2026, 5, 1, tzinfo=timezone.utc),
+                            dimensions=(1920, 1080))
+    info = _info(asset)
+    assert info is not None and round(info.duration) == 66 and info.favorite and not info.screenshot

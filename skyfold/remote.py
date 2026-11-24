@@ -166,7 +166,8 @@ def _info(asset: Any) -> AssetInfo | None:
             added=added,
             width=int(width) if width else None,
             height=int(height) if height else None,
-            duration=float(duration) if isinstance(duration, (int, float)) and duration > 0 else None,
+            # Apple keeps a video's length in milliseconds (66282 = 1:06, checked against Windows)
+            duration=float(duration) / 1000 if isinstance(duration, (int, float)) and duration > 0 else None,
             screenshot=subtype == 3,  # Apple's subtype for screenshots
         )
     except Exception:  # noqa: BLE001
