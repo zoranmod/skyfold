@@ -1599,7 +1599,7 @@ class NotesSyncer:
         if self.closing.is_set():
             raise Cancelled()  # quitting: this pass never starts
         res = NotesResult()
-        last_page = INDEX
+        events: list[tuple[str, str, str]] = []  # (what happened, page, old title) per exported note
         self._check_root()
         for key, value in self.state.items("style_tx:"):
             self._finish_restyle(key, json.loads(value))
@@ -1761,7 +1761,13 @@ class NotesSyncer:
             self._retire_assets(n.id, before, self._page_assets(rel))  # copies the new page doesn't show
             taken.add(rel.lower())
             res.exported += 1
-            last_page = rel
+            if old and not old[5] and old[3] != folder:
+                what = "moved"  # into another folder (on its own, or changed as well)
+            elif old and not old[5] and (old[2] or "") != (n.title or ""):
+                what = "renamed"  # a new title (its first line)
+            else:
+                what = "changed" if old and not old[5] else "new"
+            events.append((what, rel, (old[2] or "") if old else ""))
 
         if res.full and not res.more:  # notes that vanished entirely (e.g. purged) since the last full read
             for nid in seen:
@@ -1789,13 +1795,31 @@ class NotesSyncer:
             self.state.set("cursor", cursor)
             self.state.set("folder_paths", json.dumps(folders, sort_keys=True))
         self.state.set("last_sync", now_iso())
-        if res.exported:
-            # click: the note itself when it's just one, otherwise the list of all notes
-            target = self.root / (last_page if res.exported == 1 else INDEX)
-            text = (t("Notes: downloaded {name}", name=Path(last_page).stem) if res.exported == 1
-                    else t("Notes: downloaded {n}", n=res.exported))
-            self.cb.activity("download", text, str(target))
+        if events and len(events) <= self.ACTIVITY_EACH:  # a few: one entry each, clicking opens that note
+            for what, page, old_title in events:
+                self.cb.activity(*self._event_text(what, page, old_title), str(self.root / page))
+        elif events:
+            if all(e[0] == "moved" for e in events):
+                kind, text = "move", t("Notes: moved {n} notes to other folders", n=len(events))
+            else:
+                kind, text = "download", t("Notes: downloaded {n}", n=len(events))
+            self.cb.activity(kind, text, str(self.root / INDEX))
         return res
+
+    ACTIVITY_EACH = 8  # up to this many exported notes get an entry each in the panel
+
+    @staticmethod
+    def _event_text(what: str, page: str, old_title: str) -> tuple[str, str]:
+        """(kind, text) of the panel entry for one exported note."""
+        name = Path(page).stem
+        if what == "moved":
+            where = PurePosixPath(page).parent.as_posix().replace("/", " \u203a ") or "Notes"
+            return "move", t("Notes: moved {name} to {folder}", name=name, folder=where)
+        if what == "renamed" and old_title:
+            return "download", t("Notes: renamed {old} to {name}", old=old_title, name=name)
+        if what == "changed":
+            return "download", t("Notes: updated {name}", name=name)
+        return "download", t("Notes: downloaded {name}", name=name)
 
     def _remove_leftover_pages(self, res: NotesResult) -> None:
         """A page Skyfold meant to remove when its note got another name or folder, and couldn't (the

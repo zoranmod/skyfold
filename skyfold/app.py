@@ -43,6 +43,28 @@ def setup_logging() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
+_CRASH_FILE = None  # kept open: Python writes to it when the program itself crashes
+
+
+def setup_crash_log() -> None:
+    """If Skyfold ever crashes inside Qt or Windows (not a Python error, which goes to the log), the
+    place where it happened is written to crash.log next to the log (function names, no content)."""
+    global _CRASH_FILE
+    import faulthandler
+    from datetime import datetime
+
+    path = LOG_FILE.parent / "crash.log"
+    try:
+        if path.exists() and path.stat().st_size > 300_000:
+            path.unlink()
+        _CRASH_FILE = open(path, "a", encoding="utf-8")
+        _CRASH_FILE.write(f"--- Skyfold {VERSION} started {datetime.now():%Y-%m-%d %H:%M:%S} ---\n")
+        _CRASH_FILE.flush()
+        faulthandler.enable(file=_CRASH_FILE, all_threads=True)
+    except Exception as exc:  # noqa: BLE001 - never stops Skyfold from starting
+        log.warning("Crash log unavailable: %s", exc)
+
+
 class _RedactEmails(logging.Filter):
     """Users attach the log to bug reports: never let an email address (the Apple ID), a cookie or a
     token into it."""
@@ -242,6 +264,7 @@ class Controller(QObject):
         self.state = "idle"
         self._spin = 0
         self._dialogs: dict[str, object] = {}
+        self._notes_account = self.settings.apple_id  # whose notes a Notes window may show
         self._pending = None
         self.server = None  # single-instance server, set by main()
 
@@ -297,7 +320,7 @@ class Controller(QObject):
         w.notify.connect(self._notify, q)
         w.accountChanged.connect(f.set_account, q)
         w.accountChanged.connect(self._forget_login_api, q)
-        w.accountChanged.connect(lambda *_: self._close_notes(), q)
+        w.accountChanged.connect(self._on_account_changed, q)  # a method, never a lambda: see _on_account_changed
         f.syncNow.connect(lambda: self.req.syncNow.emit(True))
         f.clearActivity.connect(lambda: self.req.clearActivity.emit())
         # Cancel must not wait in the busy worker's queue: set the flag right here.
@@ -525,6 +548,9 @@ class Controller(QObject):
         """Signed out or another Apple ID: the Notes window closes, nothing of the old notes stays."""
         from shiboken6 import isValid
 
+        from .ui.notes_window import NotesWindow
+
+        NotesWindow.resume = None  # where the last window was isn't kept either
         win = self._dialogs.pop("notes", None)
         if win is not None and isValid(win):
             win.clear()
@@ -672,6 +698,16 @@ class Controller(QObject):
         dlg.signOut.connect(self.sign_out)
         dlg.restoreExcluded.connect(lambda: self.req.restoreExcluded.emit())
         self._show_dialog("settings", dlg)
+
+    def _on_account_changed(self, apple_id: str) -> None:
+        """Another Apple ID (or none): its notes are never left on screen. The same Apple ID signing in
+        again, as at every start, keeps an open Notes window.
+
+        Connected as a method of this UI-thread object: a lambda connected to a worker signal runs in
+        the worker's thread, and closing a window from there froze or crashed Skyfold (1.0.27)."""
+        if apple_id != self._notes_account:
+            self._close_notes()
+        self._notes_account = apple_id
 
     def _forget_login_api(self, *_args) -> None:
         """The worker now holds the newest sign-in (or renewed it): Find My follows the worker."""
@@ -836,6 +872,7 @@ def main() -> int:
     listen_error = "" if server.listen(instance) else server.errorString()
 
     setup_logging()
+    setup_crash_log()
 
     def _log_uncaught(kind, value, tb) -> None:
         log.error("Unexpected error", exc_info=(kind, value, tb))

@@ -92,6 +92,7 @@ class DriveResult:
     pending_to_cloud: list[str] = field(default_factory=list)
     pending_to_pc: list[str] = field(default_factory=list)
     down_files: list[str] = field(default_factory=list)
+    down_updated: set[str] = field(default_factory=set)  # of down_files: a newer version of a file the PC had
     up_files: list[str] = field(default_factory=list)
     full: bool = False  # True when the whole Drive was read
     followup: bool = False  # a new folder was created; its contents go up on the next pass
@@ -1097,7 +1098,9 @@ class DriveSyncer:
         few = len(res.down_files) + len(res.up_files) <= 8
         if res.downloaded and few:  # a few files in this pass: one entry each
             for p in res.down_files:
-                self.cb.activity("download", t("Drive: downloaded: {name}", name=p), str(self._abs(p)))
+                text = (t("Drive: updated: {name}", name=p) if p in res.down_updated
+                        else t("Drive: downloaded: {name}", name=p))
+                self.cb.activity("download", text, str(self._abs(p)))
         elif res.downloaded:
             self.cb.activity("download", t("Drive: downloaded {n} files", n=res.downloaded), str(self.root))
         if res.uploaded and few:
@@ -2512,6 +2515,8 @@ class DriveSyncer:
                     res.downloaded += 1
                     res.last_down = str(target) if not res.downloaded - 1 else str(self.root)
                     res.down_files.append(item.path)
+                    if item.path in base:
+                        res.down_updated.add(item.path)
                 recycle_replaced()
                 with done_lock:
                     both, kept_both[:] = list(kept_both), []

@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFont, QImage, QImageIOHandler, QImageReader,
                            QKeySequence, QPainter, QPalette, QPen, QShortcut, QTextCharFormat, QTextCursor,
                            QTextDocument)
@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit, QLi
                                QMenu, QPushButton, QSizePolicy, QSplitter, QStyle, QStyledItemDelegate,
                                QTextBrowser, QTextEdit, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                                QWidget)
+
+from shiboken6 import isValid
 
 from ..i18n import t
 from ..notes_engine import local_datetime
@@ -46,7 +48,8 @@ OPENABLE = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".heic", ".heif", ".tif", "
             ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".pages", ".numbers", ".key", ".vcf"}
 HIGHLIGHTS = ("#ba55d3", "#ff5252", "#ffb74d", "#80cbc4", "#64b5f6")  # Apple's five highlight colours
 MAX_MARKS = 300  # search words marked in one note
-IMAGE_BUDGET = 256_000_000  # bytes of decoded pictures for the open note (then less sharp, then a note)
+IMAGE_BUDGET = 400_000_000  # bytes of decoded pictures for the open note (then less sharp, then a note)
+SHARP_SHARE = 0.4  # pictures are decoded for this screen's sharpness until this share of it is used
 RETRY_INDEX = 30.0  # seconds before pages that couldn't be read are tried again
 RETRY_NOTE = 5.0
 
@@ -325,24 +328,41 @@ class _Reader(QTextBrowser):
         self._cache.clear()
         self._bytes = 0
 
-    def show_page(self, page: Path, clean: nv.Page, keep_pictures: bool) -> None:
+    def _new_document(self, css: str = "", font: QFont | None = None, body: str = "") -> None:
+        """Every note gets a document of its own. The old one is never emptied in place: Qt may still
+        be laying it out, painting it or answering a screen reader about it, so it is let go and
+        deleted once Qt is done with whatever it was doing (emptying it in place crashed Qt)."""
+        self.setExtraSelections([])
+        doc = QTextDocument(self)  # its pictures are asked from this viewer (loadResource)
+        if css:
+            doc.setDefaultStyleSheet(css)
+        if font is not None:
+            doc.setDefaultFont(font)
+        doc.setHtml(body)
+        old = self.document()
+        self.setDocument(doc)
+        if old is not None and old is not doc and isValid(old) and old.parent() is self:
+            old.deleteLater()  # (Qt itself deletes the first, built-in one)
+
+    def show_page(self, page: Path, clean: nv.Page, keep_pictures: bool, css: str = "",
+                  font: QFont | None = None) -> None:
         if self.page != page or not keep_pictures:
             self._drop_cache()
         self.page = page
         self.images = list(clean.images)
-        self.setHtml(clean.body)
+        self._new_document(css, font, clean.body)
 
     def clear_note(self) -> None:
         self.page = None
         self.images = []
         self._drop_cache()
-        self.document().clear()
-        self.setHtml("")
+        self._new_document()
 
     def wheelEvent(self, e) -> None:  # noqa: N802
         if e.modifiers() & Qt.ControlModifier:  # Ctrl + wheel: zoom, as in a browser
             if e.angleDelta().y():
-                self.win.set_zoom(1 if e.angleDelta().y() > 0 else -1)
+                step = 1 if e.angleDelta().y() > 0 else -1
+                QTimer.singleShot(0, lambda: self.win.set_zoom(step))  # after Qt is done with this event
             e.accept()
             return
         super().wheelEvent(e)
@@ -383,10 +403,10 @@ class _Reader(QTextBrowser):
             scale = dpr
             free = IMAGE_BUDGET - self._bytes
             need = lambda s: 4 * (shown * s / disp.width()) ** 2 * raw.width() * raw.height()  # noqa: E731
-            if need(scale) > free:
+            if self._bytes + need(scale) > IMAGE_BUDGET * SHARP_SHARE:
                 scale = 1.0  # a note with very many big pictures: the rest less sharp, not missing
             if need(scale) > free:
-                return self._placeholder(room, dpr)
+                return self._placeholder(shown, shown * disp.height() / disp.width())
             k = shown * scale / disp.width()
             reader.setScaledSize(QSize(max(1, round(raw.width() * k)), max(1, round(raw.height() * k))))
         elif raw.isValid() or 4 * 4000 * 4000 > IMAGE_BUDGET - self._bytes:
@@ -409,11 +429,12 @@ class _Reader(QTextBrowser):
         self._cache[key] = img
         return img
 
-    def _placeholder(self, room: int, dpr: float) -> QImage:
-        """Shown instead of a picture that doesn't fit in memory any more (not kept)."""
-        w, h = int(min(room, 520)), 64
-        img = QImage(int(w * dpr), int(h * dpr), QImage.Format_RGB32)
-        img.setDevicePixelRatio(dpr)
+    def _placeholder(self, width: float, height: float) -> QImage:
+        """Shown instead of a picture that doesn't fit in memory any more (not kept), as big as the
+        picture would be, drawn at half sharpness to stay small."""
+        w, h = max(120, int(width)), max(64, int(height))
+        img = QImage(max(1, w // 2), max(1, h // 2), QImage.Format_RGB32)
+        img.setDevicePixelRatio(0.5)
         img.fill(QColor(self.win.c["hover"]))
         p = QPainter(img)
         p.setPen(QColor(self.win.c["muted"]))
@@ -433,6 +454,7 @@ class NotesWindow(_Dialog):
     sort = "new"  # new | old | title
     own_theme: str | None = None  # None: as Skyfold; or light | dark | oled for this window only
     THEMES = (None, "light", "dark", "oled")
+    resume: dict | None = None  # folder, note and scroll position when the window was last closed
     ZOOMS = (0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0, 2.4)
 
     def __init__(self, palette: dict[str, str], source) -> None:
@@ -457,6 +479,13 @@ class NotesWindow(_Dialog):
         self._note_failed = 0.0  # when the open note couldn't be read (0 = it could)
         self.folder = ""  # "" = all notes
         self._hl_query = ""
+        self._resume_id: str | None = None
+        self._resume_pos: int | None = None
+        self._pending_anchor: int | None = None
+        r = NotesWindow.resume
+        if r:  # back where you were
+            self.folder, self.current = r.get("folder") or "", r.get("id")
+            self._resume_id, self._resume_pos = r.get("id"), r.get("pos")
 
         self.indexer = _Indexer()
         self.indexer.batch.connect(self._on_batch)
@@ -731,7 +760,8 @@ class NotesWindow(_Dialog):
         chosen = items.get(keep) or top
         while chosen is not top and chosen.parent() is not None and not chosen.parent().isExpanded():
             chosen.parent().setExpanded(True)
-        self.folder = chosen.data(0, FOLDER_PATH)
+        if keep in items or self.rows:  # (nothing loaded yet: the folder to come back to is kept)
+            self.folder = chosen.data(0, FOLDER_PATH)
         self.folders.setCurrentItem(chosen)
         self.folders.blockSignals(False)
 
@@ -791,7 +821,7 @@ class NotesWindow(_Dialog):
     def _fill_list(self) -> None:
         if self.closed:
             return
-        keep = self.current
+        keep = self.current or self._resume_id
         shown = self._visible_rows()
         self.notes.blockSignals(True)
         self.notes.clear()
@@ -889,20 +919,88 @@ class NotesWindow(_Dialog):
             self._empty(t("This note can't be read right now. Skyfold tries again in a moment."))
             return
         clean = nv.note_html(text, self.shown_pages)
-        scroll = self.reader.verticalScrollBar().value() if (same_note and self.reader.page == page) else 0
-        doc = self.reader.document()
-        doc.setDefaultStyleSheet(self._css())
+        clean.body = self._sized(page, clean)
+        # the same note shown again (zoom, a wider window, more pages): it stays at the same text,
+        # not the same number of pixels; a reopened window: back where it was closed
+        anchor = self._top_position() if (same_note and self.reader.page == page) else None
+        if self._resume_pos is not None and self._resume_id == row.id:
+            anchor = self._resume_pos
+        self._resume_pos = None
+        if self._resume_id == row.id:
+            self._resume_id = None
         font = QFont(QApplication.font())
         base = font.pointSizeF() if font.pointSizeF() > 0 else 10.0
         font.setPointSizeF(base * 1.1 * NotesWindow.zoom)
-        doc.setDefaultFont(font)
-        self.reader.show_page(page, clean, keep_pictures=same_note)
+        self.reader.show_page(page, clean, keep_pictures=same_note, css=self._css(), font=font)
         self._fitted_width = self.reader.viewport().width()
-        self.reader.verticalScrollBar().setValue(scroll)
+        self._pending_anchor = anchor if (anchor and not self.isVisible()) else None
+        self._scroll_to_position(anchor or 0)
         self.empty.hide()
         self.reader.show()
         self.act_browser.setEnabled(True)
         self._highlight(jump=not same_note or self.search.text() != self._hl_query)
+
+    def _top_position(self) -> int:
+        """Where in the note's text the top of the view is (a character, or a picture)."""
+        if not self.reader.isVisible() or self.reader.page is None:
+            return 0
+        return self.reader.cursorForPosition(QPoint(4, 4)).position()
+
+    def _scroll_to_position(self, pos: int) -> None:
+        """Put that place of the note at the top of the view at once: the whole note is laid out
+        first (pictures have their size already), so it doesn't arrive in steps."""
+        doc = self.reader.document()
+        layout = doc.documentLayout()
+        layout.documentSize()  # lays out the whole note now (and sets the scrollbar's range)
+        y = 0.0
+        if pos > 0:
+            block = doc.findBlock(pos)
+            if block.isValid():
+                y = layout.blockBoundingRect(block).top()
+                lines = block.layout()
+                if lines is not None and lines.lineCount():
+                    line = lines.lineForTextPosition(max(0, pos - block.position()))
+                    if line.isValid():
+                        y += line.y()
+        self.reader.verticalScrollBar().setValue(int(y))
+
+    def showEvent(self, e) -> None:  # noqa: N802
+        """The window has its real size only now, before anything is drawn: the note is fitted to it
+        and put at its place here, so it appears there at once (no jump, no scrolling into place)."""
+        super().showEvent(e)
+        anchor, self._pending_anchor = getattr(self, "_pending_anchor", None), None
+        if self.closed or self.reader.page is None:
+            return
+        if abs(self.reader.viewport().width() - self._fitted_width) > 40:
+            if anchor:
+                self._resume_id, self._resume_pos = self.current, anchor
+            self.current_key = None
+            self._show_current()
+        elif anchor:
+            self._scroll_to_position(anchor)
+
+    def _sized(self, page: Path, clean: nv.Page) -> str:
+        """Every picture with its width and height on screen: Qt then lays the note out at once and
+        asks for a picture only when it is drawn (a scan with dozens of pages opens quickly)."""
+        if not clean.images or self.root is None:
+            return clean.body
+        room = max(200, self.reader.viewport().width() - 48)
+        body = clean.body
+        for n, ref in enumerate(clean.images):
+            f = nv.resolve_asset(self.root, page, ref)
+            if f is None:
+                continue
+            reader = QImageReader(str(f))
+            reader.setAutoTransform(True)
+            raw = reader.size()
+            if not raw.isValid() or raw.width() <= 0 or raw.height() <= 0:
+                continue
+            disp = raw.transposed() if reader.transformation() & QImageIOHandler.TransformationRotate90 else raw
+            w = min(room, disp.width() * NotesWindow.zoom)
+            h = w * disp.height() / disp.width()
+            body = body.replace(f'src="{nv.IMAGE_SCHEME}:{n}"',
+                                f'src="{nv.IMAGE_SCHEME}:{n}" width="{round(w)}" height="{round(h)}"', 1)
+        return body
 
     def _empty(self, text: str, browser: bool = False) -> None:
         self.reader.hide()
@@ -970,9 +1068,9 @@ class NotesWindow(_Dialog):
         ref = url.toString()
         if ref.startswith("skyfold:more:") and ref[13:].isdigit():
             n = int(ref[13:])
-            self.shown_pages[n] = self.shown_pages.get(n, nv.SCAN_PAGES) + nv.SCAN_PAGES  # only that scan
+            self.shown_pages[n] = 1_000_000  # all of that scan's pages, as the link says
             self.current_key = None
-            self._show_current()
+            QTimer.singleShot(0, self._show_current)  # not inside Qt's own handling of the click
             return
         if url.scheme().lower() in ("http", "https", "mailto"):
             QDesktopServices.openUrl(url)
@@ -1118,8 +1216,11 @@ class NotesWindow(_Dialog):
             self.notes.viewport().update()
 
     # --- closing ------------------------------------------------------------------------------
-    def _forget(self) -> None:
-        """Drop every bit of note text and every picture the window holds (any way of closing)."""
+    def _forget(self, remember: bool = True) -> None:
+        """Drop every bit of note text and every picture the window holds (any way of closing).
+        Only which folder and note were open (and how far down) is kept, to come back to."""
+        if not self.closed and remember and self.current:
+            NotesWindow.resume = {"folder": self.folder, "id": self.current, "pos": self._top_position()}
         self.closed = True
         self.poll.stop()
         self._debounce.stop()
@@ -1153,5 +1254,6 @@ class NotesWindow(_Dialog):
 
     def clear(self) -> None:
         """Signed out or another Apple ID: nothing of the old notes stays on screen or in memory."""
-        self._forget()
+        self._forget(remember=False)
+        NotesWindow.resume = None
         self.close()

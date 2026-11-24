@@ -142,6 +142,7 @@ To uninstall, first turn off *Start with Windows* and *Safari bookmarks* in Sett
   - Apple's session cookies and the sync database: `%LOCALAPPDATA%\Skyfold` (this PC only, never next to the app, so they aren't uploaded if the app sits in OneDrive or iCloud Drive). The session lasts about two months.
   - Settings, including your Apple ID email: the `data` folder next to `Skyfold.exe` (or `%LOCALAPPDATA%\Skyfold\data` if the program folder can't be written, e.g. under Program Files).
   - A log file: `%LOCALAPPDATA%\Skyfold\skyfold.log` (max. about 3 MB, rotated). It contains file and folder names but no password.
+  - If Skyfold ever crashes: `%LOCALAPPDATA%\Skyfold\crash.log`, with the parts of the program that were running (no note text, file contents or password).
   - With Safari bookmarks on: your bookmarks' titles and addresses in `%LOCALAPPDATA%\Skyfold\safari-bookmarks.json` (for the browser extension), besides the exported HTML file.
 - **Anyone who can read `%LOCALAPPDATA%\Skyfold\session` can access your iCloud** until the session expires, like a browser that's still signed in. Use Skyfold on a PC you trust. **Settings → General → Sign out** deletes the session.
 - To report a security problem privately, see [SECURITY.md](SECURITY.md).
@@ -197,6 +198,8 @@ Open an [issue](../../issues/new/choose) and attach the relevant part of the log
 ```
 %LOCALAPPDATA%\Skyfold\skyfold.log
 ```
+
+If Skyfold closed by itself (crashed), attach `crash.log` from the same folder too.
 
 Paste `%LOCALAPPDATA%\Skyfold` into the Explorer address bar to open the folder. **Before posting, remove personal data**: your Apple ID email, your Windows user name in paths, and file, album or note names you don't want to share.
 

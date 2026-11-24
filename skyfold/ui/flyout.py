@@ -50,6 +50,7 @@ ACTIVITY_GLYPH = {
     "info": "info",
     "error": "error",
     "upload": "upload",
+    "move": "folder",  # a note moved to another folder
 }
 
 
