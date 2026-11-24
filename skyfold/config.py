@@ -481,8 +481,33 @@ class Settings:
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
+def _start_entry() -> tuple[str | None, str | None]:
+    """(what Windows' autostart entry says now, what it would say for this exe)."""
+    import winreg
+
+    exe = sys.executable if getattr(sys, "frozen", False) else None
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_QUERY_VALUE) as key:
+            current = winreg.QueryValueEx(key, APP_ID)[0]
+    except OSError:
+        current = None
+    return current, (f'"{exe}" --tray' if exe else None)
+
+
+def starts_with_windows(setting: bool) -> bool:
+    """Whether Windows really starts this copy of Skyfold. Skyfold never rewrites the entry by itself
+    (a program that keeps re-adding itself to Run looks like malware to antivirus programs), so an
+    entry that points at an older copy or was removed shows as off, and switching it on in Settings
+    writes it again. Outside the packaged app only the setting counts."""
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return setting
+    current, wanted = _start_entry()
+    return setting and current == wanted
+
+
 def set_start_with_windows(enabled: bool) -> None:
-    """Toggle the per-user autostart entry (HKCU Run). Only on Windows, only when frozen."""
+    """Toggle the per-user autostart entry (HKCU Run). Only on Windows, only when frozen, and only
+    when the user changes it in Settings: never on its own at start."""
     if sys.platform != "win32":
         return
     import winreg

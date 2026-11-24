@@ -39,7 +39,8 @@ from PySide6.QtWidgets import (
 )
 
 from .. import auth
-from ..config import APP_IN_CLOUD, APP_NAME, FOLDER_STRUCTURES, PRIVATE_DIR, VERSION, Settings, check_photos_dir, default_photos_dir
+from ..config import APP_IN_CLOUD, APP_NAME, FOLDER_STRUCTURES, PRIVATE_DIR, VERSION, Settings, check_photos_dir, default_photos_dir, \
+    starts_with_windows
 from ..i18n import LANGUAGES, language, t
 from ..safelog import brief, describe
 from .icons import app_icon, draw_logo, glyph
@@ -846,7 +847,7 @@ class SettingsDialog(_Dialog):
                                     self.s.instant_local_deletes)
 
         sysc = self._card(lay, t("SYSTEM"))
-        self.autostart = self._toggle(sysc, t("Start with Windows"), self.s.start_with_windows)
+        self.autostart = self._toggle(sysc, t("Start with Windows"), starts_with_windows(self.s.start_with_windows))
         self.notif = self._toggle(sysc, t("Show notifications"), self.s.notifications)
         self.updates = self._toggle(sysc, t("Check for new versions of Skyfold"), self.s.check_updates)
         self.lang = Combo()

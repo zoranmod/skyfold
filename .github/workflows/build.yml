@@ -5,6 +5,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:  # a test build of a branch, the same way releases are built
 
 permissions:
   contents: read  # the build itself only reads; only the release job below may write
@@ -41,6 +42,25 @@ jobs:
         run: |
           python -m venv "$env:LOCALAPPDATA\Skyfold-build\venv"
           & "$env:LOCALAPPDATA\Skyfold-build\venv\Scripts\python.exe" -m pip install -r requirements.lock.txt
+
+      - name: Compile PyInstaller's starter program from source
+        shell: pwsh
+        env:
+          PYINSTALLER_COMPILE_BOOTLOADER: "1"
+        run: |
+          # Skyfold.exe starts with PyInstaller's small starter program (the bootloader). The ready-made
+          # one in PyInstaller's wheel is shared by countless programs, malware included, so antivirus
+          # models often flag it. One compiled here from PyInstaller's source is Skyfold's own.
+          $py = "$env:LOCALAPPDATA\Skyfold-build\venv\Scripts\python.exe"
+          $hash = { & $py -c "import PyInstaller, pathlib, hashlib; p = pathlib.Path(PyInstaller.__file__).parent / 'bootloader' / 'Windows-64bit-intel' / 'runw.exe'; print(hashlib.sha256(p.read_bytes()).hexdigest())" }
+          $before = & $hash
+          $version = (Select-String -Path requirements.lock.txt -Pattern '^pyinstaller==(.+)$').Matches[0].Groups[1].Value
+          & $py -m pip install --force-reinstall --no-deps --no-binary pyinstaller "pyinstaller==$version"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $after = & $hash
+          "starter from the wheel: $before"
+          "starter compiled here:  $after"
+          if (-not $after -or $after -eq $before) { Write-Error "The starter program was not compiled from source"; exit 1 }
 
       - name: Tests
         shell: pwsh
