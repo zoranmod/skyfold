@@ -236,7 +236,7 @@ class Requests(QObject):
     fullCheck = Signal()
     clearActivity = Signal()
     trashDrivePaths = Signal(list)
-    setFavorite = Signal(str, bool)  # asset id, favourite
+    setFavorites = Signal(list, bool, int)  # asset ids, favourite, account generation
 
 
 def _close_stale_settings(controller) -> None:
@@ -285,7 +285,7 @@ class Controller(QObject):
         self.req.fullCheck.connect(self.worker.full_check)
         self.req.clearActivity.connect(self.worker.clear_activity)
         self.req.trashDrivePaths.connect(self.worker.trash_drive_paths)
-        self.req.setFavorite.connect(self.worker.set_favorite)
+        self.req.setFavorites.connect(self.worker.set_favorites)
 
         # UI
         self.flyout = Flyout(self.c)
@@ -321,7 +321,7 @@ class Controller(QObject):
         w.statsChanged.connect(f.set_stats, q)
         w.pendingChanged.connect(self._on_pending, q)
         w.notify.connect(self._notify, q)
-        w.favoriteSet.connect(self._favorite_set, q)
+        w.favoritesSet.connect(self._favorites_set, q)
         w.accountChanged.connect(f.set_account, q)
         w.accountChanged.connect(self._forget_login_api, q)
         w.accountChanged.connect(self._on_account_changed, q)  # a method, never a lambda: see _on_account_changed
@@ -572,7 +572,7 @@ class Controller(QObject):
         from .ui.photos_window import PhotosWindow
 
         win = PhotosWindow(self.c, self._photos_source, lambda: self.settings)
-        win.favoriteRequested.connect(self.req.setFavorite.emit)
+        win.favoriteRequested.connect(self._ask_favorites)
 
         def gone(*_args, w=win) -> None:
             if self._dialogs.get("photos") is w:
@@ -582,16 +582,22 @@ class Controller(QObject):
         win.destroyed.connect(gone)
         self._show_dialog("photos", win)
 
-    def _favorite_set(self, asset_id: str, value: bool, error: str) -> None:
+    def _ask_favorites(self, ids: list, value: bool) -> None:
+        self.req.setFavorites.emit(list(ids), value, self.worker.account_gen)
+
+    def _favorites_set(self, ids: list, value: bool, failed: list, error: str) -> None:
         from shiboken6 import isValid
 
         win = self._dialogs.get("photos")
         if win is not None and isValid(win):
-            win.favorite_result(asset_id, value, error)
+            win.favorite_result(ids, value, failed, error)
 
     def _close_photos(self) -> None:
-        """Signed out or another Apple ID: the Photos window closes with nothing of the old library."""
+        """Signed out or another Apple ID: the Photos window closes with nothing of the old library, and
+        hearts still waiting for the worker are never sent to that account."""
         from shiboken6 import isValid
+
+        self.worker.account_gen += 1
 
         win = self._dialogs.pop("photos", None)
         if win is not None and isValid(win):

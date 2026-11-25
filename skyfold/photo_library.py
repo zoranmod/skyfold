@@ -50,7 +50,20 @@ def _local(iso: str | None) -> datetime | None:
         return None
     if d.tzinfo is None:
         d = d.replace(tzinfo=timezone.utc)
-    return d.astimezone()
+    return to_local(d)
+
+
+def to_local(d: datetime) -> datetime:
+    """In this PC's time zone. Windows can't tell the zone's rules before 1970 (a scanned old photo):
+    today's offset is used for those instead of failing."""
+    try:
+        return d.astimezone()
+    except (OSError, OverflowError, ValueError):
+        return d.astimezone(_LOCAL)
+
+
+_LOCAL = datetime.now(timezone.utc).astimezone().tzinfo
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc).astimezone(_LOCAL)
 
 
 def load(state, root: Path) -> list[PhotoItem]:
@@ -64,7 +77,7 @@ def load(state, root: Path) -> list[PhotoItem]:
             continue
         if key != "original" or aid in items:
             continue
-        taken = _local(date) or datetime.fromtimestamp(0).astimezone()
+        taken = _local(date) or _EPOCH
         items[aid] = PhotoItem(
             asset_id=aid, path=path, date=taken, is_video=bool(is_video), size=size or 0,
             favorite=bool(fav), added=_local(added), width=w, height=h, duration=dur,

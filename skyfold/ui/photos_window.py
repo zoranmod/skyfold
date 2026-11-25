@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import threading
+import time
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import (QAbstractListModel, QEvent, QItemSelectionModel, QMimeData, QModelIndex, QPoint, QRect,
+from PySide6.QtCore import (QAbstractListModel, QEvent, QItemSelection, QItemSelectionModel, QObject, QMimeData, QModelIndex, QPoint, QRect,
                             QRectF, QSize, Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QImage, QKeySequence, QLinearGradient,
                            QPainter, QPainterPath, QPen, QPixmap, QShortcut)
@@ -109,11 +111,12 @@ class PhotoModel(QAbstractListModel):
 class Thumbs:
     """Pictures of the photos that are (or were just) on screen, kept in memory a while."""
 
-    LIMIT = 700
+    BUDGET = 220 * 1024 * 1024  # bytes of pictures kept (the oldest go first)
 
     def __init__(self, loader: ImageLoader) -> None:
         self.loader = loader
         self.cache: OrderedDict[tuple[str, int], QPixmap] = OrderedDict()
+        self.used = 0
         self.missing: set[tuple[str, int]] = set()
         self.seen: set[str] = set()
 
@@ -145,12 +148,27 @@ class Thumbs:
         if short > size * 1.25:
             img = img.scaled(img.width() * size // short, img.height() * size // short,
                              Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.cache[(key, size)] = QPixmap.fromImage(img)
-        while len(self.cache) > self.LIMIT:
-            self.cache.popitem(last=False)
+        old = self.cache.pop((key, size), None)
+        if old is not None:
+            self.used -= self._bytes(old)
+        pm = QPixmap.fromImage(img)
+        self.cache[(key, size)] = pm
+        self.used += self._bytes(pm)
+        while self.used > self.BUDGET and len(self.cache) > 1:
+            _k, gone = self.cache.popitem(last=False)
+            self.used -= self._bytes(gone)
+
+    @staticmethod
+    def _bytes(pm: QPixmap) -> int:
+        return pm.width() * pm.height() * 4
+
+    def retry_missing(self) -> None:
+        """Pictures that couldn't be made are tried again (the file may be there now)."""
+        self.missing.clear()
 
     def clear(self) -> None:
         self.cache.clear()
+        self.used = 0
         self.missing.clear()
 
 
@@ -329,6 +347,14 @@ class Grid(QListView):
         super().keyPressEvent(e)
         if e.modifiers() & Qt.ShiftModifier and not self.win.selecting and self.selectionModel().hasSelection():
             self.win.set_selecting(True)
+
+    def selectionCommand(self, index, event=None):  # noqa: N802
+        """Moving with the arrow keys (or the window moving the current photo) never selects: only
+        Select, Space, Ctrl or Shift do, as on an iPad."""
+        if event is None or event.type() == QEvent.KeyPress and not (
+                event.modifiers() & (Qt.ShiftModifier | Qt.ControlModifier)):
+            return QItemSelectionModel.NoUpdate
+        return super().selectionCommand(index, event)
 
     def contextMenuEvent(self, e) -> None:  # noqa: N802
         idx = self.indexAt(e.pos())
@@ -650,10 +676,18 @@ class SideDelegate(QStyledItemDelegate):
 
 
 # --- the window ------------------------------------------------------------------------------------
+class _Bridge(QObject):
+    """Results of work done off the window's thread, delivered on it."""
+
+    library = Signal(object, object)  # fingerprint, items (None: couldn't be read)
+    deleted = Signal(object, object)  # deleted asset ids, [(asset id, why not)]
+
+
 class PhotosWindow(_Dialog):
     """source() gives (photos database, photos folder), or None when nobody is signed in."""
 
-    favoriteRequested = Signal(str, bool)  # asset id, favourite
+    favoriteRequested = Signal(list, bool)  # asset ids, favourite
+    RELOAD_GAP = 10.0  # seconds at least between two reads of the library while the sync adds photos
 
     # kept while Skyfold runs
     zoom_level = 2
@@ -680,7 +714,14 @@ class PhotosWindow(_Dialog):
         self.viewer_message = ""
         self._full: dict[str, QPixmap] = {}
         self._fingerprint = None
+        self._loading = False
+        self._loaded_at = 0.0
+        self._pending_fav: dict[str, bool] = {}  # hearts iCloud hasn't confirmed yet
+        self._deleting = False
         self.closed = False
+        self._bridge = _Bridge(self)
+        self._bridge.library.connect(self._library_loaded)
+        self._bridge.deleted.connect(self._deleted)
 
         self.loader = ImageLoader(self)
         self.loader.loaded.connect(self._loaded)
@@ -1012,7 +1053,9 @@ class PhotosWindow(_Dialog):
         self._toast_timer.start()
 
     # --- data ----------------------------------------------------------------------------------
-    def reload(self) -> None:
+    def reload(self, now: bool = False) -> None:
+        """Read the library again if it changed: off this thread (a big library takes a moment), and
+        while the sync is adding photos at most every RELOAD_GAP seconds."""
         if self.closed:
             return
         src = self.source()
@@ -1024,16 +1067,46 @@ class PhotosWindow(_Dialog):
         state, root = src
         try:
             fp = (str(root), lib.fingerprint(state))
-            if fp == self._fingerprint:
-                return
-            items = lib.load(state, root)
         except Exception:  # noqa: BLE001
             log.warning("The Photos window couldn't read the photo list", exc_info=True)
             return
+        if fp == self._fingerprint or self._loading:
+            return
+        if self._fingerprint is not None and not now and time.monotonic() - self._loaded_at < self.RELOAD_GAP:
+            return  # (the poll comes back)
+        self._loading = True
+        bridge = self._bridge
+
+        def work() -> None:
+            try:
+                items = lib.load(state, root)
+            except Exception:  # noqa: BLE001
+                log.warning("The Photos window couldn't read the photo list", exc_info=True)
+                items = None
+            try:
+                bridge.library.emit(fp, items)
+            except RuntimeError:
+                pass  # the window is gone
+
+        threading.Thread(target=work, name="photos-library", daemon=True).start()
+
+    def _library_loaded(self, fp, items) -> None:
+        self._loading = False
+        self._loaded_at = time.monotonic()
+        if self.closed or items is None:
+            return
+        src = self.source()
+        if src is None or str(src[1]) != fp[0]:
+            return  # signed out or another folder meanwhile
         first = self._fingerprint is None
         self._fingerprint = fp
         self.items = items
         self.by_id = {it.asset_id: it for it in items}
+        for aid, value in self._pending_fav.items():  # what was asked wins until iCloud answers
+            it = self.by_id.get(aid)
+            if it is not None:
+                it.favorite = value
+        self.thumbs.retry_missing()
         self._fill_side()
         self._show_set(keep=not first)
         if self.pages.currentWidget() is self.viewer:
@@ -1155,10 +1228,7 @@ class PhotosWindow(_Dialog):
             self.inner.setCurrentWidget(self.grid)
             self._layout_grid()
             if selected:
-                sm = self.grid.selectionModel()
-                for row, it in enumerate(got):
-                    if it.asset_id in selected:
-                        sm.select(self.model.index(row), QItemSelectionModel.Select)
+                self._select_rows([row for row, it in enumerate(got) if it.asset_id in selected])
             if keep and anchor is not None and not at_end:
                 self._restore_anchor(anchor)
             elif self.set_key == "recent" or self.query and not library:
@@ -1167,9 +1237,29 @@ class PhotosWindow(_Dialog):
                 QTimer.singleShot(0, self.grid.scrollToBottom)  # the newest at the bottom, as on iPhone
                 self.grid.scrollToBottom()
         else:
-            self._build_cards(view, got)
+            place = (self.cards_area.verticalScrollBar().value()
+                     if keep and self.inner.currentWidget() is self.cards_area else None)
+            self._build_cards(view, got, keep_scroll=place)
         self._place_overlays()
         self._update_header()
+
+    def _select_rows(self, rows: list[int]) -> None:
+        """Select these rows at once (one change, not one per photo: thousands stay quick)."""
+        sel = QItemSelection()
+        start = prev = None
+        for row in rows + [None]:
+            if row is not None and prev is not None and row == prev + 1:
+                prev = row
+                continue
+            if start is not None:
+                sel.select(self.model.index(start), self.model.index(prev))
+            start = prev = row
+        sm = self.grid.selectionModel()
+        sm.blockSignals(True)
+        sm.select(sel, QItemSelectionModel.Select)
+        sm.blockSignals(False)
+        self.grid.viewport().update()
+        self._selection_changed()
 
     def _layout_grid(self) -> None:
         w = self.grid.viewport().width()
@@ -1269,7 +1359,8 @@ class PhotosWindow(_Dialog):
         self.set_selecting(False)
         self._show_set()
 
-    def _build_cards(self, view: str, items: list[lib.PhotoItem], focus_year: int | None = None) -> None:
+    def _build_cards(self, view: str, items: list[lib.PhotoItem], focus_year: int | None = None,
+                     keep_scroll: int | None = None) -> None:
         holder = QWidget()
         grid = QGridLayout(holder)
         grid.setContentsMargins(22, 84, 22, 90)
@@ -1327,6 +1418,8 @@ class PhotosWindow(_Dialog):
             sb = self.cards_area.verticalScrollBar()
             if target is not None:
                 sb.setValue(target.y() - 84)
+            elif keep_scroll is not None:
+                sb.setValue(keep_scroll)  # (new photos arrived: the place stays)
             else:
                 sb.setValue(sb.maximum())
 
@@ -1355,7 +1448,7 @@ class PhotosWindow(_Dialog):
                     self.grid.scrollTo(idx, QAbstractItemView.PositionAtTop)
                     sb = self.grid.verticalScrollBar()
                     sb.setValue(max(0, sb.value() - 80))
-                    self.grid.setCurrentIndex(idx)
+                    self.grid.selectionModel().setCurrentIndex(idx, QItemSelectionModel.NoUpdate)
                     return
 
         QTimer.singleShot(0, go)
@@ -1380,10 +1473,13 @@ class PhotosWindow(_Dialog):
         if full:
             if img.isNull():
                 cur = self.viewer_items[self.viewer_row] if self.viewer_items else None
-                if cur is not None and cur.asset_id == key and cur.path.suffix.lower() in (".heic", ".heif"):
+                if cur is not None and cur.asset_id == key:
+                    heic = (cur.path.suffix.lower() in (".heic", ".heif") and len(str(cur.path)) < 260
+                            and cur.path.is_file())
                     self.viewer_message = t(
                         "Windows can't show HEIC photos yet. Get Microsoft's free “HEIF Image Extensions” "
-                        "from the Microsoft Store, then open the photo again.")
+                        "from the Microsoft Store, then open the photo again.") if heic else t(
+                        "This photo couldn't be opened. Is it still in the photos folder?")
                     self.picture.update()
                 return
             pm = QPixmap.fromImage(img)
@@ -1503,23 +1599,34 @@ class PhotosWindow(_Dialog):
         self.set_favorite(items, not all(i.favorite for i in items))
 
     def set_favorite(self, items: list[lib.PhotoItem], value: bool) -> None:
-        """At once on screen; iCloud is told through the sync (and if it says no, it is undone)."""
-        for it in items:
-            if it.favorite != value:
-                it.favorite = value
-                self.favoriteRequested.emit(it.asset_id, value)
+        """At once on screen; iCloud is told through the sync's thread in one go (and whatever it says no
+        to is undone). Until it answers, the heart stays as asked even when the library is read again."""
+        changed = [it for it in items if it.favorite != value]
+        for it in changed:
+            it.favorite = value
+            self._pending_fav[it.asset_id] = value
+        if changed:
+            self.favoriteRequested.emit([it.asset_id for it in changed], value)
         self._fill_side()
         self.grid.viewport().update()
         self._update_viewer_bar()
         if len(items) > 1 or self.pages.currentWidget() is not self.viewer:
             self.message(t("Added to Favourites") if value else t("Removed from Favourites"))
 
-    def favorite_result(self, asset_id: str, value: bool, error: str) -> None:
-        it = self.by_id.get(asset_id)
-        if it is None or self.closed:
+    def favorite_result(self, ids: list, value: bool, failed: list, error: str) -> None:
+        """iCloud's answer to one set_favorite: ids were asked to become value; failed ones stay as they were."""
+        if self.closed:
             return
-        it.favorite = value
-        if error:
+        failed_set = set(failed)
+        for aid in ids:
+            if self._pending_fav.get(aid) != value:
+                continue  # clicked again meanwhile: that later answer decides
+            self._pending_fav.pop(aid, None)
+            if aid in failed_set:
+                it = self.by_id.get(aid)
+                if it is not None:
+                    it.favorite = not value
+        if failed and error:
             self.message(t("Couldn't change the favourite in iCloud: {error}", error=error))
         self._fill_side()
         self.grid.viewport().update()
@@ -1528,6 +1635,9 @@ class PhotosWindow(_Dialog):
     def delete_items(self, items: list[lib.PhotoItem]) -> None:
         if not items:
             self.message(t("Select some photos first"))
+            return
+        if self._deleting:
+            self.message(t("Still deleting the previous photos"))
             return
         s = self.settings()
         to_cloud = bool(getattr(s, "delete_pc_to_cloud", True))
@@ -1548,19 +1658,39 @@ class PhotosWindow(_Dialog):
         box.exec()
         if box.clickedButton() is not delete:
             return
-        from ..engine import recycle
+        src = self.source()
+        if src is None:
+            return
+        state, root = src
+        ids = [it.asset_id for it in items]
+        self._deleting = True
+        if n > 20:
+            self.message(t("Deleting {n} items…", n=n))
+        bridge = self._bridge
 
-        done, failed = [], []
-        for it in items:
+        def work() -> None:
+            from ..engine import delete_on_pc
+
             try:
-                for p in it.files:
-                    if p.exists():
-                        recycle(p)
-                done.append(it)
-            except OSError as exc:
-                failed.append((it, str(exc)))
-        gone = {it.asset_id for it in done}
+                done, failed = delete_on_pc(state, root, ids)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("The Photos window couldn't delete", exc_info=True)
+                done, failed = [], [(ids[0], str(exc))]
+            try:
+                bridge.deleted.emit(done, failed)
+            except RuntimeError:
+                pass  # the window is gone
+
+        threading.Thread(target=work, name="photos-delete", daemon=True).start()
+
+    def _deleted(self, done: list, failed: list) -> None:
+        """Off-thread Delete finished: the deleted photos leave the window (the sync does the rest)."""
+        self._deleting = False
+        if self.closed:
+            return
+        gone = set(done)
         if gone:
+            to_cloud = bool(getattr(self.settings(), "delete_pc_to_cloud", True))
             viewing = self.pages.currentWidget() is self.viewer
             self.items = [i for i in self.items if i.asset_id not in gone]
             self.by_id = {i.asset_id: i for i in self.items}
@@ -1571,9 +1701,13 @@ class PhotosWindow(_Dialog):
                 self._refresh_viewer_list(removed=gone)
             self.message((t("1 item moved to the Recycle Bin") if len(done) == 1 else
                           t("{n} items moved to the Recycle Bin", n=len(done)))
-                         + (" " + t("and to Recently Deleted in iCloud") if to_cloud else ""))
+                         + (" " + t("iCloud gets the deletion at the next sync.") if to_cloud else ""))
         if failed:
-            self.message(t("Couldn't delete {name}: {error}", name=failed[0][0].name, error=failed[0][1]))
+            aid, why = failed[0]
+            it = self.by_id.get(aid)
+            self.message(t("Couldn't delete {name}: {error}", name=it.name if it else aid, error=why)
+                         if len(failed) == 1 else t("{n} items couldn't be deleted: {error}", n=len(failed),
+                                                    error=why))
 
     # --- viewer --------------------------------------------------------------------------------
     def open_viewer(self, row: int) -> None:
@@ -1714,7 +1848,7 @@ class PhotosWindow(_Dialog):
             for row, x in enumerate(self.model.items):
                 if x.asset_id == it.asset_id:
                     idx = self.model.index(row)
-                    self.grid.setCurrentIndex(idx) if not self.selecting else None
+                    self.grid.selectionModel().setCurrentIndex(idx, QItemSelectionModel.NoUpdate)
                     self.grid.scrollTo(idx, QAbstractItemView.EnsureVisible)
                     break
         self.grid.setFocus()

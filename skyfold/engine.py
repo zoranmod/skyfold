@@ -179,6 +179,55 @@ def _regular_file(p: Path) -> bool:
         return False
 
 
+def delete_on_pc(state: State, root: Path, asset_ids: list[str],
+                 progress: Callable[[int, int], None] | None = None) -> tuple[list[str], list[tuple[str, str]]]:
+    """The Photos window's Delete: each photo's files to the Recycle Bin, exactly as deleting them in the
+    folder would (the sync then does what it always does with a deleted photo). A file goes only while it
+    is still the one Skyfold synced for that photo: inside the photos folder, an ordinary file, with the
+    same Windows file id. Anything moved or replaced since is left alone and reported.
+
+    A Live Photo goes as a pair, its video first: if the photo itself then can't go, the video is
+    forgotten so the next sync brings it back, and nothing is deleted in iCloud (a missing photo
+    would mean the whole Live Photo). Returns (deleted asset ids, [(asset id, why not)])."""
+    root = Path(root)
+    by_asset: dict[str, list[FileRow]] = defaultdict(list)
+    for r in state.files():
+        by_asset[r.asset_id].append(r)
+    done: list[str] = []
+    failed: list[tuple[str, str]] = []
+    for n, aid in enumerate(asset_ids, 1):
+        try:
+            targets: list[tuple[FileRow, Path]] = []
+            for r in by_asset.get(aid, []):
+                p = root / Path(r.rel_path)
+                if known_missing(p):
+                    continue
+                fid = state.get(f"fid:{aid}#{r.resource_key}")
+                st = os.lstat(p)  # (can't be looked at: an error, and nothing of this photo is touched)
+                if (not _regular_file(p) or not inside_root(root, p)
+                        or fid and st.st_ino and fid != f"{st.st_dev}:{st.st_ino}"):
+                    raise OSError(t("{name} was moved or replaced since it was synced; it was left alone",
+                                    name=p.name))
+                targets.append((r, p))
+            targets.sort(key=lambda x: x[0].resource_key == "original")  # the photo itself last
+            video_gone: FileRow | None = None
+            for r, p in targets:
+                try:
+                    recycle(p)
+                except OSError:
+                    if video_gone is not None:  # half a Live Photo: the video comes back at the next sync
+                        state.remove_file(aid, video_gone.resource_key)
+                    raise
+                if r.resource_key != "original":
+                    video_gone = r
+            done.append(aid)
+        except OSError as exc:
+            failed.append((aid, brief(exc)))
+        if progress is not None:
+            progress(n, len(asset_ids))
+    return done, failed
+
+
 def create_marker(marker: Path, text: str) -> None:
     """Write a new sync marker. Only a new file is ever created: if something appeared at that name
     meanwhile, it is left exactly as it is and this pass stops."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -48,6 +49,20 @@ CREATE TABLE IF NOT EXISTS asset_info (
     duration   REAL,
     screenshot INTEGER NOT NULL DEFAULT 0
 );
+-- Goes up with every change the Photos window shows (files, details, albums), so the window can tell
+-- with one cheap read whether it has anything new.
+CREATE TABLE IF NOT EXISTS library_rev (n INTEGER NOT NULL);
+INSERT INTO library_rev SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM library_rev);
+CREATE TRIGGER IF NOT EXISTS rev_files_i AFTER INSERT ON files BEGIN UPDATE library_rev SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS rev_files_d AFTER DELETE ON files BEGIN UPDATE library_rev SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS rev_files_u AFTER UPDATE OF asset_id, resource_key, rel_path, size, is_video,
+    asset_date ON files BEGIN UPDATE library_rev SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS rev_info_i AFTER INSERT ON asset_info BEGIN UPDATE library_rev SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS rev_info_d AFTER DELETE ON asset_info BEGIN UPDATE library_rev SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS rev_info_u AFTER UPDATE ON asset_info BEGIN UPDATE library_rev SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS rev_links_i AFTER INSERT ON album_links BEGIN UPDATE library_rev SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS rev_links_d AFTER DELETE ON album_links BEGIN UPDATE library_rev SET n = n + 1; END;
+CREATE TRIGGER IF NOT EXISTS rev_links_u AFTER UPDATE ON album_links BEGIN UPDATE library_rev SET n = n + 1; END;
 CREATE TABLE IF NOT EXISTS activity (
     id   INTEGER PRIMARY KEY AUTOINCREMENT,
     ts   TEXT NOT NULL,
@@ -192,19 +207,39 @@ class State:
 
     # what the Photos window shows ------------------------------------------
     def set_infos(self, infos: dict[str, "AssetInfo"]) -> None:
-        """Keep iCloud's details of these assets (favourite, added, size, length, screenshot)."""
+        """Keep iCloud's details of these assets (favourite, added, size, length, screenshot). Only rows
+        that changed are written, all in one transaction (a full read of a big library would otherwise
+        write every row on its own and hold the database for a long time)."""
         rows = [(aid, int(i.favorite), i.added.isoformat() if i.added else None, i.width, i.height, i.duration,
                  int(i.screenshot)) for aid, i in infos.items() if i is not None]
         if not rows:
             return
         with self._lock:
-            self._db.executemany(
-                "INSERT OR REPLACE INTO asset_info(asset_id, favorite, added, width, height, duration, screenshot) "
-                "VALUES(?,?,?,?,?,?,?)", rows)
+            have = {r[0]: tuple(r) for r in self._db.execute(
+                "SELECT asset_id, favorite, added, width, height, duration, screenshot FROM asset_info")}
+            rows = [r for r in rows if have.get(r[0]) != r]
+            if not rows:
+                return
+            with self._transaction():
+                self._db.executemany(
+                    "INSERT OR REPLACE INTO asset_info(asset_id, favorite, added, width, height, duration, "
+                    "screenshot) VALUES(?,?,?,?,?,?,?)", rows)
 
     def drop_infos(self, asset_ids: set[str]) -> None:
-        with self._lock:
+        if not asset_ids:
+            return
+        with self._lock, self._transaction():
             self._db.executemany("DELETE FROM asset_info WHERE asset_id=?", [(a,) for a in asset_ids])
+
+    @contextmanager
+    def _transaction(self):
+        self._db.execute("BEGIN")
+        try:
+            yield
+        except BaseException:
+            self._db.execute("ROLLBACK")
+            raise
+        self._db.execute("COMMIT")
 
     def set_favorite(self, asset_id: str, value: bool) -> None:
         with self._lock:
@@ -223,14 +258,9 @@ class State:
                 "ORDER BY f.asset_date, f.asset_id").fetchall()
 
     def library_fingerprint(self) -> tuple:
-        """Changes whenever a file, a favourite or an album link changes (for the Photos window)."""
+        """Changes whenever a file, a photo's details or an album link changes (for the Photos window)."""
         with self._lock:
-            return (
-                self._db.execute("SELECT COUNT(*), MAX(synced_at), COALESCE(SUM(LENGTH(rel_path)), 0) "
-                                 "FROM files").fetchone()
-                + self._db.execute("SELECT COUNT(*), COALESCE(SUM(favorite), 0) FROM asset_info").fetchone()
-                + self._db.execute("SELECT COUNT(*) FROM album_links").fetchone()
-            )
+            return tuple(self._db.execute("SELECT n FROM library_rev").fetchone() or (0,))
 
     # album links -----------------------------------------------------------
     def album_links(self) -> dict[str, str]:

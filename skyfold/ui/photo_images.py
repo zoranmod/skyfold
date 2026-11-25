@@ -156,6 +156,7 @@ class ImageLoader(QObject):
         super().__init__(parent)
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(threads)
+        self._pool.setExpiryTimeout(-1)  # threads live as long as the window: COM is set up once per thread
         self._lock = threading.Lock()
         self._queued: set[tuple[str, int, bool]] = set()
         self._wanted: set[str] | None = None  # None: everything

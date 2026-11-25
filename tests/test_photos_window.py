@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -190,28 +191,44 @@ def test_sidebar_sets_and_search(qapp, made_up):
 def test_heart_is_shown_at_once_and_undone_if_icloud_says_no(qapp, made_up):
     w = window(qapp, made_up)
     asked = []
-    w.favoriteRequested.connect(lambda aid, v: asked.append((aid, v)))
+    w.favoriteRequested.connect(lambda ids, v: asked.append((ids, v)))
     try:
         it = next(i for i in w.items if i.asset_id == "A3")
         w.set_favorite([it], True)
-        assert it.favorite and asked == [("A3", True)]
-        w.favorite_result("A3", False, "no network")
-        assert not it.favorite and w.toast.isVisible()
+        assert it.favorite and asked == [(["A3"], True)]
+        w.reload(now=True)  # the database doesn't know yet: the heart stays as asked
+        st, _root = made_up
+        st.set("bump", "x")
+        st.add_album_link("Albums/X/IMG_103.JPG", "A3")
+        w.reload(now=True)
+        assert pump(qapp, lambda: not w._loading and w.by_id["A3"] is not it)
+        assert w.by_id["A3"].favorite
+        w.favorite_result(["A3"], True, ["A3"], "no network")
+        assert not w.by_id["A3"].favorite and w.toast.isVisible() and not w._pending_fav
     finally:
         w.close()
 
 
-def test_delete_asks_first_and_moves_both_files_of_a_live_photo(qapp, made_up, monkeypatch):
+def test_many_hearts_go_as_one_request(qapp, made_up):
+    w = window(qapp, made_up)
+    asked = []
+    w.favoriteRequested.connect(lambda ids, v: asked.append((sorted(ids), v)))
+    try:
+        items = [i for i in w.items if i.asset_id in ("A3", "A4", "A1")]  # A1 already is one
+        w.set_favorite(items, True)
+        assert asked == [(["A3", "A4"], True)]
+        w.favorite_result(["A3", "A4"], True, [], "")
+        assert not w._pending_fav and all(i.favorite for i in items)
+    finally:
+        w.close()
+
+
+def _answer_delete(monkeypatch):
     from PySide6.QtWidgets import QMessageBox
 
-    from skyfold import engine
-
-    gone = []
-    monkeypatch.setattr(engine, "recycle", lambda p: gone.append(p.name))
     answer = {"delete": False}
 
     def fake_exec(box):
-        buttons = {b.text(): b for b in box.buttons()}
         assert box.defaultButton().text() in ("Cancel", "Odustani")  # Enter never deletes by itself
         target = [b for b in box.buttons() if box.buttonRole(b) == QMessageBox.DestructiveRole][0] \
             if answer["delete"] else box.defaultButton()
@@ -219,6 +236,15 @@ def test_delete_asks_first_and_moves_both_files_of_a_live_photo(qapp, made_up, m
         return 0
 
     monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+    return answer
+
+
+def test_delete_asks_first_and_moves_both_files_of_a_live_photo(qapp, made_up, monkeypatch):
+    from skyfold import engine
+
+    gone = []
+    monkeypatch.setattr(engine, "recycle", lambda p: gone.append(p.name))
+    answer = _answer_delete(monkeypatch)
     w = window(qapp, made_up)
     try:
         live = next(i for i in w.items if i.asset_id == "A2")
@@ -226,29 +252,121 @@ def test_delete_asks_first_and_moves_both_files_of_a_live_photo(qapp, made_up, m
         assert gone == [] and len(w.items) == 30  # cancelled
         answer["delete"] = True
         w.delete_items([live])
-        assert sorted(gone) == ["IMG_102.JPG", "IMG_102.MOV"] and len(w.items) == 29
+        assert pump(qapp, lambda: len(w.items) == 29)
+        assert gone == ["IMG_102.MOV", "IMG_102.JPG"]  # the video first, the photo last
     finally:
         w.close()
 
 
-def test_worker_sets_the_favourite_in_icloud_then_in_the_database(tmp_path):
+def test_delete_leaves_a_file_that_was_replaced_since_the_sync(tmp_path, made_up, monkeypatch):
+    from skyfold import engine
+
+    st, root = made_up
+    gone = []
+    monkeypatch.setattr(engine, "recycle", lambda p: gone.append(p.name))
+    rel = st._db.execute("SELECT rel_path FROM files WHERE asset_id='A5'").fetchone()[0]
+    p = root / rel
+    real = os.stat(p)
+    st.set("fid:A5#original", f"{real.st_dev}:{real.st_ino + 1}")  # Skyfold synced another file there
+    done, failed = engine.delete_on_pc(st, root, ["A5", "A6"])
+    assert done == ["A6"] and [f[0] for f in failed] == ["A5"] and "IMG_105" not in " ".join(gone)
+    (root / "2026" / "x").mkdir(parents=True, exist_ok=True)
+    st.add_file(FileRow("D", "original", "2026/x", 1, False, "2026-01-01T00:00:00+00:00"), "x")
+    done, failed = engine.delete_on_pc(st, root, ["D"])  # a folder now has that name: left alone
+    assert done == [] and failed and (root / "2026" / "x").is_dir()
+
+
+def test_half_a_live_photo_never_counts_as_deleted(made_up, monkeypatch):
+    from skyfold import engine
+
+    st, root = made_up
+
+    def refuse_photo(p):
+        if p.suffix == ".JPG":
+            raise OSError("in use")
+
+    monkeypatch.setattr(engine, "recycle", refuse_photo)
+    done, failed = engine.delete_on_pc(st, root, ["A2"])
+    assert done == [] and failed
+    keys = {r[0] for r in st._db.execute("SELECT resource_key FROM files WHERE asset_id='A2'")}
+    assert keys == {"original"}  # the video is forgotten (brought back by the sync), the photo stays
+    assert not st._db.execute("SELECT 1 FROM excluded").fetchall()
+
+
+def test_photos_from_before_1970_are_shown(tmp_path, qapp):
+    root = tmp_path / "P"
+    st = State(tmp_path / "s.db")
+    _picture(root / "1965/IMG_1.JPG", 10)
+    st.add_file(FileRow("OLD", "original", "1965/IMG_1.JPG", 1, False, "1965-06-01T10:00:00+00:00"), "x")
+    _picture(root / "2020/IMG_2.JPG", 20)
+    st.add_file(FileRow("NEW", "original", "2020/IMG_2.JPG", 1, False, None), "x")
+    items = lib.load(st, root)
+    assert [i.asset_id for i in items] == ["NEW", "OLD"] or [i.asset_id for i in items] == ["OLD", "NEW"]
+    assert next(i for i in items if i.asset_id == "OLD").date.year == 1965
+
+
+def test_revision_moves_only_with_what_the_window_shows(tmp_path):
+    st = State(tmp_path / "s.db")
+    r0 = st.library_fingerprint()
+    st.add_file(FileRow("A", "original", "2020/a.jpg", 1, False, None), "x")
+    r1 = st.library_fingerprint()
+    assert r1 != r0
+    st.set_infos({"A": AssetInfo(favorite=True)})
+    r2 = st.library_fingerprint()
+    st.set_infos({"A": AssetInfo(favorite=True)})  # nothing new: nothing written
+    assert st.library_fingerprint() == r2 != r1
+    st.set("cursor", "abc")
+    assert st.library_fingerprint() == r2
+    st.move_file("A", "original", "2020/b.jpg")  # a rename of the same length is seen too
+    assert st.library_fingerprint() != r2
+
+
+def test_selection_survives_a_reload_and_arrows_never_select(qapp, made_up):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    w = window(qapp, made_up)
+    try:
+        w.set_selecting(True)
+        w.select_all()
+        n = len(w.chosen_items())
+        st, _root = made_up
+        st.add_album_link("Albums/Y/IMG_110.JPG", "A10")
+        w.reload(now=True)
+        assert pump(qapp, lambda: not w._loading and w._fingerprint[1] == st.library_fingerprint())
+        assert len(w.chosen_items()) == n == 30
+        w.set_selecting(False)
+        w.grid.setFocus()
+        w.grid.selectionModel().setCurrentIndex(w.model.index(3), w.grid.selectionCommand(w.model.index(3)))
+        QTest.keyClick(w.grid, Qt.Key_Right)
+        assert not w.chosen_items() and not w.selecting
+    finally:
+        w.close()
+
+
+def test_worker_sets_the_favourites_in_icloud_then_in_the_database(tmp_path):
     from skyfold.worker import SyncWorker
 
     st = State(tmp_path / "s.db")
     calls, said = [], []
     remote = SimpleNamespace(set_favorite=lambda aid, v: calls.append((aid, v)))
-    fake = SimpleNamespace(syncer=SimpleNamespace(remote=remote), state=st,
-                           favoriteSet=SimpleNamespace(emit=lambda *a: said.append(a)))
-    SyncWorker.set_favorite(fake, "Q", True)
-    assert calls == [("Q", True)] and said == [("Q", True, "")]
+    fake = SimpleNamespace(syncer=SimpleNamespace(remote=remote), state=st, account_gen=0,
+                           favoritesSet=SimpleNamespace(emit=lambda *a: said.append(a)))
+    SyncWorker.set_favorites(fake, ["Q", "R"], True, 0)
+    assert calls == [("Q", True), ("R", True)] and said == [(["Q", "R"], True, [], "")]
     assert st._db.execute("SELECT favorite FROM asset_info WHERE asset_id='Q'").fetchone() == (1,)
 
     def refuse(aid, v):
         raise RuntimeError("offline")
 
     remote.set_favorite = refuse
-    SyncWorker.set_favorite(fake, "Q", False)
-    assert said[-1][0] == "Q" and said[-1][1] is True and said[-1][2]  # unchanged, with the reason
+    SyncWorker.set_favorites(fake, ["Q"], False, 0)
+    assert said[-1][2] == ["Q"] and said[-1][3]  # unchanged, with the reason
+    calls.clear()
+    remote.set_favorite = lambda aid, v: calls.append((aid, v))
+    fake.account_gen = 1  # signed out after the click: nothing goes to iCloud
+    SyncWorker.set_favorites(fake, ["Q"], True, 0)
+    assert calls == [] and said[-1][2] == ["Q"]
 
 
 def test_video_length_from_icloud_is_read_as_milliseconds():

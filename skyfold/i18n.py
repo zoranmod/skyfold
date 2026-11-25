@@ -860,6 +860,12 @@ BS: dict[str, str] = {
     'Friday': 'Petak',
     'Saturday': 'Subota',
     'Sunday': 'Nedjelja',
+    'This photo couldn\'t be opened. Is it still in the photos folder?': 'Ova slika se ne može otvoriti. Da li je još u folderu sa slikama?',
+    'Still deleting the previous photos': 'Još se brišu prethodne slike',
+    'Deleting {n} items…': 'Brišem {n} stavki…',
+    'iCloud gets the deletion at the next sync.': 'U iCloudu se briše pri sljedećoj sinhronizaciji.',
+    '{n} items couldn\'t be deleted: {error}': '{n} stavki nije obrisano: {error}',
+    '{name} was moved or replaced since it was synced; it was left alone': '{name} je premješten ili zamijenjen nakon sinhronizacije, pa je ostavljen na miru',
 }
 
 _CATALOGS = {"bs": BS}
