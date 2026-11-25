@@ -1146,9 +1146,15 @@ def pdfs_to_images(page: str, note_dir: Path, open_text: str) -> str:
     return PDF_TAG.sub(swap, page)
 
 
+_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
 def _safe(name: str, fallback: str) -> str:
     name = UNSAFE.sub("_", name).strip(" .")
-    return (name or fallback)[:120].rstrip(" .") or fallback  # Windows drops a trailing space or dot
+    name = (name or fallback)[:120].rstrip(" .") or fallback  # Windows drops a trailing space or dot
+    if name.split(".")[0].strip().upper() in _RESERVED:
+        name = "_" + name  # "Con", "Aux", "NUL.txt"...: names Windows keeps for devices
+    return name
 
 
 class NotesState:
@@ -1318,6 +1324,14 @@ class NotesSyncer:
 
         recycle(p)
 
+    def _drop(self, p: Path, forever: bool) -> None:
+        """To the Recycle Bin. forever: a copy of a note that is locked now is deleted outright, so
+        its text and pictures can't be read back from the Recycle Bin (the note itself stays in iCloud)."""
+        if forever:
+            os.remove(p)
+        else:
+            self._trash(p)
+
     # attachments ----------------------------------------------------------------------
     _ASSET_REF = re.compile(r"""[^"'\s()<>]*_assets[\\/][^"'\s()<>]*""")
 
@@ -1365,7 +1379,8 @@ class NotesSyncer:
                 pass
         return {}
 
-    def _retire_assets(self, nid: str, files: dict[str, list[int]], keep: dict[str, list[int]]) -> None:
+    def _retire_assets(self, nid: str, files: dict[str, list[int]], keep: dict[str, list[int]],
+                       forever: bool = False) -> None:
         """Attachments an export of ours made and nothing shows any more (the note was locked,
         deleted, or exported again with fresh copies) go to the Recycle Bin, like its page. Only
         files exactly as the export left them: one changed or added by you stays where it is."""
@@ -1383,8 +1398,11 @@ class NotesSyncer:
                 continue
             if not stat.S_ISREG(st.st_mode) or (st.st_size, st.st_mtime_ns) != (size, mtime_ns):
                 continue  # not what the export made any more: yours now, left alone
+            if not inside_root(self.root, p):  # a folder there was swapped for a link: someone else's file
+                log.warning("Notes: %s leads outside the notes folder; not removed", rel)
+                continue
             try:
-                self._trash(p)
+                self._drop(p, forever)
             except OSError as exc:
                 log.info("Notes: an old attachment couldn't be removed now: %s", brief(exc))
                 left[rel] = [size, mtime_ns]
@@ -1430,7 +1448,7 @@ class NotesSyncer:
                 self.state.set(key, None)
                 continue
             if isinstance(files, dict) and files:
-                self._retire_assets(nid, files, {})
+                self._retire_assets(nid, files, {}, forever=row is not None and bool(row[5]))
 
     def _own(self, p: Path, kind: str) -> None:
         """Write down a private file before it is created: only files on this list are ever tidied up."""
@@ -1694,10 +1712,10 @@ class NotesSyncer:
             if n.locked:
                 keep = None
                 files = self._known_assets(n.id, old[1] if old else None)
-                if old and old[1] and not self._remove(old, res):
+                if old and old[1] and not self._remove(old, res, forever=True):
                     keep = old[1]  # couldn't remove the readable copy yet: remember it, try again next time
                 elif files:
-                    self._retire_assets(n.id, files, {})  # its pictures are as private as its text
+                    self._retire_assets(n.id, files, {}, forever=True)  # its pictures are as private as its text
                 self.state.put(n.id, keep, n.title, folder, None if keep else modified, True)
                 continue
             if old and old[4] == modified and old[1] and (self.root / old[1]).exists() and old[3] == folder \
@@ -1942,7 +1960,7 @@ class NotesSyncer:
             k += 1
         return cand
 
-    def _remove(self, row: tuple, res: NotesResult, count: bool = True) -> bool:
+    def _remove(self, row: tuple, res: NotesResult, count: bool = True, forever: bool = False) -> bool:
         """Page to the Recycle Bin. False when it couldn't be removed (the note is remembered and tried again)."""
         if not row[1]:
             return True
@@ -1956,7 +1974,7 @@ class NotesSyncer:
                 if p.suffix.lower() == ".html" and not _is_our_page(p, strict=True):  # unreadable: tried again
                     log.info("Notes: %s isn't a page Skyfold wrote; left alone", row[1])
                     return True  # someone else's file now: forget the note's old path, keep the file
-                self._trash(p)
+                self._drop(p, forever)
             if count:
                 res.removed += 1
                 self.cb.activity("trash", t("Notes: removed {name}", name=row[2] or row[1]))

@@ -114,6 +114,7 @@ class SyncWorker(QObject):
     pendingChanged = Signal(object)
     notify = Signal(str, str)
     accountChanged = Signal(str)
+    favoritesSet = Signal(list, bool, list, str)  # asked ids, value asked, ids that failed, why
     _localChange = Signal()
     _driveChange = Signal()
     _drivePendingSeen = Signal(object, object)  # to_cloud, to_pc; raised from the Drive thread
@@ -433,6 +434,9 @@ class SyncWorker(QObject):
     def apply_settings(self, settings: Settings, reset_state: bool, reset_drive: bool = False) -> None:
         old_folders = self.settings.drive_folders
         albums_changed = settings.albums_as_folders != self.settings.albums_as_folders
+        # videos switched on: the ones skipped so far come now, not at the next daily full check
+        more_videos = ((settings.include_videos and not self.settings.include_videos)
+                       or (settings.include_live_video and not self.settings.include_live_video))
         new_account = bool(self.settings.apple_id) and settings.apple_id.lower() != self.settings.apple_id.lower()
         self.settings.__dict__.update(settings.copy().__dict__)
         if new_account:
@@ -465,6 +469,8 @@ class SyncWorker(QObject):
         if albums_changed and self.state and not reset_state:
             self.state.set("last_full_scan", None)  # next check reads the library and the albums
             self.state.set("albums_refreshed", None)
+        if more_videos and self.state and not reset_state:
+            self.state.set("last_full_scan", None)
         if reset_state and self.state:
             self.state.reset()
             self._pending = None
@@ -489,7 +495,7 @@ class SyncWorker(QObject):
         if self.settings.paused:
             self.cancel()
             self._set_state("paused", t("Syncing is paused."))
-        elif self._last_state[0] == "paused" or (self.drive and not self._drive_last):
+        elif self._last_state[0] == "paused" or (self.drive and not self._drive_last) or more_videos:
             self.sync_now(False)
 
     def _apply_timers(self) -> None:
@@ -658,7 +664,7 @@ class SyncWorker(QObject):
         if not self.settings.photos_dir_confirmed:
             self._set_state("setup", t("Choose where your photos should be kept before the first sync."))
             return
-        if self.settings.paused and not manual:
+        if self._paused() and not manual:  # (also Pause pressed while this request waited in the queue)
             return
         if self.syncer is None:
             if self.api is None and self.settings.apple_id and self._last_state[0] not in ("auth",):
@@ -1005,6 +1011,42 @@ class SyncWorker(QObject):
             self._drive_pending = rest(d, set(ids))  # the other side of the question stays answerable
             self.pendingChanged.emit(self._pending or self._drive_pending)
             self._kick_drive(full=True)
+
+    account_gen = 0  # raised by the window side, at once, when the account changes or signs out
+
+    @Slot(list, bool, int)
+    def set_favorites(self, asset_ids: list, value: bool, gen: int) -> None:
+        """The heart in the Photos window: mark or unmark the photos in iCloud too (between syncs, on
+        this thread like every other iCloud request), then keep it in the database. Stops as soon as
+        the account changed or signed out after the click: nothing goes to an account no longer here."""
+        failed: list[str] = []
+        error = ""
+        for aid in asset_ids:
+            if gen != self.account_gen or not self.syncer:
+                failed.append(aid)
+                error = error or t("Not signed in to iCloud")
+                continue
+            try:
+                self.syncer.remote.set_favorite(aid, value)
+            except KeyError:
+                failed.append(aid)
+                error = error or t("This photo is no longer in iCloud")
+                continue
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Couldn't change the favourite in iCloud: %s", brief(exc))
+                failed.append(aid)
+                error = error or brief(exc)
+                from .engine import transient
+
+                if transient(exc):  # no connection: the rest would only wait for it too
+                    failed += [a for a in asset_ids[asset_ids.index(aid) + 1:] if a not in failed]
+                    break
+                continue
+            try:
+                self.state.set_favorite(aid, value)
+            except Exception:  # noqa: BLE001
+                log.warning("Couldn't keep the favourite in the database", exc_info=True)
+        self.favoritesSet.emit(list(asset_ids), value, failed, error)
 
     @Slot(list)
     def trash_drive_paths(self, paths: list) -> None:

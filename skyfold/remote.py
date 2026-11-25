@@ -45,6 +45,19 @@ class RemoteResource:
     is_video: bool
 
 
+@dataclass(slots=True, frozen=True)
+class AssetInfo:
+    """What the Photos window shows besides the files: read from iCloud with every listing, kept in
+    the sync database, never needed for syncing itself."""
+
+    favorite: bool = False
+    added: datetime | None = None  # when it reached iCloud (an old scan added today is "recent")
+    width: int | None = None
+    height: int | None = None
+    duration: float | None = None  # seconds, videos only
+    screenshot: bool = False
+
+
 @dataclass(slots=True)
 class RemoteAsset:
     id: str
@@ -52,6 +65,7 @@ class RemoteAsset:
     date: datetime
     is_video: bool
     resources: list[RemoteResource] = field(default_factory=list)
+    info: AssetInfo | None = None
 
 
 @dataclass(slots=True)
@@ -132,11 +146,41 @@ def _translate(exc: Exception) -> Exception:
     return exc
 
 
+def _info(asset: Any) -> AssetInfo | None:
+    """Favourite, date added, size, length and screenshot flag of a pyicloud asset. Never fails the
+    sync: what can't be read is left empty (and the Photos window shows less about that photo)."""
+    try:
+        from pyicloud.services.photos_cloudkit.mappers import record_field_value
+
+        rec = asset.asset_record
+        added = asset.added_date
+        if added is not None and added.tzinfo is None:
+            added = added.replace(tzinfo=timezone.utc)
+        if added is not None and added.timestamp() <= 0:
+            added = None
+        width, height = asset.dimensions
+        duration = record_field_value(rec, "duration")
+        subtype = record_field_value(rec, "assetSubtypeV2")
+        return AssetInfo(
+            favorite=bool(record_field_value(rec, "isFavorite") or 0),
+            added=added,
+            width=int(width) if width else None,
+            height=int(height) if height else None,
+            # Apple keeps a video's length in milliseconds (66282 = 1:06, checked against Windows)
+            duration=float(duration) / 1000 if isinstance(duration, (int, float)) and duration > 0 else None,
+            screenshot=subtype == 3,  # Apple's subtype for screenshots
+        )
+    except Exception:  # noqa: BLE001
+        log.debug("No extra details for an asset", exc_info=True)
+        return None
+
+
 class ICloudRemote:
     def __init__(self, api: Any) -> None:
         self._api = api
         self._photos: Any = None
         self._assets: dict[str, Any] = {}
+        self.hidden: set[str] = set()  # photos last seen hidden in iCloud (not deleted): kept on the PC
 
     @property
     def photos(self) -> Any:
@@ -185,7 +229,7 @@ class ICloudRemote:
             live = res.get("original_video")
             if live is not None and live.url:
                 resources.append(RemoteResource("original_video", live.filename, live.size, live.url, True))
-        return RemoteAsset(asset.id, asset.filename, date, is_video, resources)
+        return RemoteAsset(asset.id, asset.filename, date, is_video, resources, _info(asset))
 
     streams_progress = True  # upload() takes on_bytes
 
@@ -297,6 +341,14 @@ class ICloudRemote:
             return True
         return any(record_field_value(rec, f) == 1 for f in ("isDeleted", "isHidden", "isExpunged"))
 
+    def _note_hidden(self, rec: Any) -> None:
+        """Remember whether this photo is only hidden in iCloud (still there, in the Hidden album)."""
+        from pyicloud.services.photos_cloudkit.mappers import record_field_value
+
+        hidden = (not getattr(rec, "deleted", False) and record_field_value(rec, "isHidden") == 1
+                  and not any(record_field_value(rec, f) == 1 for f in ("isDeleted", "isExpunged")))
+        (self.hidden.add if hidden else self.hidden.discard)(rec.recordName)
+
     def _build(self, asset_recs: dict[str, Any], masters: dict[str, Any]) -> list[RemoteAsset]:
         """Pair CPLAsset records with their CPLMaster (fetching missing masters) into assets."""
         from pyicloud.common.cloudkit import CKRecord, CKZoneIDReq
@@ -345,6 +397,7 @@ class ICloudRemote:
                         assets.pop(rec.recordName, None)
                     elif isinstance(rec, CKRecord):
                         if rec.recordType == "CPLAsset":
+                            self._note_hidden(rec)
                             if self._gone(rec):
                                 gone.add(rec.recordName)
                                 assets.pop(rec.recordName, None)
@@ -375,8 +428,10 @@ class ICloudRemote:
                     record_names=asset_ids[i:i + 100], zone_id=CKZoneIDReq(**lib.zone_id)
                 )
                 for rec in resp.records:
-                    if isinstance(rec, CKRecord) and rec.recordType == "CPLAsset" and not self._gone(rec):
-                        recs[rec.recordName] = rec
+                    if isinstance(rec, CKRecord) and rec.recordType == "CPLAsset":
+                        self._note_hidden(rec)
+                        if not self._gone(rec):
+                            recs[rec.recordName] = rec
             built = {a.id: a for a in self._build(recs, {})}
         except (AuthRequired, RemoteUnavailable):
             raise
@@ -396,6 +451,20 @@ class ICloudRemote:
         except Exception as exc:  # noqa: BLE001
             raise _translate(exc) from exc
         self._assets.pop(asset_id, None)
+
+    def set_favorite(self, asset_id: str, value: bool) -> None:
+        """Mark or unmark a photo as a favourite in iCloud (as the heart on the iPhone does). KeyError
+        if iCloud no longer has it."""
+        asset = self._assets.get(asset_id)
+        if asset is None:
+            self.lookup([asset_id])  # (also keeps the record it finds)
+            asset = self._assets.get(asset_id)
+        if asset is None:
+            raise KeyError(asset_id)
+        try:
+            asset.set_favorite(bool(value))
+        except Exception as exc:  # noqa: BLE001
+            raise _translate(exc) from exc
 
     def download(self, resource: RemoteResource, dest: Path, on_bytes: Callable[[int], None]) -> None:
         if not resource.url:

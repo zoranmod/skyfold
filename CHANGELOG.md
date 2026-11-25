@@ -4,6 +4,36 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [1.0.31] - 2026-11-25
+
+### Added
+- **A Photos window, as on an iPad.** Click *Photos* in the panel (or *Photos* in the tray menu): your synced photos and videos in an edge-to-edge grid, oldest at the top and the newest at the bottom, with *Years*, *Months* and *All Photos*. The sidebar has *Recently added* (by when a photo reached iCloud, so an old photo scanned today is there too), *Favourites*, *Videos*, *Live Photos*, *Screenshots* and your albums. `Ctrl` + mouse wheel (or `Ctrl +` / `Ctrl -`) makes the photos larger or smaller around the one under the mouse; *Search* finds file names, months, years, albums and kinds.
+- **The viewer** shows a photo large (click it to see only the photo, on black), steps with the arrow keys or the strip below, and its *Info* says when it was taken, its size, its albums and where its files are on this PC (a Live Photo's photo and video both). *Play* opens a video or a Live Photo's video in your usual player; *Show in folder* and *Open* do what they say.
+- **Photos come back at once.** The small pictures are Windows' own previews, the ones File Explorer keeps on disk, so a photo seen once appears in a moment the next time, even after closing the window or restarting Skyfold. Skyfold itself stores nothing extra. Big pictures (the viewer, *Years* and *Months*) are kept apart from the grid's, so looking at them never makes the grid start over.
+- **Scrolling glides.** Each notch of the mouse wheel eases the photos along instead of jumping, and quick notches add up, as on an iPad (in *Years* and *Months* too). A touchpad moves them as it always did. With Windows' animation effects switched off, the wheel moves at once.
+- **The mouse's Back and Forward buttons** work in the Photos window: Back goes from a photo to the photos, then from *All Photos* to *Months* and *Years*; Forward goes the same way back in, as in a web browser.
+- **The window keeps your place.** Maximizing it, or making it larger or smaller, keeps the same photos in view, and the photos always fill the width at every size (no empty column on the right). In a narrow window the sidebar steps aside (the ☰ button still opens it) and the selection bar gets shorter.
+- **Nothing gets selected by itself.** A press and drag beside or over the photos, a right-click, or Enter in the search box no longer selects photos or switches on *Select*; a double-click on a photo only opens it.
+- **The pictures are ready ahead.** The photos a screen above and below are made while you look, the photo you stop on in the viewer comes first when you step quickly, and opening the window again within ten minutes shows the photos at once.
+- **Smoother details:** the floating bars and buttons have smooth round edges, search waits for a pause in your typing, numbers and dates follow the language (1,284 / 1.284), and Bosnian words (months, *video*, *omiljene*) find photos too.
+- **Safer details in the Photos window:** a photo changed in place gets a fresh picture; closing the window never waits for a big picture still being made; hearts sent while offline stop at the first lost connection instead of trying every photo; a click opens the photo pressed even if the list changed meanwhile; Favourites drops an unhearted photo once iCloud agrees, and two quick failed clicks go back to what iCloud has; a deleted photo put back from the Recycle Bin shows again; in a narrow window *Info* and the sidebar never squeeze the photo away.
+- **The heart works both ways.** Mark a photo as a favourite here and it is a favourite on your iPhone too (and the other way round). If iCloud can't be told, the heart goes back and you're told why.
+- **Delete from the Photos window** asks first (*Cancel* is the default), then moves the files to the Recycle Bin, exactly as deleting them in the folder would, so iCloud gets them in *Recently Deleted* at the next sync (or keeps them, if you chose that in Settings). Only the files Skyfold synced for that photo go: one moved or replaced in File Explorer meanwhile is left alone. A Live Photo goes as a pair; if its photo can't be deleted (open in another program), nothing is deleted in iCloud and its video comes back.
+- Pictures come from Windows itself (the previews File Explorer shows), so the window takes no extra disk space and Skyfold stays the same size. HEIC photos need Microsoft's free *HEIF Image Extensions*, which most Windows 11 PCs already have; the window says so if they're missing.
+
+### Changed
+- **The tray panel keeps its height while it's open.** When *Sync now* starts (or a sync ends), the "Syncing…" card no longer makes the whole panel jump: the list of recent activity makes room instead. Opened again, the panel has its natural height.
+- After this update Skyfold reads your photo library once in full (nothing is downloaded again), to learn each photo's favourite, date added, size and length. From then on these come with every sync.
+- The panel's folder button opens the folders again for Photos, iCloud Drive and Notes; a click on the *Photos* row opens the Photos window.
+- **Replacing a file in iCloud Drive is safer.** When a file changed on this PC goes up, its new contents reach iCloud first; only then is the old version moved to *Recently Deleted*. A transfer that fails (no connection, Stop pressed) no longer leaves the file missing on your other devices.
+- **A lost connection no longer puts photos aside for a day.** When downloads fail because the network is gone or Apple asks to wait, Skyfold stops after three and tries again at the next check, instead of marking every remaining photo as failed until the next daily full check.
+- **A photo hidden on your iPhone stays on this PC.** Hiding isn't deleting: the file is kept as an ordinary file instead of going to the Recycle Bin. A photo missing from one full read of the library is also asked about on its own before anything happens to its file.
+- A photos folder on a drive without a Recycle Bin no longer gets stuck: a photo deleted in iCloud is kept on this PC (and you're told), instead of the same error at every check.
+- Switching on videos or Live Photo videos in Settings fetches the ones skipped so far right away, not at the next daily full check.
+- Locking a note on your iPhone now deletes its page and pictures on this PC outright, instead of putting a readable copy in the Recycle Bin. A Notes folder or title called *Con*, *Aux*, *Nul* and the like (names Windows keeps for itself) is now saved with a `_` in front instead of failing every time.
+- Half-downloaded photos left by a crash or power cut are cleaned up, and a downloaded photo gets its date before its name.
+- *Pause* also stops a sync that was already waiting to start, and saving *Settings* no longer undoes an update notice that came while the window was open.
+
 ## [1.0.30] - 2026-11-24
 
 ### Changed

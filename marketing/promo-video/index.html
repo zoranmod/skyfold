@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Skyfold promo video</title>
+<style>
+  html, body { margin: 0; background: #07090d; color: #edf1f7; font: 14px "Segoe UI", sans-serif }
+  canvas { display: block; max-width: 100%; max-height: calc(100vh - 56px); margin: 0 auto; background: #0d1016 }
+  .bar { display: flex; gap: 12px; align-items: center; padding: 10px 16px }
+  .bar input[type=range] { flex: 1 }
+  button, select { background: #1c2230; color: inherit; border: 1px solid #323c4f; border-radius: 8px; padding: 6px 12px; font: inherit }
+  body.export .bar { display: none }
+  body.export canvas { max-width: none; max-height: none; margin: 0 }
+</style>
+</head>
+<body>
+<canvas width="1920" height="1080"></canvas>
+<div class="bar">
+  <button id="play">Play</button>
+  <input id="seek" type="range" min="0" max="1000" value="0">
+  <span id="time">0.00 s</span>
+  <select id="format"><option value="wide">16:9</option><option value="tall">9:16</option></select>
+</div>
+<script type="module">
+  import { draw, setFormat, duration } from './draw.mjs';
+  const params = new URLSearchParams(location.search);
+  if (params.has('export')) document.body.classList.add('export');
+  const seek = document.getElementById('seek'), time = document.getElementById('time');
+  const play = document.getElementById('play'), fmt = document.getElementById('format');
+  fmt.value = params.get('format') === 'tall' ? 'tall' : 'wide';
+  let t = Number(params.get('t') || 0), playing = false, last = 0;
+  const show = () => {
+    draw(t);
+    seek.value = String(Math.round((t / duration()) * 1000));
+    time.textContent = `${t.toFixed(2)} s`;
+  };
+  const tick = (now) => {
+    if (!playing) return;
+    t += (now - last) / 1000;
+    last = now;
+    if (t >= duration()) { t = duration(); playing = false; play.textContent = 'Play'; }
+    show();
+    requestAnimationFrame(tick);
+  };
+  play.onclick = () => {
+    playing = !playing;
+    play.textContent = playing ? 'Pause' : 'Play';
+    if (t >= duration()) t = 0;
+    last = performance.now();
+    requestAnimationFrame(tick);
+  };
+  seek.oninput = () => { t = (Number(seek.value) / 1000) * duration(); show(); };
+  fmt.onchange = () => { setFormat(fmt.value); show(); };
+  const start = () => { if (!params.has('export')) show(); };
+  if (window.promoReady) start(); else window.addEventListener('promo-ready', start, { once: true });
+</script>
+</body>
+</html>

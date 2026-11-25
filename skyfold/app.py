@@ -236,6 +236,7 @@ class Requests(QObject):
     fullCheck = Signal()
     clearActivity = Signal()
     trashDrivePaths = Signal(list)
+    setFavorites = Signal(list, bool, int)  # asset ids, favourite, account generation
 
 
 def _close_stale_settings(controller) -> None:
@@ -284,6 +285,7 @@ class Controller(QObject):
         self.req.fullCheck.connect(self.worker.full_check)
         self.req.clearActivity.connect(self.worker.clear_activity)
         self.req.trashDrivePaths.connect(self.worker.trash_drive_paths)
+        self.req.setFavorites.connect(self.worker.set_favorites)
 
         # UI
         self.flyout = Flyout(self.c)
@@ -319,6 +321,7 @@ class Controller(QObject):
         w.statsChanged.connect(f.set_stats, q)
         w.pendingChanged.connect(self._on_pending, q)
         w.notify.connect(self._notify, q)
+        w.favoritesSet.connect(self._favorites_set, q)
         w.accountChanged.connect(f.set_account, q)
         w.accountChanged.connect(self._forget_login_api, q)
         w.accountChanged.connect(self._on_account_changed, q)  # a method, never a lambda: see _on_account_changed
@@ -333,6 +336,7 @@ class Controller(QObject):
         f.reviewPending.connect(self.open_pending)
         f.setup.connect(self.open_setup)
         f.serviceClicked.connect(self._on_service)
+        f.folderClicked.connect(self.open_folder)
         f.findMy.connect(self.open_find_my)
         f.openUpdate.connect(self.open_update)
 
@@ -362,6 +366,7 @@ class Controller(QObject):
         m.addAction(t("Sync now"), lambda: self.req.syncNow.emit(True))
         m.addAction(t("Full library check"), lambda: self.req.fullCheck.emit())
         self.m_pause = m.addAction(t("Pause"), self.toggle_pause)
+        m.addAction(t("Photos"), self.open_photos)
         m.addAction(t("Notes"), self.open_notes)
         m.addAction(t("Find My devices…"), self.open_find_my)
         m.addSeparator()
@@ -505,6 +510,8 @@ class Controller(QObject):
             self.open_settings(page=2)
         elif which == "notes":
             self.open_notes()
+        elif which == "photos" and self.settings.apple_id and not auth.signed_out():
+            self.open_photos()
         else:
             self.open_folder(which)
 
@@ -544,6 +551,59 @@ class Controller(QObject):
         win.finished.connect(gone)
         win.destroyed.connect(gone)
         self._show_dialog("notes", win)
+
+    def _photos_source(self):
+        """(photos database, photos folder) for the Photos window, or None when nobody is signed in."""
+        if auth.signed_out() or not self.settings.apple_id:
+            return None
+        return self.worker.state, Path(self.settings.photos_dir)
+
+    def open_photos(self) -> None:
+        """The Photos window: the synced photos as on an iPad."""
+        from shiboken6 import isValid
+
+        if auth.signed_out() or not self.settings.apple_id:
+            self.open_login()
+            return
+        old = self._dialogs.get("photos")
+        if old is not None and isValid(old) and old.isVisible():
+            self._show_dialog("photos", old)
+            return
+        from .ui.photos_window import PhotosWindow
+
+        win = PhotosWindow(self.c, self._photos_source, lambda: self.settings)
+        win.favoriteRequested.connect(self._ask_favorites)
+
+        def gone(*_args, w=win) -> None:
+            if self._dialogs.get("photos") is w:
+                self._dialogs.pop("photos", None)
+
+        win.finished.connect(gone)
+        win.destroyed.connect(gone)
+        self._show_dialog("photos", win)
+
+    def _ask_favorites(self, ids: list, value: bool) -> None:
+        self.req.setFavorites.emit(list(ids), value, self.worker.account_gen)
+
+    def _favorites_set(self, ids: list, value: bool, failed: list, error: str) -> None:
+        from shiboken6 import isValid
+
+        win = self._dialogs.get("photos")
+        if win is not None and isValid(win):
+            win.favorite_result(ids, value, failed, error)
+
+    def _close_photos(self) -> None:
+        """Signed out or another Apple ID: the Photos window closes with nothing of the old library, and
+        hearts still waiting for the worker are never sent to that account."""
+        from shiboken6 import isValid
+
+        self.worker.account_gen += 1
+        if "skyfold.ui.photos_window" in sys.modules:  # pictures kept warm after the window closed
+            sys.modules["skyfold.ui.photos_window"].drop_warm()
+
+        win = self._dialogs.pop("photos", None)
+        if win is not None and isValid(win):
+            win.clear()
 
     def _close_notes(self) -> None:
         """Signed out or another Apple ID: the Notes window closes, nothing of the old notes stays."""
@@ -678,6 +738,10 @@ class Controller(QObject):
                     warn(None, APP_NAME, t("Could not set up start with Windows: {error}", error=exc))
                     new.start_with_windows = self.settings.start_with_windows
             new.paused = self.settings.paused
+            # not shown in the window, and may have changed while it was open (an update announced,
+            # the photos folder confirmed): kept as they are now, never rolled back
+            new.update_told = self.settings.update_told
+            new.photos_dir_confirmed = self.settings.photos_dir_confirmed
             language_changed = new.language != self.settings.language
             theme_changed = new.theme != self.settings.theme
             self.settings = new
@@ -708,6 +772,7 @@ class Controller(QObject):
         the worker's thread, and closing a window from there froze or crashed Skyfold (1.0.27)."""
         if apple_id != self._notes_account:
             self._close_notes()
+            self._close_photos()
             if self._notes_account:  # another account (not the first sign-in): diagnostics stop
                 from . import netdiag
 
@@ -721,6 +786,7 @@ class Controller(QObject):
     def sign_out(self) -> None:
         _close_stale_settings(self)
         self._close_notes()
+        self._close_photos()
         from . import netdiag
 
         netdiag.stop()  # connection diagnostics end with the account
@@ -889,6 +955,15 @@ def main() -> int:
         log.error("Unexpected error", exc_info=(kind, value, tb))
 
     sys.excepthook = _log_uncaught
+
+    def _log_uncaught_thread(args) -> None:  # a background thread's error: in the log, not lost
+        if args.exc_type is not SystemExit:
+            log.error("Unexpected error in thread %s", getattr(args.thread, "name", "?"),
+                      exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+    import threading
+
+    threading.excepthook = _log_uncaught_thread
     if listen_error:
         log.warning("Single-instance server: %s", listen_error)
     log.info("Starting %s %s (%s)", APP_NAME, VERSION, "packaged" if getattr(sys, "frozen", False) else "from source")
