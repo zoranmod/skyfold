@@ -567,3 +567,36 @@ def test_the_wheel_glides_and_a_notch_after_another_adds_up(qapp, made_up, monke
     finally:
         pw.PhotosWindow.zoom_level = 2
         w.close()
+
+
+def test_the_mouse_back_and_forward_buttons_go_out_of_a_photo_and_back_into_it(qapp, made_up):
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+
+    w = window(qapp, made_up)
+    try:
+        def press(target, button):
+            e = QMouseEvent(QMouseEvent.MouseButtonPress, QPointF(20, 20), QPointF(20, 20), button, button,
+                            Qt.NoModifier)
+            QApplication.sendEvent(target, e)
+
+        assert w.view == "all" and w.inner.currentWidget() is w.grid
+        w.open_viewer(5)
+        shown = w.viewer_items[w.viewer_row].asset_id
+        press(w.picture, Qt.BackButton)  # the picture takes clicks itself: caught before it
+        assert w.pages.currentWidget() is w.browse
+        press(w.grid.viewport(), Qt.BackButton)
+        assert w.view == "months"
+        press(w.cards_area.viewport(), Qt.ForwardButton)
+        assert w.view == "all"
+        press(w.grid.viewport(), Qt.ForwardButton)
+        assert w.pages.currentWidget() is w.viewer and w.viewer_items[w.viewer_row].asset_id == shown
+        press(w.picture, Qt.ForwardButton)  # nothing more ahead
+        assert w.pages.currentWidget() is w.viewer
+        press(w.picture, Qt.BackButton)
+        w.set_view("years")  # elsewhere meanwhile: Forward has nothing to go back into
+        press(w.cards_area.viewport(), Qt.ForwardButton)
+        assert w.view == "years" and w.pages.currentWidget() is w.browse and not w._forward
+    finally:
+        w.close()

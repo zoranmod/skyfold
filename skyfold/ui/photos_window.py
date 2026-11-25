@@ -365,6 +365,46 @@ class SmoothScroll(QObject):
         self.target = None
 
 
+class MouseNav(QObject):
+    """The mouse's side buttons (Back, Forward) anywhere in the window: the photos, the viewer and the
+    cards all take mouse clicks themselves, so these are caught before them. Some mice send them as
+    keys instead; those too."""
+
+    def __init__(self, win: "PhotosWindow") -> None:
+        super().__init__(win)
+        self.win = win
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, obj, e):  # noqa: N802
+        kind = e.type()
+        if kind == QEvent.MouseButtonPress:
+            button = e.button()
+            if button not in (Qt.BackButton, Qt.ForwardButton):
+                return False
+            forward = button == Qt.ForwardButton
+        elif kind == QEvent.KeyPress:
+            if e.key() not in (Qt.Key_Back, Qt.Key_Forward):
+                return False
+            forward = e.key() == Qt.Key_Forward
+        elif kind in (QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick):
+            return e.button() in (Qt.BackButton, Qt.ForwardButton) and self._ours(obj)
+        else:
+            return False
+        if not self._ours(obj):
+            return False
+        self.win._mouse_nav(forward)
+        return True
+
+    def _ours(self, obj) -> bool:
+        return (isinstance(obj, QWidget) and isValid(self.win) and obj.window() is self.win
+                and not self.win.closed)
+
+    def stop(self) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+
+
 class Grid(QListView):
     zoomed = Signal(int, QPoint)  # +1 larger / -1 smaller, mouse position
 
@@ -810,7 +850,9 @@ class PhotosWindow(_Dialog):
         self._loaded_at = 0.0
         self._pending_fav: dict[str, bool] = {}  # hearts iCloud hasn't confirmed yet
         self._deleting = False
+        self._forward: list[tuple] = []  # what the mouse's Forward button goes back into
         self.closed = False
+        self._mouse = MouseNav(self)
         self._bridge = _Bridge(self)
         self._bridge.library.connect(self._library_loaded)
         self._bridge.deleted.connect(self._deleted)
@@ -1547,13 +1589,48 @@ class PhotosWindow(_Dialog):
 
         QTimer.singleShot(0, go)
 
+    def _nav_state(self) -> tuple:
+        return (self.pages.currentWidget() is self.viewer, self.set_key, self.query, self.view)
+
+    def _scroll_bar(self):
+        return (self.grid if self.inner.currentWidget() is self.grid else self.cards_area).verticalScrollBar()
+
     def go_back(self) -> None:
+        """The mouse's Back button (and the window's own Back): from a photo to the photos, from All
+        Photos to Months, from Months to Years. Forward then goes the same way back in."""
         if self.pages.currentWidget() is self.viewer:
+            it = self.viewer_items[self.viewer_row] if self.viewer_items else None
             self.close_viewer()
-        elif self.set_key == "library" and not self.query and self.view == "all":
-            self.set_view("months")
-        elif self.set_key == "library" and not self.query and self.view == "months":
-            self.set_view("years")
+            if it is not None:
+                self._forward.append((self._nav_state(), "photo", it.asset_id))
+            return
+        to = {"all": "months", "months": "years"}.get(self.view)
+        if self.set_key == "library" and not self.query and to:
+            came = (self.view, self._scroll_bar().value())
+            self.set_view(to)
+            self._forward.append((self._nav_state(), "view", came))
+
+    def go_forward(self) -> None:
+        """Undo the last Back, if nothing else was done since (as in a web browser)."""
+        if not self._forward:
+            return
+        state, kind, what = self._forward.pop()
+        if state != self._nav_state():
+            self._forward.clear()  # the window went elsewhere meanwhile: nothing to go forward to
+            return
+        if kind == "photo":
+            for row, x in enumerate(self.model.items):
+                if x.asset_id == what and self.inner.currentWidget() is self.grid:
+                    self.open_viewer(row)
+                    return
+            self._forward.clear()
+            return
+        view, place = what
+        self.set_view(view)
+        QTimer.singleShot(90, lambda: self._scroll_bar().setValue(place))  # after the view placed itself
+
+    def _mouse_nav(self, forward: bool) -> None:
+        (self.go_forward if forward else self.go_back)()
 
     def toggle_sidebar(self) -> None:
         PhotosWindow.sidebar_open = not self.side.isVisible()
@@ -1998,12 +2075,6 @@ class PhotosWindow(_Dialog):
             return
         super().keyPressEvent(e)
 
-    def mousePressEvent(self, e) -> None:  # noqa: N802
-        if e.button() == Qt.BackButton:
-            self.go_back()
-            return
-        super().mousePressEvent(e)
-
     # --- closing -------------------------------------------------------------------------------
     def clear(self) -> None:
         """Signed out or another Apple ID: nothing of the old library stays on screen or in memory."""
@@ -2012,6 +2083,8 @@ class PhotosWindow(_Dialog):
 
     def _forget(self) -> None:
         self.closed = True
+        self._mouse.stop()
+        self._forward.clear()
         self._poll.stop()
         self.loader.keep_only(set())
         self.thumbs.clear()
