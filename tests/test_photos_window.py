@@ -525,3 +525,45 @@ def test_a_jpeg_thumbnail_comes_from_windows_stored_preview_first(tmp_path, qapp
     monkeypatch.setattr(pi, "shell_image", lambda *a, **k: QImage())  # thumbnails off: Qt reads it
     assert pi.load_image(p, 320).size().width() == 64
     assert pi.load_image(p, 0, full=True).width() == 64  # the viewer: the photo itself, as before
+
+
+def test_the_wheel_glides_and_a_notch_after_another_adds_up(qapp, made_up, monkeypatch):
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+
+    from skyfold.ui import photos_window as pw
+
+    monkeypatch.setattr(pw, "_animations_on", lambda: True)
+    w = window(qapp, made_up)
+    try:
+        w.resize(500, 400)
+        pw.PhotosWindow.zoom_level = 0  # big tiles: many rows in a short window
+        w._layout_grid()
+        qapp.processEvents()
+        bar, smooth = w.grid.verticalScrollBar(), w.grid.smooth
+        assert pump(qapp, lambda: bar.maximum() > 1000), bar.maximum()
+        bar.setValue(bar.maximum())
+        start = bar.value()
+
+        def wheel(dy, pixels=0, mods=Qt.NoModifier):
+            e = QWheelEvent(QPointF(50, 50), QPointF(50, 50), QPoint(0, pixels), QPoint(0, dy), Qt.NoButton,
+                            mods, Qt.NoScrollPhase, False)
+            return smooth.eventFilter(w.grid.viewport(), e)
+
+        assert wheel(120) and wheel(120)  # two notches up, quickly
+        assert smooth.target is not None and bar.value() > start - 10  # not there at once: it glides
+        assert pump(qapp, lambda: smooth.target is None)
+        notch = qapp.wheelScrollLines() * smooth.step
+        assert bar.value() == max(bar.minimum(), round(start - 2 * notch))
+        here = bar.value()
+        assert wheel(-24, pixels=-30) and bar.value() == min(bar.maximum(), here + 30)  # a touchpad: as it is
+        assert not wheel(120, mods=Qt.ControlModifier)  # Ctrl + wheel: the size, left to the grid
+        wheel(-120)
+        bar.setValue(bar.minimum())  # the window moves it meanwhile: the glide stops there
+        assert smooth.target is None and bar.value() == bar.minimum()
+        monkeypatch.setattr(pw, "_animations_on", lambda: False)  # Windows' animations off: no glide
+        wheel(-120)
+        assert smooth.target is None and bar.value() == min(bar.maximum(), bar.minimum() + notch)
+    finally:
+        pw.PhotosWindow.zoom_level = 2
+        w.close()

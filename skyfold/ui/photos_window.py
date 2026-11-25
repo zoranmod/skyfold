@@ -16,8 +16,9 @@ from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import (QAbstractListModel, QEvent, QItemSelection, QItemSelectionModel, QObject, QMimeData, QModelIndex, QPoint, QRect,
-                            QRectF, QSize, Qt, QTimer, QUrl, Signal)
+from PySide6.QtCore import (QAbstractListModel, QEasingCurve, QEvent, QItemSelection, QItemSelectionModel, QObject,
+                            QMimeData, QModelIndex, QPoint, QRect, QRectF, QSize, Qt, QTimer, QUrl, QVariantAnimation,
+                            Signal)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QImage, QKeySequence, QLinearGradient,
                            QPainter, QPainterPath, QPen, QPixmap, QShortcut)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -285,6 +286,85 @@ class TileDelegate(QStyledItemDelegate):
         p.restore()
 
 
+def _animations_on() -> bool:
+    """Windows' "Animation effects" (Settings → Accessibility → Visual effects): off, nothing glides."""
+    try:
+        import ctypes
+
+        on = ctypes.c_int(1)
+        if ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(on), 0):  # CLIENTAREAANIMATION
+            return bool(on.value)
+    except (AttributeError, OSError):
+        pass
+    return True
+
+
+class SmoothScroll(QObject):
+    """The mouse wheel glides instead of jumping, as on an iPad: each notch moves the view a little
+    further and eases out, and notches in quick succession add up. A touchpad that sends pixels already
+    moves smoothly and is followed as it is. Ctrl + wheel (the size) is left to the view."""
+
+    DURATION = 320  # ms
+
+    def __init__(self, area: QAbstractItemView | QScrollArea, step: int = 50) -> None:
+        super().__init__(area)
+        self.bar = area.verticalScrollBar()
+        self.step = step
+        self.target: float | None = None
+        self._moving = False
+        self.anim = QVariantAnimation(self)
+        self.anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.anim.valueChanged.connect(self._to)
+        self.anim.finished.connect(self._done)
+        self.bar.valueChanged.connect(self._moved)
+        area.viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, e):  # noqa: N802
+        if e.type() != QEvent.Wheel or e.modifiers() & Qt.ControlModifier:
+            return False
+        dy = e.angleDelta().y()
+        if not dy or abs(e.angleDelta().x()) > abs(dy):
+            return False
+        if not e.pixelDelta().isNull():  # a touchpad: it already moves in pixels
+            self.stop()
+            self.bar.setValue(self.bar.value() - e.pixelDelta().y())
+            return True
+        self.scroll_by(-dy / 120 * QApplication.wheelScrollLines() * self.step)
+        return True
+
+    def scroll_by(self, dy: float) -> None:
+        start = self.target if self.target is not None else float(self.bar.value())
+        target = max(float(self.bar.minimum()), min(float(self.bar.maximum()), start + dy))
+        if not _animations_on():
+            self.stop()
+            self.bar.setValue(round(target))
+            return
+        self.target = target
+        self.anim.stop()
+        self.anim.setDuration(self.DURATION)
+        self.anim.setStartValue(float(self.bar.value()))
+        self.anim.setEndValue(target)
+        self.anim.start()
+
+    def stop(self) -> None:
+        self.anim.stop()
+        self.target = None
+
+    def _to(self, v) -> None:
+        self._moving = True
+        try:
+            self.bar.setValue(round(v))
+        finally:
+            self._moving = False
+
+    def _moved(self, _v) -> None:
+        if not self._moving and self.anim.state() == QVariantAnimation.Running:
+            self.stop()  # the window (or the scroll bar) moved it meanwhile: that wins
+
+    def _done(self) -> None:
+        self.target = None
+
+
 class Grid(QListView):
     zoomed = Signal(int, QPoint)  # +1 larger / -1 smaller, mouse position
 
@@ -306,6 +386,7 @@ class Grid(QListView):
         self.verticalScrollBar().setSingleStep(40)
         self.setAccessibleName(t("Photos"))
         self._wheel = 0
+        self.smooth = SmoothScroll(self)
 
     def wheelEvent(self, e) -> None:  # noqa: N802
         if e.modifiers() & Qt.ControlModifier:
@@ -782,7 +863,9 @@ class PhotosWindow(_Dialog):
         self.cards_area = QScrollArea()
         self.cards_area.setWidgetResizable(True)
         self.cards_area.setFrameShape(QFrame.NoFrame)
+        self.cards_area.verticalScrollBar().setSingleStep(40)
         self.cards_area.verticalScrollBar().valueChanged.connect(lambda *_: self._update_header())
+        self.cards_smooth = SmoothScroll(self.cards_area, step=60)
         self.inner.addWidget(self.cards_area)
         self.empty = QLabel()
         self.empty.setAlignment(Qt.AlignCenter)
