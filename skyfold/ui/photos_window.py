@@ -241,8 +241,8 @@ class Thumbs:
 
     def get(self, it: lib.PhotoItem, px: float, ahead: bool = False) -> QPixmap | None:
         b = self.bucket(px)
-        key = (it.asset_id, b)
-        self.seen.add(it.asset_id)
+        key = (it.key, b)
+        self.seen.add(it.key)
         pool = self.cache[self._big(b)]
         pm = pool.get(key)
         if pm is not None:
@@ -250,11 +250,11 @@ class Thumbs:
             return pm
         best = None  # a sharper or rougher one meanwhile: the closest
         for other in range(640, 159, -self.STEP):
-            got = self.cache[self._big(other)].get((it.asset_id, other))
+            got = self.cache[self._big(other)].get((it.key, other))
             if got is not None and (best is None or abs(other - b) < abs(best[0] - b)):
                 best = (other, got)
         if key not in self.missing:
-            self.loader.request(it.asset_id, it.path, b, ahead=ahead)
+            self.loader.request(it.key, it.path, b, ahead=ahead)
         return best[1] if best else None
 
     def put(self, key: str, size: int, img: QImage) -> None:
@@ -552,7 +552,7 @@ class Grid(QListView):
             return
         if e.button() == Qt.LeftButton and idx.isValid() and not self.win.selecting and not (
                 mods & (Qt.ControlModifier | Qt.ShiftModifier)):
-            self._open_on_release = idx
+            self._open_on_release = idx.data(ITEM).asset_id
             return
         self._open_on_release = None
         if e.button() == Qt.LeftButton and not idx.isValid() and not (mods & (Qt.ControlModifier | Qt.ShiftModifier)):
@@ -591,9 +591,10 @@ class Grid(QListView):
                 win._restore_anchor(anchor)
 
     def mouseReleaseEvent(self, e) -> None:  # noqa: N802
-        idx = getattr(self, "_open_on_release", None)
+        pressed = getattr(self, "_open_on_release", None)
         self._open_on_release = None
-        if idx is not None and idx == self.indexAt(e.position().toPoint()):
+        idx = self.indexAt(e.position().toPoint())
+        if pressed is not None and idx.isValid() and idx.data(ITEM).asset_id == pressed:
             self.win.open_viewer(idx.row())
             return
         super().mouseReleaseEvent(e)
@@ -1025,8 +1026,10 @@ class PhotosWindow(_Dialog):
         self._loading = False
         self._loaded_at = 0.0
         self._pending_fav: dict[str, bool] = {}  # hearts iCloud hasn't confirmed yet
+        self._fav_confirmed: dict[str, bool] = {}  # meanwhile: what iCloud has (a failure goes back to it)
         self._deleting = False
         self._gone: set[str] = set()  # deleted here: kept out of a list read before the delete finished
+        self._gone_paths: dict[str, list] = {}  # their files (put back from the Recycle Bin: shown again)
         self._deleted_at = 0.0
         self._load_started = 0.0
         self._forward: list[tuple] = []  # what the mouse's Forward button goes back into
@@ -1406,6 +1409,13 @@ class PhotosWindow(_Dialog):
         except Exception:  # noqa: BLE001
             log.warning("The Photos window couldn't read the photo list", exc_info=True)
             return
+        if self._gone_paths and not self._loading:  # deleted here, then put back from the Recycle Bin?
+            back = {aid for aid, paths in self._gone_paths.items() if any(p.exists() for p in paths)}
+            if back:
+                for aid in back:
+                    self._gone_paths.pop(aid, None)
+                    self._gone.discard(aid)
+                self._fingerprint = (self._fingerprint or (None, None))[:1] + ("restored",)
         if fp == self._fingerprint or self._loading:
             return
         if self._fingerprint is not None and not now and time.monotonic() - self._loaded_at < self.RELOAD_GAP:
@@ -1775,8 +1785,8 @@ class PhotosWindow(_Dialog):
             else:
                 sb.setValue(sb.maximum())
 
-        QTimer.singleShot(0, self, scroll)
-        QTimer.singleShot(60, self, scroll)
+        QTimer.singleShot(0, holder, scroll)  # (rebuilt meanwhile: these go with the old cards)
+        QTimer.singleShot(60, holder, scroll)
 
     def _card_cols(self, view: str) -> int:
         width = max(400, self.browse.width() - 44)
@@ -1851,6 +1861,9 @@ class PhotosWindow(_Dialog):
     def toggle_sidebar(self) -> None:
         PhotosWindow.sidebar_open = not self.side.isVisible()
         self.side.setVisible(PhotosWindow.sidebar_open)
+        if (PhotosWindow.sidebar_open and self.info.isVisible()
+                and self.width() - self.side.width() - self.info.width() < 360):
+            self.v_info.setChecked(False)  # a narrow window: the photo keeps its room
         QTimer.singleShot(0, self, lambda: (self._layout_grid(), self._place_overlays()))
 
     # --- pictures arriving ---------------------------------------------------------------------
@@ -1860,7 +1873,7 @@ class PhotosWindow(_Dialog):
         if full:
             if img.isNull():
                 cur = self.viewer_items[self.viewer_row] if self.viewer_items else None
-                if cur is not None and cur.asset_id == key:
+                if cur is not None and cur.key == key:
                     heic = (cur.path.suffix.lower() in (".heic", ".heif") and len(str(cur.path)) < 260
                             and cur.path.is_file())
                     self.viewer_message = t(
@@ -1873,7 +1886,7 @@ class PhotosWindow(_Dialog):
             self._full[key] = pm
             while len(self._full) > 6:
                 self._full.pop(next(iter(self._full)))
-            if self.viewer_items and self.viewer_items[self.viewer_row].asset_id == key:
+            if self.viewer_items and self.viewer_items[self.viewer_row].key == key:
                 self.picture.set_picture(pm, True)
             return
         self.thumbs.put(key, size, img)
@@ -1901,7 +1914,7 @@ class PhotosWindow(_Dialog):
         self._prefetch()
         seen = self.thumbs.seen
         self.thumbs.seen = set()
-        self.loader.keep_only(seen | ({self.viewer_items[self.viewer_row].asset_id}
+        self.loader.keep_only(seen | ({self.viewer_items[self.viewer_row].key}
                                       if self.viewer_items else set()))
         self.grid.viewport().update()
         w = self.cards_area.widget()
@@ -1963,6 +1976,7 @@ class PhotosWindow(_Dialog):
         m.addSeparator()
         m.addAction(t("Delete"), lambda: self.delete_items(items))
         m.exec(pos)
+        m.deleteLater()  # (it held the chosen photos)
 
     def open_file(self, path: Path) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
@@ -2007,6 +2021,8 @@ class PhotosWindow(_Dialog):
         to is undone). Until it answers, the heart stays as asked even when the library is read again."""
         changed = [it for it in items if it.favorite != value]
         for it in changed:
+            if it.asset_id not in self._pending_fav:
+                self._fav_confirmed[it.asset_id] = it.favorite  # what iCloud has, before this click
             it.favorite = value
             self._pending_fav[it.asset_id] = value
         if changed:
@@ -2022,14 +2038,22 @@ class PhotosWindow(_Dialog):
         if self.closed:
             return
         failed_set = set(failed)
+        changed = False
         for aid in ids:
+            if aid not in failed_set:
+                self._fav_confirmed[aid] = value
             if self._pending_fav.get(aid) != value:
                 continue  # clicked again meanwhile: that later answer decides
             self._pending_fav.pop(aid, None)
-            if aid in failed_set:
-                it = self.by_id.get(aid)
-                if it is not None:
-                    it.favorite = not value
+            confirmed = self._fav_confirmed.pop(aid, not value)
+            it = self.by_id.get(aid)
+            if it is not None and it.favorite != confirmed:
+                it.favorite = confirmed
+                changed = True
+            if aid not in failed_set:
+                changed = True
+        if changed and self.set_key == "fav" and self.pages.currentWidget() is not self.viewer:
+            self._show_set(keep=True)  # Favourites shows only favourites (the viewer keeps its list)
         if failed and error:
             self.message(t("Couldn't change the favourite in iCloud: {error}", error=error))
         self._fill_side()
@@ -2095,6 +2119,10 @@ class PhotosWindow(_Dialog):
         gone = set(done)
         self._gone |= gone
         self._deleted_at = time.monotonic()
+        for aid in gone:
+            it = self.by_id.get(aid)
+            if it is not None:
+                self._gone_paths[aid] = list(it.files)
         if gone:
             to_cloud = bool(getattr(self.settings(), "delete_pc_to_cloud", True))
             viewing = self.pages.currentWidget() is self.viewer
@@ -2152,7 +2180,7 @@ class PhotosWindow(_Dialog):
         self.viewer_row = max(0, min(len(self.viewer_items) - 1, row))
         it = self.viewer_items[self.viewer_row]
         self.viewer_message = ""
-        pm = self._full.get(it.asset_id)
+        pm = self._full.get(it.key)
         if pm is not None:
             self.picture.set_picture(pm, True)
         else:
@@ -2172,8 +2200,8 @@ class PhotosWindow(_Dialog):
         if not self.viewer_items:
             return
         it = self.viewer_items[self.viewer_row]
-        if it.asset_id not in self._full and not it.is_video:
-            self.loader.request(it.asset_id, it.path, 0, full=True)
+        if it.key not in self._full and not it.is_video:
+            self.loader.request(it.key, it.path, 0, full=True)
         for k in (self.viewer_row - 1, self.viewer_row + 1):  # the neighbours, ready to step to
             if 0 <= k < len(self.viewer_items):
                 self.thumbs.get(self.viewer_items[k], 640)
@@ -2217,6 +2245,8 @@ class PhotosWindow(_Dialog):
         self.info.setText(html)
 
     def _show_info(self, on: bool) -> None:
+        if on and self.side.isVisible() and self.width() - self.side.width() - self.info.width() < 360:
+            self.side.hide()  # a narrow window: the photo keeps its room
         self.info.setVisible(on)
         QTimer.singleShot(0, self._place_overlays)
 

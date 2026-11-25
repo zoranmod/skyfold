@@ -498,7 +498,7 @@ def test_thumbnails_are_kept_at_about_the_size_shown_and_big_ones_never_push_out
     th = Thumbs(SimpleNamespace(request=lambda key, path, size: asked.append((key, size))))
     assert [th.bucket(px) for px in (40, 160, 161, 343, 400, 401, 2000)] == [160, 160, 240, 400, 400, 480, 640]
     th.BUDGET = {False: 10 * 400 * 534 * 4, True: 2 * 640 * 854 * 4}
-    item = lambda n: SimpleNamespace(asset_id=f"A{n}", path=None)  # noqa: E731
+    item = lambda n: SimpleNamespace(asset_id=f"A{n}", key=f"A{n}", path=None)  # noqa: E731
     for n in range(10):
         th.put(f"A{n}", 400, QImage(3000, 4000, QImage.Format_RGB32))
     assert all(th.get(item(n), 343) is not None for n in range(10))
@@ -842,5 +842,112 @@ def test_a_narrow_window_puts_the_sidebar_aside_and_shortens_the_bar(qapp, made_
         w.set_selecting(True)
         assert all(not b.isVisible() for b in w._sel_extra)
         assert w.selbar.x() >= 0 and w.selbar.x() + w.selbar.width() <= w.browse.width()
+    finally:
+        w.close()
+
+
+def test_a_file_changed_in_place_gets_a_new_picture(made_up):
+    st, root = made_up
+    before = {i.asset_id: i.key for i in lib.load(st, root)}
+    rel = st._db.execute("SELECT rel_path FROM files WHERE asset_id='A5'").fetchone()[0]
+    p = root / rel
+    _picture(p, 200)  # overwritten in place: same file id, other content
+    os.utime(p, ns=(time.time_ns(), time.time_ns() + 5_000_000_000))
+    after = {i.asset_id: i.key for i in lib.load(st, root)}
+    assert after["A5"] != before["A5"] and after["A6"] == before["A6"]
+
+
+def test_closing_never_waits_for_a_slow_picture(qapp, tmp_path, monkeypatch):
+    import threading as th
+
+    from skyfold.ui import photo_images as pi
+
+    gate = th.Event()
+
+    def slow(path, size, full=False):
+        gate.wait(5)
+        from PySide6.QtGui import QImage
+        return QImage(8, 8, QImage.Format_RGB32)
+
+    monkeypatch.setattr(pi, "load_image", slow)
+    holder = __import__("PySide6.QtCore", fromlist=["QObject"]).QObject()
+    lo = pi.ImageLoader(holder, threads=1)
+    lo.request("A", tmp_path / "a.jpg", 160)
+    pump(qapp, lambda: lo._pool.activeThreadCount() == 1, timeout=2)
+    t0 = time.monotonic()
+    lo.stop()
+    assert time.monotonic() - t0 < 0.5  # the tray isn't held up
+    del holder  # the window goes; the loader lives on until its thread is done
+    gate.set()
+    assert pump(qapp, lambda: lo._pool.activeThreadCount() == 0, timeout=3)
+
+
+def test_hearts_stop_at_the_first_lost_connection(tmp_path):
+    from skyfold.worker import SyncWorker
+
+    st = State(tmp_path / "s.db")
+    calls, said = [], []
+
+    def offline(aid, v):
+        calls.append(aid)
+        raise ConnectionError("no network")
+
+    fake = SimpleNamespace(syncer=SimpleNamespace(remote=SimpleNamespace(set_favorite=offline)), state=st,
+                           account_gen=0, favoritesSet=SimpleNamespace(emit=lambda *a: said.append(a)))
+    SyncWorker.set_favorites(fake, [f"P{i}" for i in range(1000)], True, 0)
+    assert calls == ["P0"] and len(said[-1][2]) == 1000
+
+
+def test_two_failed_hearts_go_back_to_what_icloud_has(qapp, made_up):
+    w = window(qapp, made_up)
+    try:
+        it = w.by_id["A3"]
+        assert not it.favorite
+        w.set_favorite([it], True)
+        w.set_favorite([it], False)  # changed the mind before iCloud answered
+        w.favorite_result(["A3"], True, ["A3"], "offline")
+        w.favorite_result(["A3"], False, ["A3"], "offline")
+        assert not w.by_id["A3"].favorite and not w._pending_fav
+    finally:
+        w.close()
+
+
+def test_favourites_shows_only_favourites_once_icloud_agrees(qapp, made_up):
+    w = window(qapp, made_up)
+    try:
+        w.set_key = "fav"
+        w._show_set()
+        assert len(w.model.items) == 2
+        it = w.model.items[0]
+        w.set_favorite([it], False)
+        w.favorite_result([it.asset_id], False, [], "")
+        assert len(w.model.items) == 1 and it.asset_id not in {i.asset_id for i in w.model.items}
+    finally:
+        w.close()
+
+
+def test_back_to_a_photo_whose_big_picture_is_still_queued_gets_it(qapp, tmp_path):
+    from skyfold.ui import photo_images as pi
+
+    lo = pi.ImageLoader(threads=1)
+    lo._pool.setMaxThreadCount(1)
+    lo.request("A", tmp_path / "a.jpg", 0, full=True)
+    lo.request("B", tmp_path / "b.jpg", 0, full=True)
+    lo.request("A", tmp_path / "a.jpg", 0, full=True)  # back to A: its job is still queued
+    assert lo._still_wanted("A", 0, True) and not lo._still_wanted("B", 0, True)
+    lo.stop()
+
+
+def test_a_photo_put_back_from_the_recycle_bin_shows_again(qapp, made_up):
+    w = window(qapp, made_up)
+    try:
+        st, root = made_up
+        it = w.by_id["A5"]
+        w._gone_paths["A5"] = list(it.files)
+        w._gone.add("A5")  # deleted here, the sync hasn't seen it yet; the file is back
+        w._loaded_at = 0.0
+        w.reload()
+        assert pump(qapp, lambda: not w._loading and "A5" not in w._gone)
+        assert "A5" in w.by_id
     finally:
         w.close()

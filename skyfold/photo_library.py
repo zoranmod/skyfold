@@ -3,6 +3,9 @@ one item with two files), read from the sync database. Nothing here touches iClo
 
 from __future__ import annotations
 
+import os
+import stat
+
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -27,6 +30,12 @@ class PhotoItem:
     duration: float | None = None
     screenshot: bool = False
     albums: list[str] = field(default_factory=list)
+    version: int = 0  # the file's time and size: a file changed in place is another picture
+
+    @property
+    def key(self) -> str:
+        """What its pictures are kept under: this photo, as its file is now."""
+        return f"{self.asset_id}@{self.version}"
 
     @property
     def name(self) -> str:
@@ -95,7 +104,16 @@ def load(state, root: Path) -> list[PhotoItem]:
             album = "/".join(parts[1:-1])
             if album not in it.albums:
                 it.albums.append(album)
-    out = [it for it in items.values() if it.path.is_file()]
+    out = []
+    for it in items.values():
+        try:
+            st = os.stat(it.path)
+        except OSError:
+            continue  # no longer on this PC
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        it.version = st.st_mtime_ns ^ (st.st_size << 20)
+        out.append(it)
     out.sort(key=lambda it: (it.date, it.asset_id))
     return out
 

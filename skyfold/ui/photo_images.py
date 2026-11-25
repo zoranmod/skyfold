@@ -15,7 +15,7 @@ import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal
+from PySide6.QtCore import SIGNAL, QCoreApplication, QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QImage, QImageReader
 
 log = logging.getLogger(__name__)
@@ -181,6 +181,7 @@ class ImageLoader(QObject):
         self._claimed: set[tuple[str, int, bool]] = set()  # being made right now
         self._wanted: set[str] | None = None  # None: everything
         self._full_key: str | None = None
+        self._stopped = False
         self._order = 0
         self._delivered.connect(self._deliver)  # (queued onto this object's thread)
 
@@ -188,15 +189,17 @@ class ImageLoader(QObject):
         """ahead: a picture not on screen yet (the next screen): made after everything on screen."""
         job = (key, size, full)
         with self._lock:
+            if self._stopped:
+                return
+            if full:
+                self._full_key = key  # (first: back to a photo whose job is still queued counts too)
             before = self._queued.get(job)
             if before is not None and (ahead or not before):
                 return  # already asked for (as urgently)
             self._queued[job] = ahead  # (an ahead one now on screen: asked again, urgently)
             self._order += 1
             order = self._order
-            if full:
-                self._full_key = key  # only the photo in the viewer is made at full size
-            elif self._wanted is not None:
+            if not full and self._wanted is not None:
                 self._wanted.add(key)  # asked for while scrolling: wanted, until the next keep_only
         # higher priority runs first: the latest request is what the user looks at now
         prio = (2_100_000_000 + min(order, 40_000_000) if full else  # the newest full one first
@@ -224,7 +227,12 @@ class ImageLoader(QObject):
             return True
 
     def _done(self, key: str, size: int, full: bool, img: QImage) -> None:
-        self._delivered.emit(key, size, full, img)
+        if self._stopped:
+            return
+        try:
+            self._delivered.emit(key, size, full, img)
+        except RuntimeError:
+            pass  # gone meanwhile
 
     def _deliver(self, key: str, size: int, full: bool, img: QImage) -> None:
         with self._lock:
@@ -233,5 +241,27 @@ class ImageLoader(QObject):
         self.loaded.emit(key, size, full, img)
 
     def stop(self) -> None:
+        """The window closes: nothing more is made or delivered, and nobody waits for a picture
+        still being made (a big one can take seconds): this loader stays until its threads are
+        done, then goes by itself."""
+        with self._lock:
+            self._stopped = True
+            self._wanted = set()
+            self._full_key = None
         self._pool.clear()
-        self._pool.waitForDone(3000)
+        if self.receivers(SIGNAL("loaded(QString,int,bool,QImage)")) > 0:
+            import warnings
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                try:
+                    self.loaded.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+        app = QCoreApplication.instance()
+        if self._pool.activeThreadCount() == 0 or app is None:
+            return
+        self.setParent(app)  # outlives the window
+        timer = QTimer(self)
+        timer.timeout.connect(lambda: (timer.stop(), self.deleteLater()) if self._pool.activeThreadCount() == 0 else None)
+        timer.start(200)

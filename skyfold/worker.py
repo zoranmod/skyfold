@@ -1036,6 +1036,11 @@ class SyncWorker(QObject):
                 log.warning("Couldn't change the favourite in iCloud: %s", brief(exc))
                 failed.append(aid)
                 error = error or brief(exc)
+                from .engine import transient
+
+                if transient(exc):  # no connection: the rest would only wait for it too
+                    failed += [a for a in asset_ids[asset_ids.index(aid) + 1:] if a not in failed]
+                    break
                 continue
             try:
                 self.state.set_favorite(aid, value)
