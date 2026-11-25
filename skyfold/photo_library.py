@@ -133,14 +133,17 @@ def matches(it: PhotoItem, query: str) -> bool:
     if not q:
         return True
     d = it.date
-    words = [it.name.lower(), str(d.year), f"{d.year}-{d.month:02d}", MONTHS[d.month - 1]]
+    from .i18n import t
+
+    month = MONTHS[d.month - 1]
+    words = [it.name.lower(), str(d.year), f"{d.year}-{d.month:02d}", month, t(month.capitalize()).lower()]
     words += [a.lower() for a in it.albums]
     if it.is_video:
-        words.append("video")
+        words += ["video", t("Video").lower()]
     if it.live:
-        words.append("live")
+        words += ["live", t("Live Photo").lower()]
     if it.screenshot:
-        words.append("screenshot")
+        words += ["screenshot", t("Screenshot").lower()]
     if it.favorite:
-        words += ["favourite", "favorite"]
+        words += ["favourite", "favorite", t("Favourite").lower(), t("Favourites").lower()]
     return all(any(part in w for w in words) for part in q.split())

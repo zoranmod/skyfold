@@ -71,6 +71,7 @@
   <div class="wrap bar">
     <a class="brand" href="#main"><img src="assets/icon-192.png" alt="" width="32" height="32">Skyfold</a>
     <nav class="nav" aria-label="Sections">
+      <a class="wide-only" href="#video">Video</a>
       <a class="wide-only" href="#how">How it works</a>
       <a class="wide-only" href="#features">Features</a>
       <a href="#safety">Safety</a>
@@ -92,7 +93,7 @@
           <span class="chip beta">Public beta</span>
         </div>
         <h1>iCloud on Windows, <span class="grad nobr">in real folders.</span></h1>
-        <p class="lede">Skyfold keeps iCloud Photos and iCloud Drive in sync with ordinary folders on your PC, brings your Apple Notes to the PC to read and search, and exports your Safari bookmarks. A small tray app, without iCloud for Windows.</p>
+        <p class="lede">Skyfold keeps iCloud Photos and iCloud Drive in sync with ordinary folders on your PC, lets you browse your photos like on an iPad, brings your Apple Notes to the PC to read and search, and exports your Safari bookmarks. A small tray app, without iCloud for Windows.</p>
         <div class="cta">
           <a class="btn btn-primary" href="https://github.com/zoranmod/skyfold/releases/latest"><svg aria-hidden="true"><use href="#i-download"/></svg>Download for Windows</a>
           <a class="btn btn-ghost" href="https://github.com/zoranmod/skyfold"><svg aria-hidden="true"><use href="#i-github"/></svg>Source on GitHub</a>
@@ -101,6 +102,22 @@
       </div>
       <figure class="hero-shot">
         <img class="window" src="assets/flyout-dark.webp" width="376" height="535" alt="The Skyfold tray panel: everything is in sync, with Photos, iCloud Drive and Notes, iCloud storage use and recent activity.">
+      </figure>
+    </div>
+  </section>
+
+  <section class="section video-sec" id="video" aria-labelledby="video-title">
+    <div class="wrap">
+      <p class="kicker">See it in 48 seconds</p>
+      <h2 id="video-title">From the tray to your photos, files and notes.</h2>
+      <figure class="video">
+        <video controls playsinline preload="none" width="1920" height="1080" poster="assets/video-wide.webp"
+          aria-label="Skyfold in 48 seconds: the tray panel, photos in real folders, the Photos window, iCloud Drive both ways, Apple Notes and safe deletion."
+          data-wide="video/skyfold-16x9.mp4" data-tall="video/skyfold-9x16.mp4"
+          data-poster-wide="assets/video-wide.webp" data-poster-tall="assets/video-tall.webp">
+          <source src="video/skyfold-16x9.mp4" type="video/mp4">
+        </video>
+        <figcaption>Made-up photos, files and notes. With music: turn the sound on.</figcaption>
       </figure>
     </div>
   </section>
@@ -154,6 +171,23 @@
         </div>
         <figure class="shot narrow">
           <img class="window" src="assets/first-run.webp" width="500" height="686" loading="lazy" alt="First run: choose the photos folder and whether photos are kept in one folder, by year, or by year and month.">
+        </figure>
+      </div>
+
+      <div class="feature wide">
+        <div class="copy">
+          <p class="kicker">Photos window <span class="new">New</span></p>
+          <h3>Browse your photos like on an iPad.</h3>
+          <p>Click <b>Photos</b> in the tray panel: your synced photos and videos edge to edge, the newest at the bottom, with <b>Years</b>, <b>Months</b> and <b>All Photos</b>. The sidebar has Recently added, Favourites, Videos, Live Photos, Screenshots and your albums. It reads the files already on your PC, so it opens at once and works offline.</p>
+          <ul class="ticks">
+            <li><b>A heart here is a heart on your iPhone:</b> favourites go both ways.</li>
+            <li><b>The viewer</b> shows a photo large, with a film strip, its details and where it is on your PC. Videos and Live Photos play in your usual player.</li>
+            <li><b>Smooth to use:</b> the mouse wheel glides, <code>Ctrl</code> + wheel makes the photos larger or smaller, and the mouse's Back and Forward buttons go in and out.</li>
+            <li><b>Select, copy, show in Explorer or delete.</b> Delete asks first and moves the files to the Recycle Bin, so iCloud gets them in Recently Deleted at the next sync.</li>
+          </ul>
+        </div>
+        <figure class="shot gallery-shot">
+          <img class="window" src="assets/photos-window.webp" width="1600" height="950" loading="lazy" alt="The Skyfold Photos window: a sidebar with Library, Recently added, Favourites, Videos, Live Photos and Screenshots, and a grid of photos with Years, Months and All Photos at the bottom. The photos are made up.">
         </figure>
       </div>
 
@@ -361,6 +395,24 @@
       el.style.transitionDelay = Math.min(i, 5) * 70 + "ms";
       io.observe(el);
     });
+  })();
+</script>
+<script>
+  // The video: the tall cut on a phone, the wide one elsewhere (chosen again on resize until it plays).
+  (function () {
+    var v = document.querySelector("#video video");
+    if (!v || !window.matchMedia) return;
+    var phone = matchMedia("(max-width: 600px)");
+    function choose() {
+      if (!v.paused || v.currentTime > 0) return;
+      var d = v.dataset, src = phone.matches ? d.tall : d.wide;
+      v.poster = phone.matches ? d.posterTall : d.posterWide;
+      v.width = phone.matches ? 1080 : 1920;
+      v.height = phone.matches ? 1920 : 1080;
+      if (v.currentSrc.indexOf(src) < 0) { v.src = src; }
+    }
+    if (phone.addEventListener) phone.addEventListener("change", choose); else phone.addListener(choose);
+    choose();
   })();
 </script>
 <script data-goatcounter="https://skyfold.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>

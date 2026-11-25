@@ -152,7 +152,7 @@ class _Job(QRunnable):
 
     def run(self) -> None:
         lo = self.loader
-        if not lo._still_wanted(self.key, self.size, self.full):
+        if not lo._still_wanted(self.key, self.size, self.full) or not lo._claim(self.key, self.size, self.full):
             return
         try:
             img = load_image(self.path, self.size, self.full)
@@ -177,21 +177,31 @@ class ImageLoader(QObject):
         self._pool.setMaxThreadCount(threads)
         self._pool.setExpiryTimeout(-1)  # threads live as long as the window: COM is set up once per thread
         self._lock = threading.Lock()
-        self._queued: set[tuple[str, int, bool]] = set()
+        self._queued: dict[tuple[str, int, bool], bool] = {}  # job -> asked only ahead of the screen
+        self._claimed: set[tuple[str, int, bool]] = set()  # being made right now
         self._wanted: set[str] | None = None  # None: everything
+        self._full_key: str | None = None
         self._order = 0
         self._delivered.connect(self._deliver)  # (queued onto this object's thread)
 
-    def request(self, key: str, path: Path, size: int, full: bool = False) -> None:
+    def request(self, key: str, path: Path, size: int, full: bool = False, ahead: bool = False) -> None:
+        """ahead: a picture not on screen yet (the next screen): made after everything on screen."""
         job = (key, size, full)
         with self._lock:
-            if job in self._queued:
-                return
-            self._queued.add(job)
+            before = self._queued.get(job)
+            if before is not None and (ahead or not before):
+                return  # already asked for (as urgently)
+            self._queued[job] = ahead  # (an ahead one now on screen: asked again, urgently)
             self._order += 1
             order = self._order
+            if full:
+                self._full_key = key  # only the photo in the viewer is made at full size
+            elif self._wanted is not None:
+                self._wanted.add(key)  # asked for while scrolling: wanted, until the next keep_only
         # higher priority runs first: the latest request is what the user looks at now
-        self._pool.start(_Job(self, key, path, size, full), min(order, 2_000_000_000) if not full else 2_100_000_000)
+        prio = (2_100_000_000 + min(order, 40_000_000) if full else  # the newest full one first
+                min(order, 1_000_000_000) - (1_000_000_001 if ahead else 0))
+        self._pool.start(_Job(self, key, path, size, full), prio)
 
     def keep_only(self, keys: set[str] | None) -> None:
         with self._lock:
@@ -199,17 +209,27 @@ class ImageLoader(QObject):
 
     def _still_wanted(self, key: str, size: int, full: bool) -> bool:
         with self._lock:
-            ok = full or self._wanted is None or key in self._wanted
-            if not ok:
-                self._queued.discard((key, size, full))
+            ok = key == self._full_key if full else self._wanted is None or key in self._wanted
+            if not ok and (key, size, full) not in self._claimed:
+                self._queued.pop((key, size, full), None)
             return ok
+
+    def _claim(self, key: str, size: int, full: bool) -> bool:
+        """One job makes each picture, even if it was asked for twice."""
+        job = (key, size, full)
+        with self._lock:
+            if job in self._claimed or job not in self._queued:
+                return False
+            self._claimed.add(job)
+            return True
 
     def _done(self, key: str, size: int, full: bool, img: QImage) -> None:
         self._delivered.emit(key, size, full, img)
 
     def _deliver(self, key: str, size: int, full: bool, img: QImage) -> None:
         with self._lock:
-            self._queued.discard((key, size, full))
+            self._queued.pop((key, size, full), None)
+            self._claimed.discard((key, size, full))
         self.loaded.emit(key, size, full, img)
 
     def stop(self) -> None:

@@ -9,6 +9,7 @@ heart talks to iCloud, through the sync's own thread."""
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -21,14 +22,14 @@ from PySide6.QtCore import (QAbstractListModel, QEasingCurve, QEvent, QItemSelec
                             Signal)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QImage, QKeySequence, QLinearGradient,
                            QPainter, QPainterPath, QPen, QPixmap, QShortcut)
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                                QListView, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea,
                                QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QToolButton, QVBoxLayout,
                                QWidget)
 from shiboken6 import isValid
 
 from .. import photo_library as lib
-from ..i18n import t
+from ..i18n import language, t
 from .dialogs import _Dialog
 from .photo_images import ImageLoader, fit_short_side
 
@@ -50,7 +51,13 @@ def _month(m: int) -> str:
 
 
 def _day(d: datetime) -> str:
-    return f"{d.day}. {_month(d.month)} {d.year}"
+    return f"{d.day}. {_month(d.month)} {d.year}" if language() == "bs" else f"{d.day} {_month(d.month)} {d.year}"
+
+
+def _num(n: int) -> str:
+    """1,284 in English, 1.284 in Bosnian."""
+    s = f"{n:,}"
+    return s.replace(",", ".") if language() == "bs" else s
 
 
 def _duration(sec: float | None) -> str:
@@ -72,8 +79,106 @@ def _is_light(c: dict) -> bool:
     return QColor(c["bg"]).lightness() > 128
 
 
-def _icon_button(text: str, tip: str, size: int = 34) -> QToolButton:
-    b = QToolButton()
+def _ui(w: QWidget) -> dict:
+    return getattr(w.window(), "_ui", None) or {"raised": "#1c1c1e", "ring": "rgba(255,255,255,0.12)",
+                                                  "hover": "#2c2c2e", "text": "#ffffff", "nav": "rgba(255,255,255,0.12)",
+                                                  "nav_text": "#ffffff"}
+
+
+def _round(p: QPainter, r: QRectF, fill: str, ring: str | None = None) -> None:
+    """A smooth rounded shape (Qt's style sheets draw these corners without anti-aliasing)."""
+    p.setRenderHint(QPainter.Antialiasing)
+    rad = min(r.width(), r.height()) / 2
+    if ring:
+        p.setPen(QPen(QColor(_rgba(ring)), 1))
+        r = r.adjusted(0.5, 0.5, -0.5, -0.5)
+    else:
+        p.setPen(Qt.NoPen)
+    p.setBrush(QColor(_rgba(fill)))
+    p.drawRoundedRect(r, rad, rad)
+
+
+def _rgba(css: str) -> QColor | str:
+    if css.startswith("rgba("):
+        r, g, b, a = (float(x) for x in css[5:-1].split(","))
+        return QColor(int(r), int(g), int(b), int(a * 255))
+    return css
+
+
+class _Pill(QWidget):
+    """The floating bars (Years / Months / All Photos, − +, the selection bar), drawn smooth."""
+
+    def paintEvent(self, e) -> None:  # noqa: N802
+        u = _ui(self)
+        p = QPainter(self)
+        _round(p, QRectF(self.rect()), u["raised"], u["ring"])
+
+
+class _PillButton(QPushButton):
+    """A button on a pill: a smooth highlight when hovered or chosen, red for Delete."""
+
+    def __init__(self, text: str, danger: bool = False) -> None:
+        super().__init__(text)
+        self.danger = danger
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_Hover)
+        f = self.font()
+        f.setWeight(QFont.DemiBold)
+        self.setFont(f)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        fm = self.fontMetrics()
+        return QSize(fm.horizontalAdvance(self.text()) + 28, max(30, fm.height() + 12))
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return self.sizeHint()
+
+    def paintEvent(self, e) -> None:  # noqa: N802
+        u = _ui(self)
+        p = QPainter(self)
+        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        if self.danger:
+            _round(p, r, "#d13438" if self.underMouse() else "#c42b1c")
+        elif self.isChecked() or self.underMouse() or self.isDown():
+            _round(p, r, u["hover"])
+        if self.hasFocus() and getattr(self.window(), "keyboard_used", False):
+            p.setPen(QPen(QColor(_rgba(u["text"])), 1.5))
+            p.setBrush(Qt.NoBrush)
+            rad = r.height() / 2
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), rad, rad)
+        p.setPen(QColor("#ffffff" if self.danger else _rgba(u["text"])))
+        p.setFont(self.font())
+        p.drawText(self.rect(), Qt.AlignCenter, self.text())
+
+
+class _Toast(QLabel):
+    def paintEvent(self, e) -> None:  # noqa: N802
+        u = _ui(self)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(QColor(_rgba(u["ring"])), 1))
+        p.setBrush(QColor(_rgba(u["raised"])))
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12, 12)
+        p.end()
+        super().paintEvent(e)
+
+
+class _NavButton(QToolButton):
+    """The viewer's round ‹ › buttons."""
+
+    def paintEvent(self, e) -> None:  # noqa: N802
+        u = _ui(self)
+        p = QPainter(self)
+        fill = u["nav_hover"] if self.underMouse() and "nav_hover" in u else u["nav"]
+        if self.isEnabled():
+            _round(p, QRectF(self.rect()).adjusted(1, 1, -1, -1), fill)
+        p.setPen(QColor(_rgba(u["nav_text"])) if self.isEnabled() else QColor(128, 128, 128, 120))
+        p.setFont(self.font())
+        p.drawText(self.rect().adjusted(0, -2, 0, 0), Qt.AlignCenter, self.text())
+
+
+def _icon_button(text: str, tip: str, size: int = 34, kind=QToolButton) -> QToolButton:
+    b = kind()
     b.setText(text)
     b.setToolTip(tip)
     b.setAccessibleName(tip)
@@ -134,7 +239,7 @@ class Thumbs:
     def _big(size: int) -> bool:
         return size > 400
 
-    def get(self, it: lib.PhotoItem, px: float) -> QPixmap | None:
+    def get(self, it: lib.PhotoItem, px: float, ahead: bool = False) -> QPixmap | None:
         b = self.bucket(px)
         key = (it.asset_id, b)
         self.seen.add(it.asset_id)
@@ -149,7 +254,7 @@ class Thumbs:
             if got is not None and (best is None or abs(other - b) < abs(best[0] - b)):
                 best = (other, got)
         if key not in self.missing:
-            self.loader.request(it.asset_id, it.path, b)
+            self.loader.request(it.asset_id, it.path, b, ahead=ahead)
         return best[1] if best else None
 
     def put(self, key: str, size: int, img: QImage) -> None:
@@ -248,7 +353,7 @@ class TileDelegate(QStyledItemDelegate):
         f.setBold(True)
         p.setFont(f)
         selected = option.state & QStyle.State_Selected
-        if it.is_video and not (win.selecting and selected) and not small:
+        if it.is_video and not win.selecting and not small:  # (the selection circle sits there)
             text = _duration(it.duration)
             if text:
                 tr = r.adjusted(4, 0, -6, -4)
@@ -415,8 +520,7 @@ class Grid(QListView):
         self.setResizeMode(QListView.Adjust)
         self.setMovement(QListView.Static)
         self.setUniformItemSizes(True)
-        self.setLayoutMode(QListView.Batched)
-        self.setBatchSize(2000)
+        self.setLayoutMode(QListView.SinglePass)  # (uniform tiles: quick, and every photo has its place at once)
         self.setSpacing(0)
         self.setFrameShape(QFrame.NoFrame)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -442,11 +546,17 @@ class Grid(QListView):
         self.win.keyboard_used = False
         idx = self.indexAt(e.position().toPoint())
         mods = e.modifiers()
+        if e.button() != Qt.LeftButton and not self.win.selecting:
+            if idx.isValid():  # (the right-click menu is for this photo; nothing gets selected)
+                self.selectionModel().setCurrentIndex(idx, QItemSelectionModel.NoUpdate)
+            return
         if e.button() == Qt.LeftButton and idx.isValid() and not self.win.selecting and not (
                 mods & (Qt.ControlModifier | Qt.ShiftModifier)):
             self._open_on_release = idx
             return
         self._open_on_release = None
+        if e.button() == Qt.LeftButton and not idx.isValid() and not (mods & (Qt.ControlModifier | Qt.ShiftModifier)):
+            return  # between or below the photos: nothing (never a rubber band that selects hundreds)
         if e.button() == Qt.LeftButton and idx.isValid() and self.win.selecting and not (
                 mods & (Qt.ControlModifier | Qt.ShiftModifier)):
             self.selectionModel().select(idx, QItemSelectionModel.Toggle)
@@ -456,6 +566,29 @@ class Grid(QListView):
         super().mousePressEvent(e)
         if mods & (Qt.ControlModifier | Qt.ShiftModifier) and not self.win.selecting:
             self.win.set_selecting(True)
+
+    def mouseMoveEvent(self, e) -> None:  # noqa: N802
+        if e.buttons() & Qt.LeftButton and not (e.modifiers() & (Qt.ControlModifier | Qt.ShiftModifier)):
+            return  # dragging over the photos selects nothing by itself
+        super().mouseMoveEvent(e)
+
+    def resizeEvent(self, e) -> None:  # noqa: N802
+        """The window got larger or smaller (maximized, say): the same photos stay in view."""
+        win = self.win
+        if getattr(win, "inner", None) is None:  # (still being built)
+            super().resizeEvent(e)
+            return
+        anchor = win._anchor() if win.inner.currentWidget() is self and win.model.items else None
+        end = anchor is not None and win._at_end()
+        self.smooth.stop()
+        super().resizeEvent(e)
+        win._layout_grid()
+        if anchor is not None:
+            self.doItemsLayout()
+            if end:
+                self.scrollToBottom()
+            else:
+                win._restore_anchor(anchor)
 
     def mouseReleaseEvent(self, e) -> None:  # noqa: N802
         idx = getattr(self, "_open_on_release", None)
@@ -492,9 +625,8 @@ class Grid(QListView):
         idx = self.indexAt(e.pos())
         if not idx.isValid():
             return
-        if not self.selectionModel().isSelected(idx):
-            self.selectionModel().select(idx, QItemSelectionModel.ClearAndSelect)
-        self.win.context_menu(self.win.chosen_items() or [idx.data(ITEM)], e.globalPos())
+        chosen = self.win.selecting and self.selectionModel().isSelected(idx)
+        self.win.context_menu(self.win.chosen_items() if chosen else [idx.data(ITEM)], e.globalPos())
 
 
 # --- Years and Months --------------------------------------------------------------------------------
@@ -654,8 +786,10 @@ class Picture(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, e) -> None:  # noqa: N802
-        if e.button() == Qt.LeftButton and not self._moved:
-            QTimer.singleShot(QApplication.doubleClickInterval(), self._single)
+        if getattr(self, "_after_double", False):  # the end of a double-click: not a tap as well
+            self._after_double = False
+        elif e.button() == Qt.LeftButton and not getattr(self, "_moved", False):
+            QTimer.singleShot(QApplication.doubleClickInterval(), self, self._single)
             self._pending_single = True
         self._drag = None
 
@@ -666,6 +800,10 @@ class Picture(QWidget):
 
     def mouseDoubleClickEvent(self, e) -> None:  # noqa: N802
         self._pending_single = False
+        self._after_double = True
+        opened = getattr(self.win, "_viewer_opened_at", 0.0)
+        if time.monotonic() - opened < QApplication.doubleClickInterval() / 1000 + 0.15:
+            return  # the second click of a double-click on a photo in the grid: it only opens it
         self.toggle_zoom()
 
     def toggle_zoom(self) -> None:
@@ -745,14 +883,15 @@ class Header(QWidget):
         p = QPainter(self)
         bg = QColor(self.win.c["bg"])
         g = QLinearGradient(0, 0, 0, self.height())
+        cards = self.win.inner.currentWidget() is self.win.cards_area  # titles under the title: a firmer fade
         top = QColor(bg)
-        top.setAlpha(235)
+        top.setAlpha(252 if cards else 235)
         mid = QColor(bg)
-        mid.setAlpha(160)
+        mid.setAlpha(246 if cards else 160)
         end = QColor(bg)
         end.setAlpha(0)
         g.setColorAt(0, top)
-        g.setColorAt(0.6, mid)
+        g.setColorAt(0.85 if cards else 0.6, mid)
         g.setColorAt(1, end)
         p.fillRect(self.rect(), g)
 
@@ -807,6 +946,42 @@ class SideDelegate(QStyledItemDelegate):
         p.restore()
 
 
+# --- pictures kept a while after the window closes -----------------------------------------------
+# Opening the window again soon shows the photos at once. Kept only for the same photos folder,
+# dropped after WARM_FOR, and at once when the account signs out (PhotosWindow.clear).
+WARM_FOR = 10 * 60 * 1000  # ms
+_WARM: dict = {}
+
+
+def _keep_warm(root: str, thumbs: "Thumbs") -> None:
+    drop_warm()
+    _WARM.update(root=root, cache=thumbs.cache, used=thumbs.used)
+    thumbs.cache = {False: OrderedDict(), True: OrderedDict()}
+    thumbs.used = {False: 0, True: 0}
+    app = QApplication.instance()
+    if app is not None:
+        timer = QTimer(app)
+        timer.setSingleShot(True)
+        timer.timeout.connect(drop_warm)
+        timer.start(WARM_FOR)
+        _WARM["timer"] = timer
+
+
+def _take_warm(root: str, thumbs: "Thumbs") -> None:
+    if _WARM.get("root") == root:
+        thumbs.cache, thumbs.used = _WARM["cache"], _WARM["used"]
+        _WARM.pop("cache", None)
+    drop_warm()
+
+
+def drop_warm() -> None:
+    timer = _WARM.pop("timer", None)
+    if timer is not None and isValid(timer):
+        timer.stop()
+        timer.deleteLater()
+    _WARM.clear()
+
+
 # --- the window ------------------------------------------------------------------------------------
 class _Bridge(QObject):
     """Results of work done off the window's thread, delivered on it."""
@@ -828,6 +1003,7 @@ class PhotosWindow(_Dialog):
     def __init__(self, palette: dict[str, str], source, settings) -> None:
         super().__init__(t("Photos") + " – Skyfold")
         self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint)
+        self.setMinimumSize(520, 420)  # (narrower than the sidebar needs: it then steps aside, see NARROW)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.c = palette
         self.source = source
@@ -850,6 +1026,9 @@ class PhotosWindow(_Dialog):
         self._loaded_at = 0.0
         self._pending_fav: dict[str, bool] = {}  # hearts iCloud hasn't confirmed yet
         self._deleting = False
+        self._gone: set[str] = set()  # deleted here: kept out of a list read before the delete finished
+        self._deleted_at = 0.0
+        self._load_started = 0.0
         self._forward: list[tuple] = []  # what the mouse's Forward button goes back into
         self.closed = False
         self._mouse = MouseNav(self)
@@ -857,9 +1036,17 @@ class PhotosWindow(_Dialog):
         self._bridge.library.connect(self._library_loaded)
         self._bridge.deleted.connect(self._deleted)
 
-        self.loader = ImageLoader(self)
+        self.loader = ImageLoader(self, threads=max(3, min(6, (os.cpu_count() or 4) // 2)))
         self.loader.loaded.connect(self._loaded)
         self.thumbs = Thumbs(self.loader)
+        self._signed_out = False
+        try:
+            src = source()
+        except Exception:  # noqa: BLE001
+            src = None
+        self._root = str(src[1]) if src else None
+        if self._root:
+            _take_warm(self._root, self.thumbs)
         self._repaint = QTimer(self, singleShot=True, interval=30)
         self._repaint.timeout.connect(self._repaint_now)
 
@@ -933,35 +1120,35 @@ class PhotosWindow(_Dialog):
         self.search.setFixedWidth(220)
         self.search.setAccessibleName(t("Search photos"))
         self.search.textChanged.connect(self._search_changed)
+        self._search_timer = QTimer(self, singleShot=True, interval=220)
+        self._search_timer.timeout.connect(self._apply_search)
+        self.search.returnPressed.connect(lambda: (self._search_timer.stop(), self._apply_search()))
         hl.addWidget(self.search, 0, Qt.AlignTop)
         self.select_btn = QPushButton(t("Select"))
         self.select_btn.setCursor(Qt.PointingHandCursor)
         self.select_btn.clicked.connect(lambda: self.set_selecting(not self.selecting))
         hl.addWidget(self.select_btn, 0, Qt.AlignTop)
 
-        self.pill = QWidget(self.browse)
-        self.pill.setObjectName("PhotosPill")
+        self.pill = _Pill(self.browse)
         pl = QHBoxLayout(self.pill)
         pl.setContentsMargins(4, 4, 4, 4)
         pl.setSpacing(2)
         self.view_buttons = {}
         for key, label in (("years", t("Years")), ("months", t("Months")), ("all", t("All Photos"))):
-            b = QPushButton(label)
+            b = _PillButton(label)
             b.setCheckable(True)
-            b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(lambda _=False, k=key: self.set_view(k))
             pl.addWidget(b)
             self.view_buttons[key] = b
-        self.zoom_pill = QWidget(self.browse)
-        self.zoom_pill.setObjectName("PhotosPill")
+        self.zoom_pill = _Pill(self.browse)
         zl = QHBoxLayout(self.zoom_pill)
         zl.setContentsMargins(4, 4, 4, 4)
         zl.setSpacing(2)
-        self.zoom_out = QPushButton("−")
+        self.zoom_out = _PillButton("−")
         self.zoom_out.setToolTip(t("Smaller") + " (Ctrl −)")
         self.zoom_out.setAccessibleName(t("Smaller"))
         self.zoom_out.clicked.connect(lambda: self.set_zoom(PhotosWindow.zoom_level + 1))
-        self.zoom_in = QPushButton("+")
+        self.zoom_in = _PillButton("+")
         self.zoom_in.setToolTip(t("Larger") + " (Ctrl +)")
         self.zoom_in.setAccessibleName(t("Larger"))
         self.zoom_in.clicked.connect(lambda: self.set_zoom(PhotosWindow.zoom_level - 1))
@@ -970,31 +1157,29 @@ class PhotosWindow(_Dialog):
             b.setCursor(Qt.PointingHandCursor)
             zl.addWidget(b)
 
-        self.selbar = QWidget(self.browse)
-        self.selbar.setObjectName("PhotosPill")
+        self.selbar = _Pill(self.browse)
         sl = QHBoxLayout(self.selbar)
         sl.setContentsMargins(14, 4, 4, 4)
         sl.setSpacing(4)
         self.sel_count = QLabel()
         sl.addWidget(self.sel_count)
+        self._sel_extra = []
         for label, fn in ((t("Select all"), self.select_all), (t("Show in Explorer"), self.show_selected),
                           (t("Copy"), self.copy_selected), (t("Favourite"), self.favorite_selected)):
-            b = QPushButton(label)
-            b.setCursor(Qt.PointingHandCursor)
+            b = _PillButton(label)
             b.clicked.connect(fn)
             sl.addWidget(b)
-        self.del_btn = QPushButton(t("Delete"))
-        self.del_btn.setObjectName("Danger")
-        self.del_btn.setCursor(Qt.PointingHandCursor)
+            if fn in (self.show_selected, self.copy_selected):
+                self._sel_extra.append(b)
+        self.del_btn = _PillButton(t("Delete"), danger=True)
         self.del_btn.clicked.connect(lambda: self.delete_items(self.chosen_items()))
         sl.addWidget(self.del_btn)
-        done = QPushButton(t("Done"))
-        done.setCursor(Qt.PointingHandCursor)
+        done = _PillButton(t("Done"))
         done.clicked.connect(lambda: self.set_selecting(False))
         sl.addWidget(done)
         self.selbar.hide()
 
-        self.toast = QLabel(self)
+        self.toast = _Toast(self)
         self.toast.setObjectName("PhotosToast")
         self.toast.setWordWrap(True)
         self.toast.setAccessibleName(t("Message"))
@@ -1056,8 +1241,8 @@ class PhotosWindow(_Dialog):
         self.info.hide()
         mid.addWidget(self.info)
         vl.addLayout(mid, 1)
-        self.prev = _icon_button(I_PREV, t("Previous") + " (←)", 44)
-        self.next = _icon_button(I_NEXT, t("Next") + " (→)", 44)
+        self.prev = _icon_button(I_PREV, t("Previous") + " (←)", 44, _NavButton)
+        self.next = _icon_button(I_NEXT, t("Next") + " (→)", 44, _NavButton)
         for b in (self.prev, self.next):
             b.setFont(QFont(self.font().family(), 22))
             b.setParent(self.picture)
@@ -1100,6 +1285,8 @@ class PhotosWindow(_Dialog):
         vbg = "#ffffff" if light else "#000000"
         vfg = c["text"] if light else "#ffffff"
         vbtn = "rgba(0,0,0,0.06)" if light else "rgba(255,255,255,0.12)"
+        self._ui = {"raised": raised, "ring": ring, "hover": c["hover"], "text": c["text"], "nav": vbtn,
+                    "nav_hover": "rgba(0,0,0,0.12)" if light else "rgba(255,255,255,0.22)", "nav_text": vfg}
         self.setStyleSheet(
             f"PhotosWindow{{background:{c['bg']}}}"
             f"QListWidget{{background:{c['bg'] if c['bg'] == '#000000' else c['group']};border:none;"
@@ -1107,20 +1294,12 @@ class PhotosWindow(_Dialog):
             f"QListWidget::item{{border:none;background:transparent}}"
             f"QListView{{background:{c['bg']};border:none}}"
             f"QScrollArea, QScrollArea > QWidget > QWidget{{background:{c['bg']}}}"
-            f"#PhotosPill{{background:{raised};border:1px solid {ring};border-radius:19px}}"
-            f"#PhotosPill QPushButton{{background:transparent;border:none;border-radius:15px;padding:6px 14px;"
-            f"color:{c['text']};font-weight:600}}"
-            f"#PhotosPill QPushButton:hover{{background:{c['hover']}}}"
-            f"#PhotosPill QPushButton:checked{{background:{c['hover']}}}"
-            f"#PhotosPill QPushButton#Danger{{background:#c42b1c;color:#ffffff}}"
-            f"#PhotosToast{{background:{raised};border:1px solid {ring};border-radius:12px;padding:10px 16px;"
-            f"color:{c['text']}}}"
+            f"#PhotosToast{{background:transparent;border:none;padding:10px 16px;color:{c['text']}}}"
             f"#PhotosViewer{{background:{vbg}}}"
             f"#PhotosViewer QLabel{{color:{vfg};background:transparent}}"
             f"#PhotosViewer QPushButton, #PhotosViewer QToolButton{{background:{vbtn};color:{vfg};border:none;"
             f"border-radius:8px;padding:6px 12px;min-height:22px}}"
             f"#PhotosViewer QToolButton:checked{{background:{c['accent']};color:{c['accent_text']}}}"
-            f"#PhotosNav{{border-radius:22px}}"
             f"#PhotosInfo{{background:{c['surface'] if light else '#000000'};color:{vfg};"
             f"border-left:1px solid {c['border'] if light else 'rgba(255,255,255,0.10)'};padding:16px}}"
         )
@@ -1143,22 +1322,43 @@ class PhotosWindow(_Dialog):
     def eventFilter(self, obj, e):  # noqa: N802
         return super().eventFilter(obj, e)
 
+    NARROW = 820  # below this the sidebar steps aside by itself (the ☰ button still opens it)
+
     def resizeEvent(self, e) -> None:  # noqa: N802
         super().resizeEvent(e)
+        narrow = self.width() < self.NARROW
+        if narrow != getattr(self, "_narrow", None) and self.isVisible():
+            self._narrow = narrow
+            self.side.setVisible(PhotosWindow.sidebar_open and not narrow)
+            QTimer.singleShot(0, self, lambda: (self._place_overlays(), self._layout_grid()))  # (the photos take its room)
         self._place_overlays()
         self._layout_grid()
         built = getattr(self, "_cards_for", None)
         if (built and self.inner.currentWidget() is self.cards_area
                 and self._card_cols(built[0]) != built[1]):
-            self._build_cards(built[0], self.current, built[2])
+            sb = self.cards_area.verticalScrollBar()
+            share = sb.value() / sb.maximum() if sb.maximum() > 0 else 1.0
+            self._build_cards(built[0], self.current, None, keep_share=share)
 
     def _place_overlays(self) -> None:
         b = self.browse
         self.inner.setGeometry(0, 0, b.width(), b.height())
         self.header.setGeometry(0, 0, b.width(), 76)
         self.header.raise_()
+        roomy = b.width() >= 700
+        for btn in self._sel_extra:  # Show in Explorer and Copy stay in the right-click menu
+            btn.setVisible(roomy)
+        self.search.setFixedWidth(max(120, min(220, b.width() - 360)))
+        self.sel_count.setVisible(True)
         for w in (self.pill, self.zoom_pill, self.selbar):
+            w.layout().invalidate()  # (buttons just shown or hidden count at once)
+            w.layout().activate()
             w.adjustSize()
+        if self.selbar.width() > b.width() - 24:  # still too wide: the count goes, the buttons stay
+            self.sel_count.setVisible(False)
+            self.selbar.layout().invalidate()
+            self.selbar.layout().activate()
+            self.selbar.adjustSize()
         y = b.height() - self.pill.height() - 18
         gap = 10 if self.zoom_pill.isVisible() else 0
         total = self.pill.width() + (self.zoom_pill.width() + gap if self.zoom_pill.isVisible() else 0)
@@ -1211,6 +1411,7 @@ class PhotosWindow(_Dialog):
         if self._fingerprint is not None and not now and time.monotonic() - self._loaded_at < self.RELOAD_GAP:
             return  # (the poll comes back)
         self._loading = True
+        self._load_started = time.monotonic()
         bridge = self._bridge
 
         def work() -> None:
@@ -1234,6 +1435,8 @@ class PhotosWindow(_Dialog):
         src = self.source()
         if src is None or str(src[1]) != fp[0]:
             return  # signed out or another folder meanwhile
+        if self._load_started < self._deleted_at and self._gone:
+            items = [it for it in items if it.asset_id not in self._gone]  # read before they went
         first = self._fingerprint is None
         self._fingerprint = fp
         self.items = items
@@ -1299,7 +1502,7 @@ class PhotosWindow(_Dialog):
         def row(key: str, label: str, n: int) -> None:
             it = QListWidgetItem(label)
             it.setData(Qt.UserRole, key)
-            it.setData(Qt.UserRole + 1, f"{n:,}".replace(",", "."))
+            it.setData(Qt.UserRole + 1, _num(n))
             it.setData(Qt.AccessibleTextRole, f"{label}, {n}")
             side.addItem(it)
             if key == keep:
@@ -1330,7 +1533,13 @@ class PhotosWindow(_Dialog):
         self._show_set()
 
     def _search_changed(self, text: str) -> None:
-        self.query = text.strip()
+        self._search_timer.start()  # (a pause in typing: a big library isn't searched on every key)
+
+    def _apply_search(self) -> None:
+        text = self.search.text().strip()
+        if text == self.query:
+            return
+        self.query = text
         self.set_selecting(False)
         self._show_set()
 
@@ -1365,9 +1574,10 @@ class PhotosWindow(_Dialog):
             self._layout_grid()
             if selected:
                 self._select_rows([row for row, it in enumerate(got) if it.asset_id in selected])
-            if keep and anchor is not None and not at_end:
+            top_first = self.set_key == "recent" or self.query and not library  # (these read from the top)
+            if keep and anchor is not None and (not at_end or top_first):
                 self._restore_anchor(anchor)
-            elif self.set_key == "recent" or self.query and not library:
+            elif top_first:
                 self.grid.scrollToTop()
             else:
                 QTimer.singleShot(0, self.grid.scrollToBottom)  # the newest at the bottom, as on iPhone
@@ -1403,7 +1613,7 @@ class PhotosWindow(_Dialog):
             return
         cols = COLUMNS[max(0, min(len(COLUMNS) - 1, PhotosWindow.zoom_level))]
         cols = min(cols, max(2, w // 60))  # (fewer in a narrow window)
-        size = max(40, w // cols)
+        size = max(40, (w - 1) // cols)
         if size != self.tile or self.grid.gridSize().width() != size:
             self.tile = size
             self.grid.setGridSize(QSize(size, size))
@@ -1473,8 +1683,11 @@ class PhotosWindow(_Dialog):
             self.subtitle.setText(text)
             self._repaint.start()
         else:
-            years = sorted({i.date.year for i in self.current})
-            self.subtitle.setText(str(years[0]) if len(years) == 1 else f"{years[0]} – {years[-1]}")
+            years = getattr(self, "_years", None)
+            if years is None or years[0] is not self.current:
+                ys = sorted({i.date.year for i in self.current})
+                years = self._years = (self.current, str(ys[0]) if len(ys) == 1 else f"{ys[0]} – {ys[-1]}")
+            self.subtitle.setText(years[1])
 
     @staticmethod
     def _range(d1: datetime, d2: datetime, days: bool) -> str:
@@ -1482,7 +1695,8 @@ class PhotosWindow(_Dialog):
             if d1.date() == d2.date():
                 return _day(d1)
             if (d1.year, d1.month) == (d2.year, d2.month):
-                return f"{d1.day}.–{d2.day}. {_month(d1.month)} {d1.year}"
+                return (f"{d1.day}.–{d2.day}. {_month(d1.month)} {d1.year}" if language() == "bs" else
+                        f"{d1.day}–{d2.day} {_month(d1.month)} {d1.year}")
             return f"{_day(d1)} – {_day(d2)}"
         if (d1.year, d1.month) == (d2.year, d2.month):
             return f"{_month(d1.month)} {d1.year}"
@@ -1496,7 +1710,7 @@ class PhotosWindow(_Dialog):
         self._show_set()
 
     def _build_cards(self, view: str, items: list[lib.PhotoItem], focus_year: int | None = None,
-                     keep_scroll: int | None = None) -> None:
+                     keep_scroll: int | None = None, keep_share: float | None = None) -> None:
         holder = QWidget()
         grid = QGridLayout(holder)
         grid.setContentsMargins(22, 84, 22, 90)
@@ -1556,11 +1770,13 @@ class PhotosWindow(_Dialog):
                 sb.setValue(target.y() - 84)
             elif keep_scroll is not None:
                 sb.setValue(keep_scroll)  # (new photos arrived: the place stays)
+            elif keep_share is not None:
+                sb.setValue(round(sb.maximum() * keep_share))  # (the window changed size)
             else:
                 sb.setValue(sb.maximum())
 
-        QTimer.singleShot(0, scroll)
-        QTimer.singleShot(60, scroll)
+        QTimer.singleShot(0, self, scroll)
+        QTimer.singleShot(60, self, scroll)
 
     def _card_cols(self, view: str) -> int:
         width = max(400, self.browse.width() - 44)
@@ -1587,7 +1803,7 @@ class PhotosWindow(_Dialog):
                     self.grid.selectionModel().setCurrentIndex(idx, QItemSelectionModel.NoUpdate)
                     return
 
-        QTimer.singleShot(0, go)
+        QTimer.singleShot(0, self, go)
 
     def _nav_state(self) -> tuple:
         return (self.pages.currentWidget() is self.viewer, self.set_key, self.query, self.view)
@@ -1627,7 +1843,7 @@ class PhotosWindow(_Dialog):
             return
         view, place = what
         self.set_view(view)
-        QTimer.singleShot(90, lambda: self._scroll_bar().setValue(place))  # after the view placed itself
+        QTimer.singleShot(90, self, lambda: self._scroll_bar().setValue(place))  # after the view placed itself
 
     def _mouse_nav(self, forward: bool) -> None:
         (self.go_forward if forward else self.go_back)()
@@ -1635,7 +1851,7 @@ class PhotosWindow(_Dialog):
     def toggle_sidebar(self) -> None:
         PhotosWindow.sidebar_open = not self.side.isVisible()
         self.side.setVisible(PhotosWindow.sidebar_open)
-        QTimer.singleShot(0, lambda: (self._layout_grid(), self._place_overlays()))
+        QTimer.singleShot(0, self, lambda: (self._layout_grid(), self._place_overlays()))
 
     # --- pictures arriving ---------------------------------------------------------------------
     def _loaded(self, key: str, size: int, full: bool, img: QImage) -> None:
@@ -1663,9 +1879,26 @@ class PhotosWindow(_Dialog):
         self.thumbs.put(key, size, img)
         self._repaint.start()
 
+    def _prefetch(self) -> None:
+        """Ask for the pictures a screen above and below too, after the ones on screen, so they are
+        ready before you scroll to them."""
+        items = self.model.items
+        if (not items or self.inner.currentWidget() is not self.grid or self.pages.currentWidget() is not self.browse
+                or self.tile <= 0):
+            return
+        vp = self.grid.viewport()
+        cols = max(1, vp.width() // self.tile)
+        rows = vp.height() // self.tile + 2
+        first = (self.grid.verticalScrollBar().value() // self.tile) * cols
+        screen = rows * cols
+        px = (self.tile - GAP) * self.devicePixelRatioF()  # (as TileDelegate)
+        for r in range(max(0, first - screen), min(len(items), first + 2 * screen)):
+            self.thumbs.get(items[r], px, ahead=True)
+
     def _repaint_now(self) -> None:
         if self.closed:
             return
+        self._prefetch()
         seen = self.thumbs.seen
         self.thumbs.seen = set()
         self.loader.keep_only(seen | ({self.viewer_items[self.viewer_row].asset_id}
@@ -1860,6 +2093,8 @@ class PhotosWindow(_Dialog):
         if self.closed:
             return
         gone = set(done)
+        self._gone |= gone
+        self._deleted_at = time.monotonic()
         if gone:
             to_cloud = bool(getattr(self.settings(), "delete_pc_to_cloud", True))
             viewing = self.pages.currentWidget() is self.viewer
@@ -1885,6 +2120,7 @@ class PhotosWindow(_Dialog):
         if not self.model.items:
             return
         self.viewer_items = list(self.model.items)
+        self._viewer_opened_at = time.monotonic()
         self.back.setText("‹  " + (t("Search results") if self.query else self._set_name()))
         self.pages.setCurrentWidget(self.viewer)
         self._set_bare(False)
@@ -1895,7 +2131,10 @@ class PhotosWindow(_Dialog):
         if not self.viewer_items:
             return
         cur = self.viewer_items[self.viewer_row]
-        items = list(self.model.items) if self.inner.currentWidget() is self.grid else self._set_items()
+        if removed is None:  # the library was read again: the same photos, fresher (an unhearted
+            items = [self.by_id[i.asset_id] for i in self.viewer_items if i.asset_id in self.by_id]  # one stays)
+        else:
+            items = list(self.model.items) if self.inner.currentWidget() is self.grid else self._set_items()
         if not items:
             self.close_viewer()
             return
@@ -1921,8 +2160,7 @@ class PhotosWindow(_Dialog):
             self.want_full()
         self.v_date.setText(f"{_weekday(it.date)}, {_day(it.date)}")
         self.v_time.setText(f"{it.date:%H:%M} · {it.name} · "
-                            + t("{a} of {b}", a=f"{self.viewer_row + 1:,}".replace(",", "."),
-                                b=f"{len(self.viewer_items):,}".replace(",", ".")))
+                            + t("{a} of {b}", a=_num(self.viewer_row + 1), b=_num(len(self.viewer_items))))
         self.prev.setEnabled(self.viewer_row > 0)
         self.next.setEnabled(self.viewer_row < len(self.viewer_items) - 1)
         self._update_viewer_bar()
@@ -1959,7 +2197,7 @@ class PhotosWindow(_Dialog):
         if it.added and abs((it.added - it.date).total_seconds()) > 86400:
             rows.append((t("Added to iCloud"), f"{_day(it.added)} {it.added:%H:%M}"))
         if it.width and it.height:
-            rows.append((t("Size"), f"{it.width:,} × {it.height:,}".replace(",", ".")))
+            rows.append((t("Size"), f"{_num(it.width)} × {_num(it.height)}"))
         if it.albums:
             rows.append((t("Albums"), ", ".join(it.albums)))
         rows.append((t("Favourite"), t("Yes") if it.favorite else t("No")))
@@ -2078,15 +2316,21 @@ class PhotosWindow(_Dialog):
     # --- closing -------------------------------------------------------------------------------
     def clear(self) -> None:
         """Signed out or another Apple ID: nothing of the old library stays on screen or in memory."""
+        self._signed_out = True
+        drop_warm()
         self._forget()
         self.close()
 
     def _forget(self) -> None:
+        if self.closed:
+            return
         self.closed = True
         self._mouse.stop()
         self._forward.clear()
         self._poll.stop()
         self.loader.keep_only(set())
+        if self._root and not self._signed_out:
+            _keep_warm(self._root, self.thumbs)  # back at once if opened again soon
         self.thumbs.clear()
         self._full.clear()
         self.items, self.by_id, self.current, self.viewer_items = [], {}, [], []
@@ -2103,8 +2347,14 @@ class PhotosWindow(_Dialog):
 
     def showEvent(self, e) -> None:  # noqa: N802
         super().showEvent(e)
-        self.side.setVisible(PhotosWindow.sidebar_open)
-        QTimer.singleShot(0, lambda: (self._place_overlays(), self._layout_grid()))
+        for b in self.findChildren(QPushButton):  # (a dialog presses its default button on Enter)
+            b.setAutoDefault(False)
+            b.setDefault(False)
+        for b in self.viewer.findChildren(QAbstractButton):  # a click leaves ← → to the photos
+            b.setFocusPolicy(Qt.TabFocus)
+        self._narrow = self.width() < self.NARROW
+        self.side.setVisible(PhotosWindow.sidebar_open and not self._narrow)
+        QTimer.singleShot(0, self, lambda: (self._place_overlays(), self._layout_grid()))
 
 
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")

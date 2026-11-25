@@ -181,9 +181,11 @@ def test_sidebar_sets_and_search(qapp, made_up):
             assert len(w.model.items) == n, key
         w.set_key = "library"
         w.search.setText("rome")
+        assert pump(qapp, lambda: w.query == "rome")
         assert len(w.model.items) == 2 and w.title.text() in ("Search results", "Rezultati pretrage")
         w.search.setText("nothing like this")
-        assert w.inner.currentWidget() is w.empty
+        w.search.returnPressed.emit()  # Enter searches at once (and never clicks a button)
+        assert w.inner.currentWidget() is w.empty and not w.selecting
     finally:
         w.close()
 
@@ -536,7 +538,7 @@ def test_the_wheel_glides_and_a_notch_after_another_adds_up(qapp, made_up, monke
     monkeypatch.setattr(pw, "_animations_on", lambda: True)
     w = window(qapp, made_up)
     try:
-        w.resize(500, 400)
+        w.resize(900, 400)
         pw.PhotosWindow.zoom_level = 0  # big tiles: many rows in a short window
         w._layout_grid()
         qapp.processEvents()
@@ -598,5 +600,247 @@ def test_the_mouse_back_and_forward_buttons_go_out_of_a_photo_and_back_into_it(q
         w.set_view("years")  # elsewhere meanwhile: Forward has nothing to go back into
         press(w.cards_area.viewport(), Qt.ForwardButton)
         assert w.view == "years" and w.pages.currentWidget() is w.browse and not w._forward
+    finally:
+        w.close()
+
+
+def test_a_press_and_drag_beside_the_photos_selects_nothing(qapp, made_up):
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+
+    w = window(qapp, made_up)
+    try:
+        w.resize(900, 600)
+        w.show()
+        qapp.processEvents()
+        vp = w.grid.viewport()
+
+        def send(kind, x, y, buttons):
+            e = QMouseEvent(kind, QPointF(x, y), QPointF(x, y), Qt.LeftButton, buttons, Qt.NoModifier)
+            QApplication.sendEvent(vp, e)
+
+        w.grid.scrollToBottom()
+        qapp.processEvents()
+        x, y = vp.width() - 3, vp.height() - 3  # past the last photo of the last row
+        assert not w.grid.indexAt(QPointF(x, y).toPoint()).isValid()
+        send(QMouseEvent.MouseButtonPress, x, y, Qt.LeftButton)
+        send(QMouseEvent.MouseMove, 5, 5, Qt.LeftButton)
+        send(QMouseEvent.MouseButtonRelease, 5, 5, Qt.NoButton)
+        assert not w.chosen_items() and not w.selecting
+        idx = w.model.index(3)  # a press on a photo, dragged away: nothing selected, nothing opened
+        c = w.grid.visualRect(idx).center()
+        send(QMouseEvent.MouseButtonPress, c.x(), c.y(), Qt.LeftButton)
+        send(QMouseEvent.MouseMove, c.x() + 300, c.y() + 200, Qt.LeftButton)
+        send(QMouseEvent.MouseButtonRelease, c.x() + 300, c.y() + 200, Qt.NoButton)
+        assert not w.chosen_items() and w.pages.currentWidget() is w.browse
+    finally:
+        w.close()
+
+
+def test_the_same_photos_stay_in_view_when_the_window_is_maximized(qapp, made_up):
+    from skyfold.ui import photos_window as pw
+
+    w = window(qapp, made_up)
+    try:
+        pw.PhotosWindow.zoom_level = 0
+        w.resize(700, 500)
+        w.show()
+        qapp.processEvents()
+        w._restore_anchor((w.model.items[12].asset_id, 84))
+        qapp.processEvents()
+        before = w._anchor()
+        assert before[0] == w.model.items[12].asset_id or before[0] in {i.asset_id for i in w.model.items[9:15]}
+        w.resize(1400, 900)
+        qapp.processEvents()
+        after = w._anchor()
+        assert after[0] == before[0]
+        vp = w.grid.viewport().width()
+        cols = vp // w.tile
+        assert vp - cols * w.tile < w.tile  # the photos fill the width: no empty column on the right
+    finally:
+        pw.PhotosWindow.zoom_level = 2
+        w.close()
+
+
+def test_pictures_are_ready_again_when_the_window_opens_soon_after_and_gone_after_a_sign_out(qapp, made_up):
+    from PySide6.QtGui import QImage
+
+    from skyfold.ui import photos_window as pw
+
+    w = window(qapp, made_up)
+    aid = w.model.items[0].asset_id if w.model.items else w.items[0].asset_id
+    w.thumbs.put(aid, 160, QImage(160, 120, QImage.Format_RGB32))
+    w.close()
+    w2 = window(qapp, made_up)
+    try:
+        assert (aid, 160) in w2.thumbs.cache[False]  # kept warm for the same folder
+        w2.clear()  # signed out: nothing kept
+        assert not pw._WARM
+        w3 = window(qapp, made_up)
+        assert not w3.thumbs.cache[False]
+        w3.close()
+    finally:
+        pw.drop_warm()
+
+
+def test_a_picture_asked_ahead_and_then_on_screen_is_made_once_and_first(qapp, tmp_path, monkeypatch):
+    from PySide6.QtGui import QImage
+
+    from skyfold.ui import photo_images as pi
+
+    made = []
+    monkeypatch.setattr(pi, "load_image", lambda path, size, full=False: (made.append(path.name), QImage(8, 8, QImage.Format_RGB32))[1])
+    lo = pi.ImageLoader(threads=1)
+    got = []
+    lo.loaded.connect(lambda k, s, f, img: got.append(k))
+    lo._pool.setMaxThreadCount(0) if hasattr(lo._pool, "setMaxThreadCount") else None
+    lo.request("A", tmp_path / "a.jpg", 160, ahead=True)
+    lo.request("A", tmp_path / "a.jpg", 160)  # now on screen: asked again, urgently
+    lo.request("A", tmp_path / "a.jpg", 160)  # (and not a third time)
+    lo._pool.setMaxThreadCount(1)
+    assert pump(qapp, lambda: got == ["A"])
+    lo._pool.waitForDone(2000)
+    qapp.processEvents()
+    assert made == ["a.jpg"] and got == ["A"]
+    lo.stop()
+
+
+def test_the_floating_bars_draw_smooth_shapes(qapp, made_up):
+    w = window(qapp, made_up)
+    try:
+        w.resize(900, 600)
+        w.show()
+        qapp.processEvents()
+        for bar in (w.pill, w.zoom_pill):
+            img = bar.grab().toImage()
+            assert not img.isNull()
+        w.message("Hello")
+        assert not w.toast.grab().toImage().isNull()
+    finally:
+        w.close()
+
+
+def test_a_double_click_on_a_photo_only_opens_it(qapp, made_up):
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+
+    w = window(qapp, made_up)
+    try:
+        w.resize(900, 600)
+        w.show()
+        qapp.processEvents()
+        vp = w.grid.viewport()
+        c = w.grid.visualRect(w.model.index(4)).center()
+
+        def send(target, kind, buttons):
+            e = QMouseEvent(kind, QPointF(c), QPointF(c), Qt.LeftButton, buttons, Qt.NoModifier)
+            QApplication.sendEvent(target, e)
+
+        send(vp, QMouseEvent.MouseButtonPress, Qt.LeftButton)
+        send(vp, QMouseEvent.MouseButtonRelease, Qt.NoButton)
+        assert w.pages.currentWidget() is w.viewer
+        send(w.picture, QMouseEvent.MouseButtonDblClick, Qt.LeftButton)  # the second click lands on the photo
+        send(w.picture, QMouseEvent.MouseButtonRelease, Qt.NoButton)
+        pump(qapp, lambda: False, timeout=QApplication.doubleClickInterval() / 1000 + 0.2)
+        assert not w.picture.zoom and w.vtop.isVisible()  # not zoomed in, the bars not hidden
+    finally:
+        w.close()
+
+
+def test_a_right_click_and_enter_never_select_by_themselves(qapp, made_up):
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QKeyEvent, QMouseEvent
+    from PySide6.QtWidgets import QApplication
+
+    w = window(qapp, made_up)
+    try:
+        w.resize(900, 600)
+        w.show()
+        qapp.processEvents()
+        c = QPointF(w.grid.visualRect(w.model.index(2)).center())
+        QApplication.sendEvent(w.grid.viewport(), QMouseEvent(QMouseEvent.MouseButtonPress, c, c, Qt.RightButton,
+                                                              Qt.RightButton, Qt.NoModifier))
+        assert not w.chosen_items() and not w.selecting
+        w.search.setFocus()
+        QApplication.sendEvent(w.search, QKeyEvent(QKeyEvent.KeyPress, Qt.Key_Return, Qt.NoModifier))
+        qapp.processEvents()
+        assert not w.selecting  # a dialog would press its default button: none here
+    finally:
+        w.close()
+
+
+def test_only_the_photo_in_the_viewer_is_made_full_size(qapp, tmp_path):
+    from skyfold.ui import photo_images as pi
+
+    lo = pi.ImageLoader(threads=1)
+    lo.request("A", tmp_path / "a.jpg", 0, full=True)
+    lo.request("B", tmp_path / "b.jpg", 0, full=True)  # stepped on: A is no longer wanted
+    assert not lo._still_wanted("A", 0, True) and lo._still_wanted("B", 0, True)
+    lo.keep_only({"X"})
+    lo.request("Y", tmp_path / "y.jpg", 160)  # asked for while scrolling: wanted
+    assert lo._still_wanted("Y", 160, False)
+    lo.stop()
+
+
+def test_a_list_read_before_a_delete_finished_keeps_the_deleted_photos_out(qapp, made_up):
+    w = window(qapp, made_up)
+    try:
+        items = list(w.items)
+        w._load_started = 1.0
+        w._gone = {"A3"}
+        w._deleted_at = 2.0  # the delete finished after this read started
+        w._loading = True
+        w._library_loaded((w._fingerprint[0], ("x",)), items)
+        assert "A3" not in w.by_id and len(w.items) == len(items) - 1
+    finally:
+        w.close()
+
+
+def test_the_viewer_keeps_its_photos_when_the_library_is_read_again(qapp, made_up):
+    w = window(qapp, made_up)
+    try:
+        w.set_key = "fav"
+        w._show_set()
+        w.open_viewer(0)
+        shown = [i.asset_id for i in w.viewer_items]
+        w.by_id[shown[0]].favorite = False  # unhearted, and iCloud agreed
+        w._refresh_viewer_list()
+        assert [i.asset_id for i in w.viewer_items] == shown
+    finally:
+        w.close()
+
+
+def test_numbers_and_dates_follow_the_language(qapp):
+    from datetime import datetime
+
+    from skyfold import i18n
+    from skyfold.ui import photos_window as pw
+
+    try:
+        i18n.set_language("en")
+        assert pw._num(12345) == "12,345" and pw._day(datetime(2024, 3, 5)) == "5 March 2024"
+        i18n.set_language("bs")
+        assert pw._num(12345) == "12.345" and pw._day(datetime(2024, 3, 5)).startswith("5. ")
+    finally:
+        i18n.set_language("en")
+
+
+def test_a_narrow_window_puts_the_sidebar_aside_and_shortens_the_bar(qapp, made_up):
+    w = window(qapp, made_up)
+    try:
+        w.resize(1100, 700)
+        w.show()
+        qapp.processEvents()
+        assert w.side.isVisible() == w.sidebar_open
+        w.resize(640, 600)
+        qapp.processEvents()
+        assert not w.side.isVisible()
+        qapp.processEvents()
+        assert w.grid.width() >= w.browse.width() - 2 and w.browse.width() > 600  # the photos take its room
+        w.set_selecting(True)
+        assert all(not b.isVisible() for b in w._sel_extra)
+        assert w.selbar.x() >= 0 and w.selbar.x() + w.selbar.width() <= w.browse.width()
     finally:
         w.close()

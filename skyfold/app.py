@@ -598,6 +598,8 @@ class Controller(QObject):
         from shiboken6 import isValid
 
         self.worker.account_gen += 1
+        if "skyfold.ui.photos_window" in sys.modules:  # pictures kept warm after the window closed
+            sys.modules["skyfold.ui.photos_window"].drop_warm()
 
         win = self._dialogs.pop("photos", None)
         if win is not None and isValid(win):

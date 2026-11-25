@@ -168,6 +168,18 @@ h2 { margin-top: 10px; font: 700 clamp(32px, 4vw, 48px)/1.08 var(--display); let
 .feature.wide { display: block }
 .feature.wide .copy { max-width: 720px }
 .notes-shot { margin-top: 44px }
+.gallery-shot { margin-top: 44px }
+.kicker .new { display: inline-block; margin-left: 8px; padding: 2px 9px; border-radius: 999px; background: rgba(243, 201, 105, .16); color: var(--amber); font-size: 12px; letter-spacing: .04em; vertical-align: 1px }
+
+/* Video */
+.video-sec { text-align: center; padding-bottom: 32px }
+.video-sec h2 { margin: 6px auto 28px; max-width: 760px }
+.video { margin: 0 auto; max-width: 1040px }
+.video video { display: block; width: 100%; height: auto; border-radius: 16px; border: 1px solid var(--line-2); background: #000; box-shadow: 0 24px 60px rgba(0, 0, 0, .45) }
+.video figcaption { margin-top: 12px; font-size: 14px; color: var(--muted) }
+@media (max-width: 600px) {
+  .video { max-width: 360px }
+}
 .notes-shot .window { background: #fff }
 
 /* Extras grid */
