@@ -412,6 +412,16 @@ BS: dict[str, str] = {
     "SYSTEM": "SISTEM",
     "Start with Windows": "Pokreni sa Windows-om",
     "Show notifications": "Prikazuj obavještenja",
+    "Notifications": "Obavještenja",
+    "Skyfold's own": "Skyfold-ova",
+    "Windows' own": "Windows-ova",
+    "Off": "Isključeno",
+    "Skyfold's own notifications follow the app's theme and stay away while Do Not Disturb is on or a program "
+    "runs full screen.":
+        "Skyfold-ova obavještenja prate temu aplikacije i ne pojavljuju se dok je uključeno Ne ometaj ili dok neki "
+        "program radi preko cijelog ekrana.",
+    "Open": "Otvori",
+    "Show in folder": "Prikaži u folderu",
     "Language": "Jezik",
     "Save": "Sačuvaj",
     "{app} {version} · settings are kept in the 'data' folder next to the app.":
