@@ -226,6 +226,21 @@ class _Dialog(QDialog):
         self.setWindowIcon(app_icon())
         self.setObjectName("Root")
 
+    def showEvent(self, e) -> None:  # noqa: N802
+        super().showEvent(e)
+        from .backdrop import match_frame
+
+        match_frame(self)  # the title bar in the window's own colours (dark theme: a dark title bar)
+
+    def changeEvent(self, e) -> None:  # noqa: N802
+        super().changeEvent(e)
+        from PySide6.QtCore import QEvent
+
+        if e.type() in (QEvent.PaletteChange, QEvent.StyleChange) and self.isVisible():
+            from .backdrop import match_frame
+
+            match_frame(self)  # the theme changed while it was open
+
 
 class Toggle(QCheckBox):
     """Windows 11 style switch drawn by hand (QSS cannot draw the knob)."""

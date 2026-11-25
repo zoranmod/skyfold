@@ -916,7 +916,7 @@ class Flyout(QWidget):
         self.sync_btn.setText(label)
         self.sync_btn.setToolTip(t("Resume syncing") if state == "paused" else label)
         self.sync_btn.setAccessibleName(self.sync_btn.toolTip())
-        self.sync_btn.setIcon(glyph(name, self.c["accent_fg"]))
+        self.sync_btn.setIcon(glyph(name, self.c["accent_text"]))  # on the filled accent button
         self.sync_btn.setEnabled(True)  # paused: this button is the way to continue
         self._status_line()
         self._size_list()
