@@ -868,6 +868,9 @@ BS: dict[str, str] = {
     '{name} was moved or replaced since it was synced; it was left alone': '{name} je premješten ili zamijenjen nakon sinhronizacije, pa je ostavljen na miru',
     'Hidden in iCloud, kept on this PC: {name}': 'Sakriveno u iCloudu, ostaje na ovom PC-u: {name}',
     "Deleted in iCloud, kept on this PC (it can't go to the Recycle Bin there): {name}": 'Obrisano u iCloudu, ostaje na ovom PC-u (tamo ne može u Koš): {name}',
+    "PHOTOS WINDOW": "PROZOR FOTOGRAFIJE",
+    "Open the Photos window when I click Photos": "Otvori prozor Fotografije kad kliknem na Fotografije",
+    "Off: a click on Photos opens the photos folder in File Explorer instead.": "Isključeno: klik na Fotografije otvara folder sa slikama u File Exploreru.",
 }
 
 _CATALOGS = {"bs": BS}

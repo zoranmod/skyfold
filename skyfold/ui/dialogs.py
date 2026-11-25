@@ -883,6 +883,10 @@ class SettingsDialog(_Dialog):
                                    self.s.photos_upload)
         self._hint(media, t("Album folders use no extra disk space. They mirror iCloud; deleting there doesn't delete photos."))
 
+        view = self._card(lay, t("PHOTOS WINDOW"))
+        self.photos_window = self._toggle(view, t("Open the Photos window when I click Photos"), self.s.photos_window)
+        self._hint(view, t("Off: a click on Photos opens the photos folder in File Explorer instead."))
+
         dele = self._card(lay, t("DELETING"))
         self.del_pc = self._toggle(dele, t("Deleted on the phone → delete on this PC too"), self.s.delete_cloud_to_pc)
         self._hint(dele, t("The file goes to the Recycle Bin, where it can be restored."))
@@ -1317,6 +1321,7 @@ class SettingsDialog(_Dialog):
         s.include_live_video = self.live.isChecked()
         s.albums_as_folders = self.albums.isChecked()
         s.photos_upload = self.upload.isChecked()
+        s.photos_window = self.photos_window.isChecked()
         s.delete_cloud_to_pc = self.del_pc.isChecked()
         s.delete_pc_to_cloud = self.del_cloud.isChecked()
         s.instant_local_deletes = self.instant.isChecked()

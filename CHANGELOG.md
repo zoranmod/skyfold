@@ -4,6 +4,9 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Added
+- **The Photos window can be switched off.** *Settings → Photos → Open the Photos window when I click Photos* is on by default; switched off, a click on *Photos* in the panel or the tray menu opens the photos folder in File Explorer, as before the Photos window.
+
 ## [1.0.31] - 2026-11-25
 
 ### Added

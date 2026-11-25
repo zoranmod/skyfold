@@ -957,3 +957,22 @@ def test_a_photo_put_back_from_the_recycle_bin_shows_again(qapp, made_up):
         assert "A5" in w.by_id
     finally:
         w.close()
+
+
+def test_a_click_on_photos_opens_the_folder_when_the_window_is_switched_off(monkeypatch):
+    from skyfold import app as app_mod
+    from skyfold.config import Settings
+
+    calls = []
+    s = Settings(apple_id="someone@example.com")
+    fake = SimpleNamespace(settings=s, open_photos=lambda: calls.append("window"),
+                           open_folder=lambda which="photos": calls.append(f"folder:{which}"),
+                           open_notes=lambda: calls.append("notes"), open_settings=lambda page=0: calls.append("settings"))
+    monkeypatch.setattr(app_mod.auth, "signed_out", lambda: False)
+    assert s.photos_window  # on by default
+    app_mod.Controller._on_service(fake, "photos")
+    app_mod.Controller.open_photos_or_folder(fake)
+    s.photos_window = False
+    app_mod.Controller._on_service(fake, "photos")
+    app_mod.Controller.open_photos_or_folder(fake)
+    assert calls == ["window", "window", "folder:photos", "folder:photos"]

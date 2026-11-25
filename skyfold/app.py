@@ -366,7 +366,7 @@ class Controller(QObject):
         m.addAction(t("Sync now"), lambda: self.req.syncNow.emit(True))
         m.addAction(t("Full library check"), lambda: self.req.fullCheck.emit())
         self.m_pause = m.addAction(t("Pause"), self.toggle_pause)
-        m.addAction(t("Photos"), self.open_photos)
+        m.addAction(t("Photos"), self.open_photos_or_folder)
         m.addAction(t("Notes"), self.open_notes)
         m.addAction(t("Find My devices…"), self.open_find_my)
         m.addSeparator()
@@ -510,7 +510,7 @@ class Controller(QObject):
             self.open_settings(page=2)
         elif which == "notes":
             self.open_notes()
-        elif which == "photos" and self.settings.apple_id and not auth.signed_out():
+        elif which == "photos" and self.settings.photos_window and self.settings.apple_id and not auth.signed_out():
             self.open_photos()
         else:
             self.open_folder(which)
@@ -557,6 +557,13 @@ class Controller(QObject):
         if auth.signed_out() or not self.settings.apple_id:
             return None
         return self.worker.state, Path(self.settings.photos_dir)
+
+    def open_photos_or_folder(self) -> None:
+        """The tray menu's Photos: the Photos window, or the photos folder if it was switched off."""
+        if self.settings.photos_window:
+            self.open_photos()
+        else:
+            self.open_folder("photos")
 
     def open_photos(self) -> None:
         """The Photos window: the synced photos as on an iPad."""
