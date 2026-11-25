@@ -28,7 +28,7 @@ def test_download_limit_hint_follows_the_download_limit(qapp):  # noqa: F811
 
     dialog = dialogs.SettingsDialog(Settings(), theme.LIGHT)
     try:
-        body = dialog.stack.widget(0).widget()
+        body = dialog.stack.widget(dialog.PAGES.index("sync")).widget()  # (1.1: its own Syncing page)
         texts = [w.text() for w in body.findChildren(QLabel)]
         limit = texts.index("Download speed limit")
         hint = next(i for i, x in enumerate(texts) if x.startswith("Keeps some of your connection free"))

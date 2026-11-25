@@ -551,7 +551,7 @@ class Controller(QObject):
     def _on_service(self, which: str) -> None:
         """Click on a service row: open its folder, or Settings when the service is off."""
         if which == "drive" and not self.settings.drive_enabled:
-            self.open_settings(page=2)
+            self.open_settings(page="drive")
         elif which == "notes":
             self.open_notes()
         elif which == "photos" and self.settings.photos_window and self.settings.apple_id and not auth.signed_out():
@@ -575,7 +575,7 @@ class Controller(QObject):
         from shiboken6 import isValid
 
         if not self.settings.notes_enabled:
-            self.open_settings(page=3)
+            self.open_settings(page="notes")
             return
         if auth.signed_out():
             self.open_login()  # the notes of whoever signed out aren't shown until someone signs in
@@ -768,10 +768,10 @@ class Controller(QObject):
         dlg._bring_forward()
         log.info("Sign-in window opened")
 
-    def open_settings(self, page: int = 0) -> None:
+    def open_settings(self, page: int | str = 0) -> None:
         dlg = SettingsDialog(self.settings, self.c, storage=getattr(self.worker, "_storage", None),
                              get_api=lambda: self.worker.api)
-        dlg.nav.setCurrentRow(page)
+        dlg.show_page(page)
         dlg.checkUpdates.connect(lambda: self.check_updates(True))
         opened_for = (self.settings.apple_id or "").lower()
 

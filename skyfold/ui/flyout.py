@@ -210,9 +210,10 @@ class StorageBar(QFrame):
     """iCloud storage: "88 of 200 GB", one thin bar split into Photos / Drive / Other, and a legend.
     Click (or Enter) for the details line. The only place in the panel that uses category colours."""
 
-    def __init__(self, palette: dict[str, str]) -> None:
+    def __init__(self, palette: dict[str, str], large: bool = False) -> None:
         super().__init__()
         self.c = palette
+        self.large = large  # (Settings) "74 GB of 200 GB used" as a heading, the free space on the right
         self.parts: list[tuple[str, int, str]] = []  # (label, bytes, colour key)
         self.used = self.total = 0
         self.setObjectName("Storage")  # its focus frame is in the style sheet (room for it kept)
@@ -243,6 +244,15 @@ class StorageBar(QFrame):
         self.details.setWordWrap(True)
         lay.addWidget(self.details)
         self.details.hide()
+        if large:
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(10)
+            self.title.setObjectName("StorageHead")
+            self.title.setTextFormat(Qt.RichText)
+            self.amount.setObjectName("SetSub")
+            self.bar.setFixedHeight(8)
+            self.setFocusPolicy(Qt.NoFocus)  # (nothing to open: everything is shown)
+            self.setCursor(Qt.ArrowCursor)
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette
@@ -261,12 +271,17 @@ class StorageBar(QFrame):
         size = storage_text
 
         self.amount.setText(t("{used} of {total}", used=size(self.used), total=size(self.total)))
+        heard = self.amount.text()
+        if self.large:
+            self.title.setText(f'<span style="font-size:15pt;font-weight:600">{size(self.used)}</span>&nbsp; '
+                               + t("of {total} used", total=size(self.total)))
+            self.amount.setText(t("{free} free", free=size(max(0, self.total - self.used))))
         self.legend.setText("&nbsp;&nbsp;&nbsp;&nbsp;".join(
             f'<span style="color:{self.c[key]};font-size:10pt">&#9679;</span>&nbsp;{label}&nbsp;<b>{size(n)}</b>'
             for label, n, key in self.parts if n))
         pct = round(100 * self.used / self.total) if self.total else 0
         self.details.setText(t("{pct}% used · {free} available", pct=pct, free=size(max(0, self.total - self.used))))
-        text = t("iCloud storage") + ": " + self.amount.text() + ". " + ", ".join(
+        text = t("iCloud storage") + ": " + heard + ". " + ", ".join(
             f"{label} {size(n)}" for label, n, _ in self.parts if n)
         self.setAccessibleName(text)
         self.setToolTip(self.details.text())
@@ -295,6 +310,8 @@ class StorageBar(QFrame):
         p.end()
 
     def _toggle(self) -> None:
+        if self.large:
+            return
         self.details.setVisible(not self.details.isVisible())
         top = self.window()
         if hasattr(top, "_size_list"):

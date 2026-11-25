@@ -217,6 +217,9 @@ def _label(text: str, name: str | None = None, wrap: bool = False) -> QLabel:
 
 
 class _Dialog(QDialog):
+    GLASS = False  # a window that shows Windows 11's Mica behind it (when Windows allows it)
+    MATERIAL = "mica"
+
     def __init__(self, title: str) -> None:
         # A normal top-level window: own taskbar button (so it can be minimised and found again),
         # and it goes behind other windows like any app instead of floating on top.
@@ -225,9 +228,58 @@ class _Dialog(QDialog):
         self.setWindowTitle(title)
         self.setWindowIcon(app_icon())
         self.setObjectName("Root")
+        self.glass = False
+        if self.GLASS:
+            from .backdrop import glass_supported
+
+            # Windows 11 with transparency effects on: the window's own material shows through it
+            # (the wallpaper's tint, as in Windows' own Settings); otherwise the theme's plain colour
+            self.glass = glass_supported()
+            if self.glass:
+                self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def _dark(self) -> bool:
+        return QColor(getattr(self, "c", {}).get("bg", "#202020")).lightness() < 128
+
+    def _material(self) -> None:
+        from .backdrop import apply_backdrop
+
+        apply_backdrop(self, self.MATERIAL, self._dark())
+        self._glass_style()
+
+    def _glass_style(self) -> None:
+        """Over the window's material: the background see-through, cards and the footer as light
+        layers over it (as in the tray panel)."""
+        if not self.glass:
+            return
+        from .backdrop import glass_colours
+
+        dark = self._dark()
+        g = glass_colours(self.c, dark)
+        sel = "rgba(255, 255, 255, 22)" if dark else "rgba(255, 255, 255, 235)"
+        hot = "rgba(255, 255, 255, 24)" if dark else "rgba(255, 255, 255, 235)"
+        sheet = (
+            "QDialog#Root, QWidget#Root, QWidget#NavPane, QStackedWidget, QScrollArea, QScrollArea > QWidget,"
+            " QScrollArea > QWidget > QWidget { background: transparent; }"
+            f"QWidget#Footer {{ background: {g['foot']}; border-top: 1px solid {g['stroke']}; }}"
+            f"QFrame#SetCard, QFrame#Card {{ background: {g['card']}; border: 1px solid {g['stroke']}; }}"
+            f"QFrame#SetCard[hot=\"true\"] {{ background: {hot}; }}"
+            "QListWidget#Nav { background: transparent; }"
+            f"QListWidget#Nav::item:hover {{ background: {g['hover']}; }}"
+            f"QListWidget#Nav::item:selected {{ background: {sel}; }}"
+            # controls as light layers too (the main button keeps its colour)
+            f"QPushButton, QComboBox, QLineEdit {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
+            f"QPushButton:hover, QComboBox:hover {{ background: {g['hover']}; }}"
+            f"QPushButton#Primary {{ background: {self.c['btn']}; border-color: {self.c['btn']}; }}"
+            f"QPushButton#Primary:hover {{ background: {self.c.get('btn_hover', self.c['btn'])}; }}")
+        if sheet != self.styleSheet():  # (setting it again would announce another change: a loop)
+            self.setStyleSheet(sheet)
 
     def showEvent(self, e) -> None:  # noqa: N802
         super().showEvent(e)
+        if self.glass:
+            self._material()
+            return
         from .backdrop import match_frame
 
         match_frame(self)  # the title bar in the window's own colours (dark theme: a dark title bar)
@@ -237,6 +289,10 @@ class _Dialog(QDialog):
         from PySide6.QtCore import QEvent
 
         if e.type() in (QEvent.PaletteChange, QEvent.StyleChange) and self.isVisible():
+            if self.glass:
+                if e.type() == QEvent.PaletteChange:
+                    self._material()  # (light or dark material, and the layers in the new colours)
+                return
             from .backdrop import match_frame
 
             match_frame(self)  # the theme changed while it was open
@@ -247,9 +303,10 @@ class Toggle(QCheckBox):
 
     PAD = 4  # room around the switch for the focus ring, so it is never clipped
 
-    def __init__(self, text: str, palette: dict[str, str]) -> None:
+    def __init__(self, text: str, palette: dict[str, str], state: bool = False) -> None:
         super().__init__(text)
         self.c = palette
+        self.state = state  # (a setting card) "On"/"Off" written left of the switch, as in Windows' Settings
         self.setMinimumHeight(30)
         self.setAttribute(Qt.WA_Hover)
 
@@ -258,6 +315,9 @@ class Toggle(QCheckBox):
 
     def sizeHint(self) -> QSize:  # noqa: N802
         fm = self.fontMetrics()
+        if self.state:
+            words = max(fm.horizontalAdvance(t("On")), fm.horizontalAdvance(t("Off")))
+            return QSize(40 + 12 + 2 * self.PAD + words, max(30, fm.height() + 8))
         return QSize(52 + 2 * self.PAD + fm.horizontalAdvance(self.text()), max(30, fm.height() + 8))
 
     def hitButton(self, pos) -> bool:  # noqa: N802
@@ -273,7 +333,7 @@ class Toggle(QCheckBox):
         y = (self.height() - h) / 2
         on = self.isChecked()
         hover = self.underMouse()
-        x = self.PAD
+        x = self.width() - self.PAD - w if self.state else self.PAD
         track = QRectF(x + 0.5, y + 0.5, w - 1, h - 1)
         if on:
             p.setPen(Qt.NoPen)
@@ -291,6 +351,10 @@ class Toggle(QCheckBox):
             p.setPen(QPen(QColor(c["accent"]), 2))
             p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(track.adjusted(-2.5, -2.5, 2.5, 2.5), h / 2 + 2, h / 2 + 2)
+        if self.state:
+            p.setPen(QColor(c.get("muted2", c["muted"])))
+            p.drawText(QRectF(0, 0, x - 12, self.height()), Qt.AlignVCenter | Qt.AlignRight, t("On") if on else t("Off"))
+            return
         p.setPen(QColor(c["text"]))
         p.drawText(QRectF(x + w + 12, 0, self.width() - x - w - 12, self.height()), Qt.AlignVCenter | Qt.AlignLeft, self.text())
 
@@ -356,6 +420,24 @@ class Spin(QLineEdit):
             return max(self.lo, min(self.hi, int(self.text())))
         except ValueError:
             return self.lo
+
+
+def _free_text(folder: str) -> str:
+    """'312 GB free on this drive' for a folder (or the nearest part of its path that exists)."""
+    import shutil
+
+    from ..ui_text import size_text
+
+    if not folder:
+        return ""
+    probe = Path(folder)
+    while not probe.exists() and probe.parent != probe:
+        probe = probe.parent
+    try:
+        free = shutil.disk_usage(probe).free
+    except OSError:
+        return ""
+    return t("{free} free on this drive", free=size_text(free))
 
 
 def _field(w: QLineEdit) -> QLineEdit:
@@ -635,11 +717,16 @@ def _nav_color(c: dict[str, str], glyph_name: str) -> str:
 
 
 class SettingsDialog(_Dialog):
-    """Left navigation (General · Photos · iCloud Drive · About) with one scrolling page each."""
+    """Left navigation (General · Syncing · Photos · iCloud Drive · Notes · Bookmarks · About) with one
+    page each, every option on its own card, as in Windows 11's Settings."""
+
+    GLASS = True
 
     signOut = Signal()
     restoreExcluded = Signal()
     checkUpdates = Signal()
+
+    PAGES = ("general", "sync", "photos", "drive", "notes", "bookmarks", "about")
 
     def __init__(self, settings: Settings, palette: dict[str, str], storage: dict | None = None,
                  get_api=None) -> None:
@@ -653,7 +740,7 @@ class SettingsDialog(_Dialog):
         self.c = palette
         self.reset_state = False
         self.reset_drive = False
-        self.resize(*_fit_screen(680, 540))
+        self.resize(*_fit_screen(900, 640))
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -662,19 +749,22 @@ class SettingsDialog(_Dialog):
         main.setSpacing(0)
         outer.addLayout(main, 1)
 
+        # the sidebar, as in Windows' Settings: who you are at the top, then the pages
         nav_pane = QWidget()
         nav_pane.setObjectName("NavPane")
         nav_pane.setAttribute(Qt.WA_StyledBackground, True)
-        nav_pane.setFixedWidth(168)
+        nav_pane.setFixedWidth(244)
         nl = QVBoxLayout(nav_pane)
-        nl.setContentsMargins(9, 16, 9, 12)
-        nl.setSpacing(10)
-        title = _label(t("Settings"), "Title")
-        title.setContentsMargins(8, 0, 0, 0)
-        nl.addWidget(title)
+        nl.setContentsMargins(8, 12, 8, 12)
+        nl.setSpacing(4)
+        nl.addWidget(self._who())
+        from .settings_parts import NavDelegate
+
         self.nav = QListWidget()
         self.nav.setObjectName("Nav")
         self.nav.setIconSize(QSize(18, 18))
+        self.nav.setItemDelegate(NavDelegate(self))
+        self.nav.setAccessibleName(t("Settings"))
         nl.addWidget(self.nav, 1)
         main.addWidget(nav_pane)
 
@@ -683,6 +773,7 @@ class SettingsDialog(_Dialog):
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
 
         self._build_general()
+        self._build_sync()
         self._build_photos()
         self._build_drive()
         self._build_notes()
@@ -707,9 +798,14 @@ class SettingsDialog(_Dialog):
         outer.addWidget(footer)
         self._fit_to_pages(nav_pane, footer)
 
+    def show_page(self, page: int | str) -> None:
+        """Open on a page, by its number or its name in PAGES ("drive", "notes"…)."""
+        index = self.PAGES.index(page) if isinstance(page, str) else int(page)
+        self.nav.setCurrentRow(max(0, min(index, self.nav.count() - 1)))
+
     def _fit_to_pages(self, nav_pane: QWidget, footer: QWidget) -> None:
         """Opens big enough for the longest page, so nothing needs scrolling (as far as the screen allows)."""
-        need_w, need_h = 680, 540
+        need_w, need_h = 900, 640
         for i in range(self.stack.count()):
             page = self.stack.widget(i)
             body = page.widget() if isinstance(page, QScrollArea) else page
@@ -722,6 +818,8 @@ class SettingsDialog(_Dialog):
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette
+        if self.glass and self.isVisible():
+            self._material()
         for i in range(self.nav.count()):
             item = self.nav.item(i)
             name = item.data(Qt.UserRole)
@@ -729,6 +827,30 @@ class SettingsDialog(_Dialog):
                 item.setIcon(glyph(name, _nav_color(palette, name)))
 
     # page helpers ---------------------------------------------------------------------
+    def _who(self) -> QWidget:
+        """The Apple ID at the top of the sidebar, with a round letter as its picture."""
+        from .settings_parts import Avatar, ElidedLabel
+
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(8, 4, 8, 14)
+        row.setSpacing(12)
+        who = self.s.apple_id or ""
+        row.addWidget(Avatar(who or "?", 40), 0, Qt.AlignVCenter)
+        col = QVBoxLayout()
+        col.setSpacing(0)
+        name = ElidedLabel(who or t("Not signed in"))
+        name.setObjectName("WhoName")
+        col.addWidget(name)
+        sub = "iCloud"
+        if self.storage.get("total"):
+            from .flyout import storage_text
+
+            sub = t("iCloud · {size}", size=storage_text(self.storage["total"]))  # (as the storage bar says it)
+        col.addWidget(_label(sub, "WhoSub"))
+        row.addLayout(col, 1)
+        return box
+
     def _page(self, name: str, glyph_name: str) -> QVBoxLayout:
         item = QListWidgetItem(glyph(glyph_name, _nav_color(self.c, glyph_name)), name)
         item.setData(Qt.UserRole, glyph_name)  # drawn again in the new colour when the theme changes
@@ -739,61 +861,148 @@ class SettingsDialog(_Dialog):
         body = QWidget()
         body.setObjectName("Root")
         lay = QVBoxLayout(body)
-        lay.setContentsMargins(22, 18, 22, 16)
-        lay.setSpacing(8)
+        lay.setContentsMargins(16, 6, 28, 18)
+        lay.setSpacing(16)
+        lay.addWidget(_label(name, "PageTitle"))  # a large page title, as in Windows' Settings
         scroll.setWidget(body)
         self.stack.addWidget(scroll)
         return lay
 
-    def _card(self, parent: QVBoxLayout, title: str) -> QVBoxLayout:
-        parent.addSpacing(8)
-        parent.addWidget(_label(title, "Section"))
-        card = QFrame()
-        card.setObjectName("Card")
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(14, 12, 14, 12)
-        lay.setSpacing(8)
-        parent.addWidget(card)
+    @staticmethod
+    def _group(parent: QVBoxLayout, title: str | None = None) -> QVBoxLayout:
+        """A group of setting cards under a short title; returns the layout the cards go in (its
+        widget, layout.parentWidget(), turns the whole group on and off)."""
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        if title:
+            lbl = _label(title, "GroupLabel")
+            lbl.setContentsMargins(2, 0, 0, 4)
+            lay.addWidget(lbl)
+        parent.addWidget(box)
         return lay
 
+    def _setting(self, group: QVBoxLayout, icon, title, sub=None, control: QWidget | None = None) -> QFrame:
+        """One setting as one card: its icon, its name, a line that explains it and its control on
+        the right. icon: an icon name or a widget; title/sub: text or a label."""
+        from .settings_parts import IconLabel
+
+        card = QFrame()
+        card.setObjectName("SetCard")
+        card.setMinimumHeight(60 if sub else 52)  # (one line: a lower card, as in Windows' Settings)
+        row = QHBoxLayout(card)
+        row.setContentsMargins(16, 9, 16, 9)
+        row.setSpacing(16)
+        row.addWidget(icon if isinstance(icon, QWidget) else IconLabel(icon, self.c, 20), 0, Qt.AlignVCenter)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        name = title if isinstance(title, QLabel) else _label(title, "SetTitle", True)
+        col.addWidget(name)
+        if sub:
+            col.addWidget(sub if isinstance(sub, QLabel) else _label(sub, "SetSub", True))
+        row.addLayout(col, 1)
+        if control is not None:
+            if not control.accessibleName():
+                control.setAccessibleName(name.text())  # the card's name names the control (screen readers)
+            name.setBuddy(control)
+            row.addWidget(control, 0, Qt.AlignVCenter)
+        group.addWidget(card)
+        card.title_label = name
+        return card
+
+    def _switch(self, value: bool) -> Toggle:
+        sw = Toggle("", self.c, state=True)
+        sw.setChecked(value)
+        sw.setCursor(Qt.PointingHandCursor)
+        return sw
+
     @staticmethod
-    def _row(text: str, w: QWidget) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(12)
-        label = QLabel(text)
-        label.setBuddy(w)  # the label names the control (screen readers, Alt+letter)
-        if not w.accessibleName():
-            w.setAccessibleName(text)
-        row.addWidget(label, 1, Qt.AlignVCenter)
-        w.setFixedWidth(250)  # (room for "Automatic (recommended)" and its Bosnian text)
-        row.addWidget(w, 0, Qt.AlignVCenter)
-        return row
+    def _wide(w: QWidget) -> QWidget:
+        w.setFixedWidth(230)  # (room for "Automatic (recommended)" and its Bosnian text)
+        return w
 
-    def _toggle(self, parent: QVBoxLayout, text: str, value: bool) -> Toggle:
-        cb = Toggle(text, self.c)
-        cb.setChecked(value)
-        cb.setCursor(Qt.PointingHandCursor)
-        parent.addWidget(cb)
-        return cb
+    def _info(self, group: QVBoxLayout, lines, icon: str = "info") -> QFrame:
+        """A card of things worth knowing: an icon and a few short lines."""
+        from .settings_parts import IconLabel
 
-    @staticmethod
-    def _hint(parent: QVBoxLayout, text: str) -> QLabel:
-        lbl = _label(text, "Hint", True)
-        lbl.setContentsMargins(56, 0, 0, 2)  # lines up with the toggle's text (Toggle.PAD + 52)
-        parent.addWidget(lbl)
-        return lbl
+        card = QFrame()
+        card.setObjectName("SetCard")
+        row = QHBoxLayout(card)
+        row.setContentsMargins(16, 13, 16, 13)
+        row.setSpacing(16)
+        row.addWidget(IconLabel(icon, self.c, 20), 0, Qt.AlignTop)
+        col = QVBoxLayout()
+        col.setSpacing(7)
+        lines = list(lines)
+        for line in lines:
+            col.addWidget(_label(("•  " + line) if len(lines) > 1 else line, "InfoLine", True))
+        row.addLayout(col, 1)
+        group.addWidget(card)
+        return card
 
-    def _folder_row(self, parent: QVBoxLayout, value: str, title: str) -> QLineEdit:
-        row = QHBoxLayout()
-        row.setSpacing(8)
+    def _link_card(self, group: QVBoxLayout, icon: str, title: str, sub: str | None, action) -> QFrame:
+        """A card that does something when clicked, with a chevron on the right."""
+        from .settings_parts import ClickCard, IconLabel
+
+        card = ClickCard()
+        card.setMinimumHeight(56)
+        card.setAccessibleName(title)
+        row = QHBoxLayout(card)
+        row.setContentsMargins(16, 10, 14, 10)
+        row.setSpacing(16)
+        row.addWidget(IconLabel(icon, self.c, 20), 0, Qt.AlignVCenter)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        col.addWidget(_label(title, "SetTitle", True))
+        if sub:
+            col.addWidget(_label(sub, "SetSub", True))
+        row.addLayout(col, 1)
+        row.addWidget(IconLabel("chevron", self.c, 16), 0, Qt.AlignVCenter)
+        card.clicked.connect(action)
+        group.addWidget(card)
+        return card
+
+    def _service_head(self, lay: QVBoxLayout, glyph_name: str, title: str, sub: str, value: bool) -> Toggle:
+        """The card at the top of a service's page: its coloured tile, what it does, and the switch."""
+        from .glow import GlowTile
+        from .theme import service_color
+
+        tile = GlowTile(glyph_name, self.c, service_color(self.c, glyph_name) or self.c["accent"],
+                        size=36, icon=19, radius=9)
+        sw = self._switch(value)
+        card = self._setting(lay, tile, title, sub, sw)
+        card.setMinimumHeight(72)
+        card.title_label.setObjectName("SetHead")
+        return sw
+
+    def _folder_card(self, group: QVBoxLayout, value: str, title: str, sub: str | None = None,
+                     icon: str = "folder") -> QLineEdit:
+        """A folder as a card: the path as its name (shortened in the middle when long), the free space
+        on its drive below, and Change… on the right. Returns the field that holds the path."""
+        from .settings_parts import ElidedLabel
+
         edit = _field(QLineEdit(value))
+        edit.setAccessibleName(title)
+        path = ElidedLabel(value)
+        path.setObjectName("SetTitle")
+        below = _label(sub or "", "SetSub", True)
         browse = QPushButton(t("Change…"))
+        browse.setCursor(Qt.PointingHandCursor)
+        browse.setAccessibleName(title)  # every "Change…" looks the same: a screen reader says which folder
         browse.clicked.connect(lambda: self._browse(edit, title))
-        edit.setAccessibleName(title)  # every "Change…" looks the same: a screen reader says which folder
-        browse.setAccessibleName(title)
-        row.addWidget(edit, 1)
-        row.addWidget(browse)
-        parent.addLayout(row)
+        card = self._setting(group, icon, path, below, browse)
+        edit.setParent(card)
+        edit.hide()  # (the path is shown by the card; Change… picks another)
+
+        def show(text: str) -> None:
+            path.setText(text)
+            if sub is None:
+                below.setText(_free_text(text))
+                below.setVisible(bool(below.text()))
+
+        edit.textChanged.connect(show)
+        show(value)
         return edit
 
     def _browse(self, edit: QLineEdit, title: str) -> None:
@@ -804,227 +1013,212 @@ class SettingsDialog(_Dialog):
     # pages ------------------------------------------------------------------------------
     def _build_general(self) -> None:
         lay = self._page(t("General"), "gear")
-        acc = self._card(lay, t("ACCOUNT"))
-        row = QHBoxLayout()
-        who = QVBoxLayout()
-        who.setSpacing(2)
-        from PySide6.QtGui import QFontMetrics
-
-        ident = _label(self.s.apple_id or t("Not signed in"), "H2")
-        ident.setText(QFontMetrics(ident.font()).elidedText(ident.text(), Qt.ElideMiddle, 300))
-        ident.setToolTip(self.s.apple_id or "")
-        ident.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        ident.setMinimumWidth(0)
-        who.addWidget(ident)
-        who.addWidget(_label("iCloud", "Muted"))
-        row.addLayout(who, 1)
-        out = QPushButton(t("Sign out"))
-        out.setObjectName("Danger")
-        out.setEnabled(bool(self.s.apple_id))
-        out.clicked.connect(self._sign_out)
-        row.addWidget(out, 0, Qt.AlignVCenter)
-        acc.addLayout(row)
         if self.storage.get("total"):  # the same storage bar as in the panel
             from .flyout import StorageBar
 
-            sep = QFrame()
-            sep.setObjectName("Sep")
-            acc.addWidget(sep)
-            bar = StorageBar(self.c)
+            card = QFrame()
+            card.setObjectName("SetCard")
+            v = QVBoxLayout(card)
+            v.setContentsMargins(18, 14, 18, 16)
+            bar = StorageBar(self.c, large=True)
             bar.set(self.storage.get("used", 0), self.storage["total"], list(self.storage.get("parts", [])))
-            bar.details.show()
-            acc.addWidget(bar)
+            v.addWidget(bar)
+            lay.addWidget(card)
 
-        sync = self._card(lay, t("SYNC"))
-        self.poll = Combo()
-        for m in POLL_PRESETS:
-            self.poll.addItem(t("{n} min", n=m), m)
-        idx = min(range(len(POLL_PRESETS)), key=lambda i: abs(POLL_PRESETS[i] - self.s.poll_minutes))
-        self.poll.setCurrentIndex(idx)
-        sync.addLayout(self._row(t("Check iCloud every"), self.poll))
-        sync.addWidget(_label(t("Apple doesn't notify apps about changes, so iCloud is checked at intervals. Each check only "
-                                "reads what changed; the whole library is compared once a day."), "Hint", True))
-        self.limit = Combo()
-        for mb in (0, 1, 2, 5, 10, 20, 50):
-            self.limit.addItem(t("No limit") if not mb else t("{n} MB/s", n=mb), mb)
-        self.limit.setCurrentIndex(max(0, self.limit.findData(self.s.speed_limit_mb)))
-        sync.addLayout(self._row(t("Download speed limit"), self.limit))
-        sync.addWidget(_label(t("Keeps some of your connection free while Skyfold downloads, for example during "
-                                "video calls."), "Hint", True))
-        self.upbuf = Combo()
-        self.upbuf.addItem(t("Automatic (recommended)"), 0)
-        self.upbuf.addItem(t("Fixed 8 MB"), 8)
-        self.upbuf.setCurrentIndex(max(0, self.upbuf.findData(self.s.upload_buffer_mb)))
-        sync.addLayout(self._row(t("Upload send buffer"), self.upbuf))
-        self.threshold = Spin(1, 10000, self.s.delete_threshold)
-        sync.addLayout(self._row(t("Ask before deleting more than"), self.threshold))
-        self.instant = self._toggle(sync, t("Send deletions on this PC right away (watch the folder)"),
-                                    self.s.instant_local_deletes)
-
-        sysc = self._card(lay, t("SYSTEM"))
-        self.autostart = self._toggle(sysc, t("Start with Windows"), starts_with_windows(self.s.start_with_windows))
+        win = self._group(lay, t("Windows"))
+        self.autostart = self._switch(starts_with_windows(self.s.start_with_windows))
+        self._setting(win, "power", t("Start with Windows"), t("Skyfold waits quietly in the system tray."),
+                      self.autostart)
         self.notif = Combo()
         self.notif.addItem(t("Skyfold's own"), "skyfold")
         self.notif.addItem(t("Windows' own"), "windows")
         self.notif.addItem(t("Off"), "off")
         self.notif.setCurrentIndex(max(0, self.notif.findData(
             self.s.notification_style if self.s.notifications else "off")))
-        sysc.addLayout(self._row(t("Notifications"), self.notif))
-        sysc.addWidget(_label(t("Skyfold's own notifications follow the app's theme and stay away while Do Not Disturb "
-                                "is on or a program runs full screen."), "Hint", True))
-        self.updates = self._toggle(sysc, t("Check for new versions of Skyfold"), self.s.check_updates)
-        self.lang = Combo()
-        for code, name in LANGUAGES.items():
-            self.lang.addItem(name, code)
-        self.lang.setCurrentIndex(list(LANGUAGES).index(self.s.language) if self.s.language in LANGUAGES else 0)
-        sysc.addLayout(self._row(t("Language"), self.lang))
+        self._setting(win, "bell", t("Notifications"),
+                      t("Skyfold's own notifications follow the app's theme and stay away while Do Not Disturb "
+                        "is on or a program runs full screen."), self._wide(self.notif))
         from .theme import THEMES
 
         self.theme = Combo()
         for code, name in THEMES.items():
             self.theme.addItem(t(name), code)
         self.theme.setCurrentIndex(list(THEMES).index(self.s.theme) if self.s.theme in THEMES else 0)
-        sysc.addLayout(self._row(t("Theme"), self.theme))
+        self._setting(win, "palette", t("Theme"), t("Follows Windows, or always light, dark or OLED."),
+                      self._wide(self.theme))
+        self.lang = Combo()
+        for code, name in LANGUAGES.items():
+            self.lang.addItem(name, code)
+        self.lang.setCurrentIndex(list(LANGUAGES).index(self.s.language) if self.s.language in LANGUAGES else 0)
+        self._setting(win, "globe", t("Language"), None, self._wide(self.lang))
+        self.updates = self._switch(self.s.check_updates)
+        self._setting(win, "download", t("Check for new versions of Skyfold"), None, self.updates)
+
+        acc = self._group(lay, t("Account"))
+        out = QPushButton(t("Sign out"))
+        out.setObjectName("Danger")
+        out.setEnabled(bool(self.s.apple_id))
+        out.clicked.connect(self._sign_out)
+        self._setting(acc, "cloud", t("Sign out"),
+                      t("Forgets this PC's sign-in to iCloud. Your files stay where they are."), out)
+        lay.addStretch(1)
+
+    def _build_sync(self) -> None:
+        lay = self._page(t("Syncing"), "sync")
+        chk = self._group(lay, t("Checking and speed"))
+        self.poll = Combo()
+        for m in POLL_PRESETS:
+            self.poll.addItem(t("{n} min", n=m), m)
+        idx = min(range(len(POLL_PRESETS)), key=lambda i: abs(POLL_PRESETS[i] - self.s.poll_minutes))
+        self.poll.setCurrentIndex(idx)
+        self._setting(chk, "clock", t("Check iCloud every"),
+                      t("Apple doesn't notify apps about changes, so iCloud is checked at intervals. Each check only "
+                        "reads what changed; the whole library is compared once a day."), self._wide(self.poll))
+        self.limit = Combo()
+        for mb in (0, 1, 2, 5, 10, 20, 50):
+            self.limit.addItem(t("No limit") if not mb else t("{n} MB/s", n=mb), mb)
+        self.limit.setCurrentIndex(max(0, self.limit.findData(self.s.speed_limit_mb)))
+        self._setting(chk, "speed", t("Download speed limit"),
+                      t("Keeps some of your connection free while Skyfold downloads, for example during "
+                        "video calls."), self._wide(self.limit))
+        self.upbuf = Combo()
+        self.upbuf.addItem(t("Automatic (recommended)"), 0)
+        self.upbuf.addItem(t("Fixed 8 MB"), 8)
+        self.upbuf.setCurrentIndex(max(0, self.upbuf.findData(self.s.upload_buffer_mb)))
+        self._setting(chk, "upload", t("Upload send buffer"), None, self._wide(self.upbuf))
+
+        dele = self._group(lay, t("Deleting"))
+        self.threshold = Spin(1, 10000, self.s.delete_threshold)
+        self.threshold.setFixedWidth(110)
+        self._setting(dele, "shield", t("Ask before deleting more than"), t("Larger deletions wait for your OK."),
+                      self.threshold)
+        self.instant = self._switch(self.s.instant_local_deletes)
+        self._setting(dele, "trash", t("Send deletions on this PC right away (watch the folder)"),
+                      t("Otherwise they are sent with the next check."), self.instant)
         lay.addStretch(1)
 
     def _build_photos(self) -> None:
         lay = self._page(t("Photos"), "photo")
-        fold = self._card(lay, t("PHOTOS FOLDER"))
-        self.dir = self._folder_row(fold, self.s.photos_dir, t("Choose a folder for photos"))
+        fold = self._group(lay, t("Photos folder"))
+        self.dir = self._folder_card(fold, self.s.photos_dir, t("Choose a folder for photos"))
         self.structure = Combo()
         for key, label in FOLDER_STRUCTURES.items():
             self.structure.addItem(t(label), key)
         self.structure.setCurrentIndex(list(FOLDER_STRUCTURES).index(self.s.folder_structure))
-        fold.addLayout(self._row(t("Layout"), self.structure))
-        fold.addWidget(_label(t("The layout applies to new photos; existing ones stay where they are."), "Hint", True))
+        self._setting(fold, "layout", t("Layout"), t("The layout applies to new photos; existing ones stay where they are."),
+                      self._wide(self.structure))
 
-        media = self._card(lay, t("DOWNLOAD"))
-        self.videos = self._toggle(media, t("Download videos"), self.s.include_videos)
-        self.live = self._toggle(media, t("Download the video part of Live Photos (.MOV)"), self.s.include_live_video)
-        self.albums = self._toggle(media, t("Show albums as folders (Albums\\…)"), self.s.albums_as_folders)
-        self.upload = self._toggle(media, t("Upload photos and videos I add to this folder to iCloud Photos"),
-                                   self.s.photos_upload)
-        self._hint(media, t("Album folders use no extra disk space. They mirror iCloud; deleting there doesn't delete photos."))
+        view = self._group(lay, t("Photos window"))
+        self.photos_window = self._switch(self.s.photos_window)
+        self._setting(view, "window", t("Open the Photos window when I click Photos"),
+                      t("Off: a click on Photos opens the photos folder in File Explorer instead."), self.photos_window)
 
-        view = self._card(lay, t("PHOTOS WINDOW"))
-        self.photos_window = self._toggle(view, t("Open the Photos window when I click Photos"), self.s.photos_window)
-        self._hint(view, t("Off: a click on Photos opens the photos folder in File Explorer instead."))
+        media = self._group(lay, t("Downloading"))
+        self.videos = self._switch(self.s.include_videos)
+        self._setting(media, "download", t("Download videos"), None, self.videos)
+        self.live = self._switch(self.s.include_live_video)
+        self._setting(media, "download", t("Download the video part of Live Photos (.MOV)"), None, self.live)
+        self.albums = self._switch(self.s.albums_as_folders)
+        self._setting(media, "folder", t("Show albums as folders (Albums\\…)"),
+                      t("Album folders use no extra disk space. They mirror iCloud; deleting there doesn't delete photos."),
+                      self.albums)
+        self.upload = self._switch(self.s.photos_upload)
+        self._setting(media, "upload", t("Upload photos and videos I add to this folder to iCloud Photos"), None,
+                      self.upload)
 
-        dele = self._card(lay, t("DELETING"))
-        self.del_pc = self._toggle(dele, t("Deleted on the phone → delete on this PC too"), self.s.delete_cloud_to_pc)
-        self._hint(dele, t("The file goes to the Recycle Bin, where it can be restored."))
-        self.del_cloud = self._toggle(dele, t("Deleted on this PC → delete in iCloud too"), self.s.delete_pc_to_cloud)
-        self._hint(dele, t("The photo goes to 'Recently Deleted' on the phone and can be restored for 30 days."))
-        restore = QPushButton(t("Bring back photos I deleted only on this PC"))
-        restore.setObjectName("Link")
-        restore.setCursor(Qt.PointingHandCursor)
-        restore.setToolTip(t("Downloads again the photos deleted on this PC while deleting in iCloud was off."))
-        restore.clicked.connect(self._restore_excluded)
-        dele.addWidget(restore, 0, Qt.AlignLeft)
+        dele = self._group(lay, t("Deleting"))
+        self.del_pc = self._switch(self.s.delete_cloud_to_pc)
+        self._setting(dele, "trash", t("Deleted on the phone → delete on this PC too"),
+                      t("The file goes to the Recycle Bin, where it can be restored."), self.del_pc)
+        self.del_cloud = self._switch(self.s.delete_pc_to_cloud)
+        self._setting(dele, "trash", t("Deleted on this PC → delete in iCloud too"),
+                      t("The photo goes to 'Recently Deleted' on the phone and can be restored for 30 days."),
+                      self.del_cloud)
+        self._link_card(dele, "download", t("Bring back photos I deleted only on this PC"),
+                        t("Downloads again the photos deleted on this PC while deleting in iCloud was off."),
+                        self._restore_excluded)
         lay.addStretch(1)
 
     def _build_drive(self) -> None:
         lay = self._page(t("iCloud Drive"), "folder")
-        head = QHBoxLayout()
-        head.addWidget(_label(t("iCloud Drive"), "H2"), 1)
-        self.drive_on = Toggle(t("Enabled"), self.c)
-        self.drive_on.setChecked(self.s.drive_enabled)
-        self.drive_on.setCursor(Qt.PointingHandCursor)
-        head.addWidget(self.drive_on)
-        lay.addLayout(head)
-        lay.addWidget(_label(t("Keeps a folder on this PC and your iCloud Drive the same, in both directions."),
-                             "Muted", True))
+        self.drive_on = self._service_head(
+            lay, "folder", t("iCloud Drive"),
+            t("Keeps a folder on this PC and your iCloud Drive the same, in both directions."), self.s.drive_enabled)
 
-        self.drive_cards: list[QFrame] = []
-        fold = self._card(lay, t("DRIVE FOLDER"))
+        self.drive_cards: list[QWidget] = []
+        fold = self._group(lay, t("Drive folder"))
         self.drive_cards.append(fold.parentWidget())
-        self.drive_dir = self._folder_row(fold, self.s.drive_dir, t("Choose a folder for iCloud Drive"))
-        fold.addWidget(_label(t("Files are downloaded to this PC; there are no online-only placeholders."),
-                              "Hint", True))
+        self.drive_dir = self._folder_card(fold, self.s.drive_dir, t("Choose a folder for iCloud Drive"))
 
-        which = self._card(lay, t("FOLDERS"))
+        which = self._group(lay, t("Folders"))
         self.drive_cards.append(which.parentWidget())
-        row = QHBoxLayout()
-        self.folders_text = _label("", None, True)
-        row.addWidget(self.folders_text, 1)
+        self.folders_text = _label("", "SetTitle", True)
         choose = QPushButton(t("Choose folders…"))
         choose.setCursor(Qt.PointingHandCursor)
         choose.clicked.connect(self._choose_folders)
-        row.addWidget(choose)
-        which.addLayout(row)
-        which.addWidget(_label(t("Folders you leave out stay in iCloud untouched and aren't downloaded."), "Hint", True))
+        self._setting(which, "sliders", self.folders_text,
+                      t("Folders you leave out stay in iCloud untouched and aren't downloaded."), choose)
         self._show_folders()
 
-        dele = self._card(lay, t("DELETING"))
+        dele = self._group(lay, t("Deleting"))
         self.drive_cards.append(dele.parentWidget())
-        self.drive_del_pc = self._toggle(dele, t("Deleted in iCloud → delete on this PC too"),
-                                         self.s.drive_delete_cloud_to_pc)
-        self._hint(dele, t("The file goes to the Recycle Bin, where it can be restored."))
-        self.drive_del_cloud = self._toggle(dele, t("Deleted on this PC → delete in iCloud too"),
-                                            self.s.drive_delete_pc_to_cloud)
-        self._hint(dele, t("The file goes to 'Recently Deleted' in iCloud Drive and can be restored for 30 days."))
+        self.drive_del_pc = self._switch(self.s.drive_delete_cloud_to_pc)
+        self._setting(dele, "trash", t("Deleted in iCloud → delete on this PC too"),
+                      t("The file goes to the Recycle Bin, where it can be restored."), self.drive_del_pc)
+        self.drive_del_cloud = self._switch(self.s.drive_delete_pc_to_cloud)
+        self._setting(dele, "trash", t("Deleted on this PC → delete in iCloud too"),
+                      t("The file goes to 'Recently Deleted' in iCloud Drive and can be restored for 30 days."),
+                      self.drive_del_cloud)
 
-        info = self._card(lay, t("GOOD TO KNOW"))
+        info = self._group(lay, t("Good to know"))
         self.drive_cards.append(info.parentWidget())
-        for line in (t("When a file changed on both sides, both versions are kept; the PC one gets "
-                       "\"(PC conflict …)\" in its name."),
-                     t("Renamed or moved files and folders are renamed or moved on the other side too.")):
-            info.addWidget(_label("•  " + line, "Muted", True))
+        self._info(info, (t("Files are downloaded to this PC; there are no online-only placeholders."),
+                          t("When a file changed on both sides, both versions are kept; the PC one gets "
+                            "\"(PC conflict …)\" in its name."),
+                          t("Renamed or moved files and folders are renamed or moved on the other side too.")))
         lay.addStretch(1)
         self.drive_on.toggled.connect(self._drive_enabled_changed)
         self._drive_enabled_changed(self.drive_on.isChecked())
 
     def _build_notes(self) -> None:
         lay = self._page(t("Notes"), "note")
-        head = QHBoxLayout()
-        head.addWidget(_label(t("Apple Notes"), "H2"), 1)
-        self.notes_on = Toggle(t("Enabled"), self.c)
-        self.notes_on.setChecked(self.s.notes_enabled)
-        self.notes_on.setCursor(Qt.PointingHandCursor)
-        head.addWidget(self.notes_on)
-        lay.addLayout(head)
-        lay.addWidget(_label(t("Keeps a copy of all your notes on this PC as web pages, updated automatically. "
-                               "Editing stays on your iPhone, iPad or Mac."), "Muted", True))
-        fold = self._card(lay, t("NOTES FOLDER"))
+        self.notes_on = self._service_head(
+            lay, "note", t("Apple Notes"),
+            t("Keeps a copy of all your notes on this PC as web pages, updated automatically. "
+              "Editing stays on your iPhone, iPad or Mac."), self.s.notes_enabled)
+        fold = self._group(lay, t("Notes folder"))
         self.notes_card = fold.parentWidget()
-        self.notes_dir = self._folder_row(fold, self.s.notes_dir, t("Choose a folder for your notes"))
-        fold.addWidget(_label(t("Click Notes in the panel to read and search your notes in Skyfold. Notes.html in "
-                                "that folder shows them in your web browser."), "Hint", True))
-        info = self._card(lay, t("GOOD TO KNOW"))
-        for line in (t("Each note is an HTML file with its pictures and attachments, in the same folders as in Notes."),
-                     t("Notes deleted on your devices are moved to the Recycle Bin here."),
-                     t("Locked notes can't be read; they are only listed.")):
-            info.addWidget(_label("•  " + line, "Muted", True))
+        self.notes_dir = self._folder_card(fold, self.s.notes_dir, t("Choose a folder for your notes"))
+        info = self._group(lay, t("Good to know"))
+        self._info(info, (t("Click Notes in the panel to read and search your notes in Skyfold. Notes.html in "
+                            "that folder shows them in your web browser."),
+                          t("Each note is an HTML file with its pictures and attachments, in the same folders as in Notes."),
+                          t("Notes deleted on your devices are moved to the Recycle Bin here."),
+                          t("Locked notes can't be read; they are only listed.")))
         lay.addStretch(1)
         self.notes_on.toggled.connect(self.notes_card.setEnabled)
         self.notes_card.setEnabled(self.notes_on.isChecked())
 
     def _build_bookmarks(self) -> None:
         lay = self._page(t("Bookmarks"), "bookmark")
-        head = QHBoxLayout()
-        head.addWidget(_label(t("Safari bookmarks"), "H2"), 1)
-        self.bookmarks_on = Toggle(t("Enabled"), self.c)
-        self.bookmarks_on.setChecked(self.s.bookmarks_enabled)
-        self.bookmarks_on.setCursor(Qt.PointingHandCursor)
-        head.addWidget(self.bookmarks_on)
-        lay.addLayout(head)
-        lay.addWidget(_label(t("Your Safari bookmarks from iPhone, iPad or Mac as a file that Firefox, Chrome and Edge "
-                               "can import, kept up to date. Read-only: nothing changes in iCloud."), "Muted", True))
-        fold = self._card(lay, t("BOOKMARKS FILE"))
+        self.bookmarks_on = self._service_head(
+            lay, "bookmark", t("Safari bookmarks"),
+            t("Your Safari bookmarks from iPhone, iPad or Mac as a file that Firefox, Chrome and Edge "
+              "can import, kept up to date. Read-only: nothing changes in iCloud."), self.s.bookmarks_enabled)
+        fold = self._group(lay, t("Bookmarks file"))
         self.bookmarks_card = fold.parentWidget()
-        self.bookmarks_dir = self._folder_row(fold, self.s.bookmarks_dir, t("Choose a folder for the bookmarks file"))
-        fold.addWidget(_label(t("Skyfold keeps \"Safari Bookmarks.html\" in this folder up to date: every 6 hours "
-                                "and when you click Sync now."), "Hint", True))
-        how = self._card(lay, t("IMPORT IT IN YOUR BROWSER"))
-        for line in (t("Firefox: Ctrl+Shift+O → Import and Backup → Import Bookmarks from HTML…"),
-                     t("Chrome or Edge: Bookmarks → Import bookmarks and settings → Bookmarks HTML file."),
-                     t("Your bookmarks appear in a \"Safari Bookmarks\" folder. Importing again adds a second "
-                       "copy, so delete the old folder first.")):
-            how.addWidget(_label("•  " + line, "Muted", True))
-        info = self._card(lay, t("GOOD TO KNOW"))
-        for line in (t("One-way: bookmarks you add in your browser don't go to Safari."),
-                     t("Deleted bookmarks, tab groups and the Reading List are left out.")):
-            info.addWidget(_label("•  " + line, "Muted", True))
+        self.bookmarks_dir = self._folder_card(
+            fold, self.s.bookmarks_dir, t("Choose a folder for the bookmarks file"),
+            t("Skyfold keeps \"Safari Bookmarks.html\" in this folder up to date: every 6 hours "
+              "and when you click Sync now."))
+        how = self._group(lay, t("Import it in your browser"))
+        self._info(how, (t("Firefox: Ctrl+Shift+O → Import and Backup → Import Bookmarks from HTML…"),
+                         t("Chrome or Edge: Bookmarks → Import bookmarks and settings → Bookmarks HTML file."),
+                         t("Your bookmarks appear in a \"Safari Bookmarks\" folder. Importing again adds a second "
+                           "copy, so delete the old folder first.")), icon="globe")
+        info = self._group(lay, t("Good to know"))
+        self._info(info, (t("One-way: bookmarks you add in your browser don't go to Safari."),
+                          t("Deleted bookmarks, tab groups and the Reading List are left out.")))
         lay.addStretch(1)
         self.bookmarks_on.toggled.connect(self.bookmarks_card.setEnabled)
         self.bookmarks_card.setEnabled(self.bookmarks_on.isChecked())
@@ -1161,37 +1355,37 @@ class SettingsDialog(_Dialog):
 
     def _build_about(self) -> None:
         lay = self._page(t("About"), "info")
-        row = QHBoxLayout()
-        row.setSpacing(14)
-        row.addWidget(_logo(40))
+        head = QFrame()
+        head.setObjectName("SetCard")
+        row = QHBoxLayout(head)
+        row.setContentsMargins(16, 14, 16, 14)
+        row.setSpacing(16)
+        row.addWidget(_logo(44))
         col = QVBoxLayout()
-        col.setSpacing(2)
-        col.addWidget(_label(APP_NAME, "Title"))
-        col.addWidget(_label(t("Version {version}", version=VERSION), "Muted"))
+        col.setSpacing(0)
+        col.addWidget(_label(APP_NAME, "SetHead"))
+        col.addWidget(_label(t("Version {version}", version=VERSION), "SetSub"))
         row.addLayout(col, 1)
         check = QPushButton(t("Check for updates"))
+        check.setCursor(Qt.PointingHandCursor)
         check.clicked.connect(self.checkUpdates)
         row.addWidget(check, 0, Qt.AlignVCenter)
-        lay.addLayout(row)
-        where = self._card(lay, t("WHERE YOUR DATA IS"))
-        where.addWidget(_label(t("Settings: the 'data' folder next to the app."), None, True))
-        where.addWidget(_label(t("Sign-in and sync database: {path}", path=PRIVATE_DIR), None, True))
+        lay.addWidget(head)
+
+        where = self._group(lay, t("Where your data is"))
+        lines = [t("Settings: the 'data' folder next to the app."),
+                 t("Sign-in and sync database: {path}", path=PRIVATE_DIR)]
         if APP_IN_CLOUD:
-            where.addWidget(_label(t("The app is in {service}, so the sign-in and database are kept only on this PC.",
-                                     service=APP_IN_CLOUD), "Hint", True))
-        links = self._card(lay, t("HELP"))
-        for text, url in ((t("Source code and bug reports (GitHub)"), "https://github.com/zoranmod/skyfold"),
-                          (t("License: GNU GPL v3"), "https://www.gnu.org/licenses/gpl-3.0.html")):
-            b = QPushButton(text)
-            b.setObjectName("Link")
-            b.setCursor(Qt.PointingHandCursor)
-            b.clicked.connect(lambda _=False, u=url: _open_url(u))
-            links.addWidget(b, 0, Qt.AlignLeft)
-        log_btn = QPushButton(t("Show the log file"))
-        log_btn.setObjectName("Link")
-        log_btn.setCursor(Qt.PointingHandCursor)
-        log_btn.clicked.connect(_show_log)
-        links.addWidget(log_btn, 0, Qt.AlignLeft)
+            lines.append(t("The app is in {service}, so the sign-in and database are kept only on this PC.",
+                           service=APP_IN_CLOUD))
+        self._info(where, lines, icon="device")
+
+        links = self._group(lay, t("Help"))
+        self._link_card(links, "globe", t("Source code and bug reports (GitHub)"), "github.com/zoranmod/skyfold",
+                        lambda: _open_url("https://github.com/zoranmod/skyfold"))
+        self._link_card(links, "file", t("License: GNU GPL v3"), "gnu.org/licenses/gpl-3.0",
+                        lambda: _open_url("https://www.gnu.org/licenses/gpl-3.0.html"))
+        self._link_card(links, "search", t("Show the log file"), None, _show_log)
         self._diagnostics(lay)
         lay.addWidget(_label(t("Skyfold is not made by Apple. It uses the same web services as iCloud.com."),
                              "Hint", True))
@@ -1202,22 +1396,39 @@ class SettingsDialog(_Dialog):
         from PySide6.QtCore import QTimer
 
         from .. import netdiag
+        from .settings_parts import IconLabel
 
-        card = self._card(lay, t("CONNECTION DIAGNOSTICS"))
-        card.addWidget(_label(t("For a bug report about syncing: records for {n} minutes what kind of "
-                                "request Skyfold sent to Apple and how Apple answered, never names, file "
-                                "names, addresses or passwords. The file stays on this PC until you "
-                                "attach it to a report.", n=netdiag.MINUTES), "Hint", True))
-        state = _label("", None, True)
-        card.addWidget(state)
+        group = self._group(lay, t("Connection diagnostics"))
+        card = QFrame()
+        card.setObjectName("SetCard")
+        outer = QVBoxLayout(card)
+        outer.setContentsMargins(16, 13, 16, 13)
+        outer.setSpacing(10)
+        top = QHBoxLayout()
+        top.setSpacing(16)
+        top.addWidget(IconLabel("sliders", self.c, 20), 0, Qt.AlignTop)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        state = _label("", "SetTitle", True)
+        col.addWidget(state)
+        col.addWidget(_label(t("For a bug report about syncing: records for {n} minutes what kind of "
+                               "request Skyfold sent to Apple and how Apple answered, never names, file "
+                               "names, addresses or passwords. The file stays on this PC until you "
+                               "attach it to a report.", n=netdiag.MINUTES), "SetSub", True))
+        top.addLayout(col, 1)
+        outer.addLayout(top)
         row = QHBoxLayout()
+        row.setContentsMargins(36, 0, 0, 0)
+        row.setSpacing(8)
         toggle = QPushButton()
         show = QPushButton(t("Show the file"))
         remove = QPushButton(t("Delete"))
         for b in (toggle, show, remove):
+            b.setCursor(Qt.PointingHandCursor)
             row.addWidget(b)
         row.addStretch(1)
-        card.addLayout(row)
+        outer.addLayout(row)
+        group.addWidget(card)
 
         def refresh() -> None:
             import time as _time

@@ -269,11 +269,12 @@ def test_settings_field_enter_starts_nothing(ui, tmp_path):
     d.accepted.connect(lambda: saved.append(True))
     d.signOut.connect(lambda: signed_out.append(True))
     d.show(); d.activateWindow(); app.processEvents()
-    # Select Photos with a real mouse click, then Enter in its unchanged folder field.
-    rect=d.nav.visualItemRect(d.nav.item(1))
+    # Select Syncing with a real mouse click, then Enter in its unchanged number field (1.1: folders
+    # are shown on cards and changed with Change…, so the fields left are numbers like this one).
+    rect=d.nav.visualItemRect(d.nav.item(d.PAGES.index("sync")))
     QTest.mouseClick(d.nav.viewport(), Qt.LeftButton, pos=rect.center())
-    QTest.mouseClick(d.dir, Qt.LeftButton)
-    assert app.focusWidget() is d.dir
+    QTest.mouseClick(d.threshold, Qt.LeftButton)
+    assert app.focusWidget() is d.threshold
     key(app, Qt.Key_Return)
     assert not saved and not signed_out and d.isVisible()
     d.reject()

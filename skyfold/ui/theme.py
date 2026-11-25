@@ -298,10 +298,23 @@ QProgressBar {{ background: {c['track']}; border: none; border-radius: 2px; min-
 QProgressBar::chunk {{ background: {c['accent']}; border-radius: 2px; }}
 QListWidget {{ background: transparent; border: none; outline: none; }}
 QListWidget::item {{ padding: 6px 4px; border-bottom: 1px solid {c['border']}; }}
-QListWidget#Nav {{ font-size: 9.75pt; }}
-QListWidget#Nav::item {{ border: none; border-radius: 6px; padding: 8px 10px; margin: 1px 0; color: {c['text']}; }}
+QListWidget#Nav {{ font-size: 10.5pt; }}
+QLabel#StorageHead {{ font-size: 10.5pt; color: {c['muted']}; }}
+QFrame#SetCard {{ background: {c['group']}; border: 1px solid {c['border']}; border-radius: 8px; }}
+QFrame#SetCard[hot="true"] {{ background: {c['surface2'] if c['bg'] != c['group'] else c['hover']}; border-color: {c['border']}; }}
+QLabel#PageTitle {{ font-family: "Segoe UI Variable Display","Segoe UI"; font-size: 20pt; font-weight: 600; padding-bottom: 2px; }}
+QLabel#GroupLabel {{ font-size: 10.5pt; font-weight: 600; }}
+QLabel#SetTitle {{ font-size: 10.5pt; font-weight: 600; }}
+QLabel#SetHead {{ font-family: "Segoe UI Variable Display","Segoe UI"; font-size: 11.5pt; font-weight: 600; }}
+QLabel#SetSub {{ font-size: 9.25pt; color: {c.get('muted2', c['muted'])}; }}
+QLabel#InfoLine {{ font-size: 9.75pt; color: {c['muted']}; }}
+QLabel#WhoName {{ font-size: 10.5pt; font-weight: 600; }}
+QLabel#WhoSub {{ font-size: 9pt; color: {c.get('muted2', c['muted'])}; }}
+QLabel#SetTitle:disabled, QLabel#SetHead:disabled, QLabel#GroupLabel:disabled, QLabel#SetSub:disabled,
+QLabel#InfoLine:disabled {{ color: {c['disabled']}; }}
+QListWidget#Nav::item {{ border: none; border-radius: 6px; padding: 0 12px; margin: 1px 0; color: {c['text']}; }}
 QListWidget#Nav::item:hover {{ background: {c['hover']}; }}
-QListWidget#Nav::item:selected {{ background: {c['tile']}; color: {c['text']}; }}
+QListWidget#Nav::item:selected {{ background: {c['surface'] if c['bg'] != c['surface'] else c['tile']}; color: {c['text']}; }}
 QScrollArea {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{ background: {c['border_strong']}; border-radius: 3px; min-height: 30px; margin: 0 2px; }}
