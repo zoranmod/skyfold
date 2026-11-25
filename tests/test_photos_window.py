@@ -485,3 +485,43 @@ def test_a_photo_that_cant_go_to_the_recycle_bin_is_kept_not_retried_forever(env
     res = syncer.run()
     assert res.errors == 0 and "r1" not in syncer.state.asset_ids()
     assert syncer.state.get("cursor") == remote.cursor()  # the change feed moves on
+
+
+def test_thumbnails_are_kept_at_about_the_size_shown_and_big_ones_never_push_out_the_grid(qapp):
+    from PySide6.QtGui import QImage
+
+    from skyfold.ui.photos_window import Thumbs
+
+    asked = []
+    th = Thumbs(SimpleNamespace(request=lambda key, path, size: asked.append((key, size))))
+    assert [th.bucket(px) for px in (40, 160, 161, 343, 400, 401, 2000)] == [160, 160, 240, 400, 400, 480, 640]
+    th.BUDGET = {False: 10 * 400 * 534 * 4, True: 2 * 640 * 854 * 4}
+    item = lambda n: SimpleNamespace(asset_id=f"A{n}", path=None)  # noqa: E731
+    for n in range(10):
+        th.put(f"A{n}", 400, QImage(3000, 4000, QImage.Format_RGB32))
+    assert all(th.get(item(n), 343) is not None for n in range(10))
+    assert th.get(item(0), 343).width() == 400  # not the 3000 pixels it came with
+    for n in range(10, 20):  # the viewer's neighbours, big
+        th.put(f"A{n}", 640, QImage(640, 854, QImage.Format_RGB32))
+    assert all(th.get(item(n), 343) is not None for n in range(10)) and not asked  # the grid stays
+    assert len(th.cache[True]) == 2
+
+
+def test_a_jpeg_thumbnail_comes_from_windows_stored_preview_first(tmp_path, qapp, monkeypatch):
+    from PySide6.QtGui import QImage
+
+    from skyfold.ui import photo_images as pi
+
+    p = tmp_path / "IMG_1.JPG"
+    _picture(p, 10)
+    calls = []
+
+    def shell(path, size, thumbnail=True):
+        calls.append(size)
+        return QImage(77, 55, QImage.Format_RGB32)
+
+    monkeypatch.setattr(pi, "shell_image", shell)
+    assert pi.load_image(p, 320).width() == 77 and calls == [512]
+    monkeypatch.setattr(pi, "shell_image", lambda *a, **k: QImage())  # thumbnails off: Qt reads it
+    assert pi.load_image(p, 320).size().width() == 64
+    assert pi.load_image(p, 0, full=True).width() == 64  # the viewer: the photo itself, as before

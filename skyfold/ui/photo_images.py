@@ -1,9 +1,11 @@
 """Pictures for the Photos window, made off the window's thread.
 
-Thumbnails and HEIC photos come from Windows itself (the same previews File Explorer shows, which
-Windows also keeps in its own thumbnail cache), so nothing is decoded by Skyfold and nothing extra
-is stored on disk. JPEG, PNG and the like are read by Qt. Without Windows' HEIF extension a HEIC
-photo simply has no picture; the window then says where to get it."""
+The grid's pictures come from Windows itself: the same previews File Explorer shows, which Windows
+keeps on disk in its own thumbnail cache. So a photo seen once comes back in a few milliseconds the
+next time (after the window was closed, or Skyfold restarted), and Skyfold stores nothing extra.
+A JPEG Windows has no preview for (thumbnails switched off, say) is read by Qt instead, as are PNG
+and the like. Without Windows' HEIF extension a HEIC photo simply has no picture; the window then
+says where to get it."""
 
 from __future__ import annotations
 
@@ -13,12 +15,13 @@ import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QSize, QThreadPool, Signal
+from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal
 from PySide6.QtGui import QImage, QImageReader
 
 log = logging.getLogger(__name__)
 
 QT_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
+SHELL_FIRST = {".jpg", ".jpeg"}  # Windows' stored preview first (no transparency to lose)
 FULL_SIZE = 2560  # a HEIC photo in the viewer: sharp on a 1440p screen, quick to make
 
 _com = threading.local()
@@ -107,7 +110,12 @@ def shell_image(path: Path, size: int, thumbnail: bool = True) -> QImage:
 def load_image(path: Path, size: int, full: bool = False) -> QImage:
     """A picture of the file whose shorter side is at least `size` (a thumbnail), or the photo itself
     up to FULL_SIZE (full=True). An empty QImage if there is none."""
-    if path.suffix.lower() in QT_FORMATS:
+    suffix = path.suffix.lower()
+    if not full and suffix in SHELL_FIRST:
+        img = shell_image(path, round(size * 1.6))  # Windows keeps it on disk: quick the next time
+        if not img.isNull():
+            return img
+    if suffix in QT_FORMATS:
         reader = QImageReader(str(path))
         reader.setAutoTransform(True)  # the camera's rotation
         src = reader.size()
@@ -128,6 +136,15 @@ def load_image(path: Path, size: int, full: bool = False) -> QImage:
     return shell_image(path, round(size * 1.6))  # (a fit, not a fill: a bit larger for square tiles)
 
 
+def fit_short_side(img: QImage, size: int) -> QImage:
+    """A thumbnail no bigger than needed: its shorter side about `size` (memory is the limit)."""
+    short = min(img.width(), img.height())
+    if img.isNull() or short <= size * 1.25:
+        return img
+    return img.scaled(max(1, img.width() * size // short), max(1, img.height() * size // short),
+                      Qt.IgnoreAspectRatio, Qt.SmoothTransformation)  # (the sizes keep it already)
+
+
 class _Job(QRunnable):
     def __init__(self, loader: "ImageLoader", key: str, path: Path, size: int, full: bool) -> None:
         super().__init__()
@@ -139,6 +156,8 @@ class _Job(QRunnable):
             return
         try:
             img = load_image(self.path, self.size, self.full)
+            if not self.full:
+                img = fit_short_side(img, self.size)  # here, not on the window's thread
         except Exception:  # noqa: BLE001
             log.debug("No picture for a photo", exc_info=True)
             img = QImage()

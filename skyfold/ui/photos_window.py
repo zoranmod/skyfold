@@ -29,7 +29,7 @@ from shiboken6 import isValid
 from .. import photo_library as lib
 from ..i18n import t
 from .dialogs import _Dialog
-from .photo_images import ImageLoader
+from .photo_images import ImageLoader, fit_short_side
 
 log = logging.getLogger(__name__)
 
@@ -111,52 +111,62 @@ class PhotoModel(QAbstractListModel):
 class Thumbs:
     """Pictures of the photos that are (or were just) on screen, kept in memory a while."""
 
-    BUDGET = 220 * 1024 * 1024  # bytes of pictures kept (the oldest go first)
+    # Bytes of pictures kept, the oldest going first. The grid's small pictures and the big ones (the
+    # viewer's neighbours, the Years and Months cards) are kept apart, so looking at a few big ones
+    # never pushes out the whole grid. Coming back to pictures already gone is quick all the same:
+    # Windows keeps its own previews on disk (see photo_images).
+    BUDGET = {False: 200 * 1024 * 1024, True: 100 * 1024 * 1024}  # big: True
+    STEP = 80  # pictures are made in sizes of 160, 240, … 640 pixels: never much more than shown
 
     def __init__(self, loader: ImageLoader) -> None:
         self.loader = loader
-        self.cache: OrderedDict[tuple[str, int], QPixmap] = OrderedDict()
-        self.used = 0
+        self.cache: dict[bool, OrderedDict[tuple[str, int], QPixmap]] = {False: OrderedDict(), True: OrderedDict()}
+        self.used = {False: 0, True: 0}
         self.missing: set[tuple[str, int]] = set()
         self.seen: set[str] = set()
 
+    @classmethod
+    def bucket(cls, px: float) -> int:
+        return max(160, min(640, -(-int(px) // cls.STEP) * cls.STEP))
+
     @staticmethod
-    def bucket(px: float) -> int:
-        return 160 if px <= 160 else 320 if px <= 320 else 640
+    def _big(size: int) -> bool:
+        return size > 400
 
     def get(self, it: lib.PhotoItem, px: float) -> QPixmap | None:
         b = self.bucket(px)
         key = (it.asset_id, b)
         self.seen.add(it.asset_id)
-        pm = self.cache.get(key)
+        pool = self.cache[self._big(b)]
+        pm = pool.get(key)
         if pm is not None:
-            self.cache.move_to_end(key)
+            pool.move_to_end(key)
             return pm
-        for other in (640, 320, 160):  # a sharper or rougher one meanwhile
-            if other != b and (it.asset_id, other) in self.cache:
-                pm = self.cache[(it.asset_id, other)]
-                break
+        best = None  # a sharper or rougher one meanwhile: the closest
+        for other in range(640, 159, -self.STEP):
+            got = self.cache[self._big(other)].get((it.asset_id, other))
+            if got is not None and (best is None or abs(other - b) < abs(best[0] - b)):
+                best = (other, got)
         if key not in self.missing:
             self.loader.request(it.asset_id, it.path, b)
-        return pm
+        return best[1] if best else None
 
     def put(self, key: str, size: int, img: QImage) -> None:
         if img.isNull():
             self.missing.add((key, size))
             return
-        short = min(img.width(), img.height())
-        if short > size * 1.25:
-            img = img.scaled(img.width() * size // short, img.height() * size // short,
-                             Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        old = self.cache.pop((key, size), None)
+        img = fit_short_side(img, size)  # (already done by the loader; kept for pictures from elsewhere)
+        big = self._big(size)
+        pool = self.cache[big]
+        old = pool.pop((key, size), None)
         if old is not None:
-            self.used -= self._bytes(old)
+            self.used[big] -= self._bytes(old)
         pm = QPixmap.fromImage(img)
-        self.cache[(key, size)] = pm
-        self.used += self._bytes(pm)
-        while self.used > self.BUDGET and len(self.cache) > 1:
-            _k, gone = self.cache.popitem(last=False)
-            self.used -= self._bytes(gone)
+        pool[(key, size)] = pm
+        self.used[big] += self._bytes(pm)
+        while self.used[big] > self.BUDGET[big] and len(pool) > 1:
+            _k, gone = pool.popitem(last=False)
+            self.used[big] -= self._bytes(gone)
 
     @staticmethod
     def _bytes(pm: QPixmap) -> int:
@@ -167,8 +177,9 @@ class Thumbs:
         self.missing.clear()
 
     def clear(self) -> None:
-        self.cache.clear()
-        self.used = 0
+        for big in (False, True):
+            self.cache[big].clear()
+            self.used[big] = 0
         self.missing.clear()
 
 
