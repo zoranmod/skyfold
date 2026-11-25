@@ -19,6 +19,7 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 - Pictures come from Windows itself (the previews File Explorer shows), so the window takes no extra disk space and Skyfold stays the same size. HEIC photos need Microsoft's free *HEIF Image Extensions*, which most Windows 11 PCs already have; the window says so if they're missing.
 
 ### Changed
+- **The tray panel keeps its height while it's open.** When *Sync now* starts (or a sync ends), the "Syncing…" card no longer makes the whole panel jump: the list of recent activity makes room instead. Opened again, the panel has its natural height.
 - After this update Skyfold reads your photo library once in full (nothing is downloaded again), to learn each photo's favourite, date added, size and length. From then on these come with every sync.
 - The panel's folder button opens the folders again for Photos, iCloud Drive and Notes; a click on the *Photos* row opens the Photos window.
 - **Replacing a file in iCloud Drive is safer.** When a file changed on this PC goes up, its new contents reach iCloud first; only then is the old version moved to *Recently Deleted*. A transfer that fails (no connection, Stop pressed) no longer leaves the file missing on your other devices.

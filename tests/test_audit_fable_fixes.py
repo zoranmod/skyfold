@@ -549,3 +549,31 @@ def test_a_synced_folder_removed_in_icloud_right_after_it_was_made_is_removed_he
     for _ in range(4):
         s.run()
     assert "New" not in d.items and "New" in trashed  # mirrored: to the Recycle Bin, nothing half
+
+
+def test_the_open_panel_keeps_its_height_when_syncing_starts_and_ends():
+    import time as _time
+
+    app, f = _flyout()
+    for i in range(10):
+        f.add_activity("2026-11-10T08:00:00+00:00", "download", f"Drive: downloaded: Docs/file{i}.txt", "x")
+    f.set_state("idle", "")
+    f.show_at(None)
+    end = _time.time() + 1
+    while _time.time() < end:
+        app.processEvents()
+    h = f.height()
+    f.set_state("syncing", "Reading iCloud Drive… 7912")  # the "Syncing…" card comes in
+    f.set_progress(3, 10, "Reading iCloud Drive… 7912")
+    app.processEvents()
+    assert f.height() == h
+    f.set_state("idle", "")  # and goes again
+    app.processEvents()
+    assert f.height() == h
+    f.hide()
+    f.set_state("syncing", "Reading iCloud Drive… 7912")
+    f.show_at(None)  # opened again: its natural height, and that one is kept
+    app.processEvents()
+    app.processEvents()
+    assert f._held is None or f._held == f.height()
+    f.hide()

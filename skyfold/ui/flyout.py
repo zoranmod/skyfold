@@ -1071,6 +1071,7 @@ class Flyout(QWidget):
 
     MAX_ROWS_VISIBLE = 6
     MIN_LIST_HEIGHT = 104  # the panel keeps a calm, steady height instead of jumping with each entry
+    HELD_LIST_MIN = 56  # while open, the list may shrink this far to keep the panel's height
 
     def _activity_rows(self) -> list["ActivityRow"]:
         return [self._rows.itemAt(i).widget() for i in range(self._rows.count() - 1)]
@@ -1147,6 +1148,13 @@ class Flyout(QWidget):
         room = self._limit() - (self._needed_height() - self.list.height())
         if self.list.height() > room:  # the list gives way first; below that the panel content scrolls
             self.list.setFixedHeight(max(room, min(self.list.height(), 120)))
+        held = getattr(self, "_held", None)
+        if held and self.isVisible() and self.list.isVisible():
+            # Open: the panel keeps its height when "Syncing…" comes or goes (or its text takes
+            # another line); the list of recent activity takes up the difference instead.
+            diff = self._needed_height() - held
+            if diff:
+                self.list.setFixedHeight(max(self.HELD_LIST_MIN, self.list.height() - diff))
         self._fit()
 
     def refresh_activity_times(self) -> None:
@@ -1238,7 +1246,17 @@ class Flyout(QWidget):
         self.raise_()
         self.activateWindow()
         self.setFocus(Qt.OtherFocusReason)  # the panel itself, not its first button
-        QTimer.singleShot(0, lambda: (self._fit(), self._place()))  # final size known: keep it on screen
+        self._held = None
+        QTimer.singleShot(0, self._settle)  # final size known: keep it on screen
+
+    def _settle(self) -> None:
+        self._fit()
+        self._place()
+        self._held = self.height() if self.isVisible() else None  # kept while the panel is open
+
+    def hideEvent(self, e) -> None:  # noqa: N802
+        self._held = None  # opened again: its natural height
+        super().hideEvent(e)
 
     def event(self, e) -> bool:  # noqa: N802
         if e.type() == QEvent.WindowDeactivate:
