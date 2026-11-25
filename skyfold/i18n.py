@@ -866,6 +866,8 @@ BS: dict[str, str] = {
     'iCloud gets the deletion at the next sync.': 'U iCloudu se briše pri sljedećoj sinhronizaciji.',
     '{n} items couldn\'t be deleted: {error}': '{n} stavki nije obrisano: {error}',
     '{name} was moved or replaced since it was synced; it was left alone': '{name} je premješten ili zamijenjen nakon sinhronizacije, pa je ostavljen na miru',
+    'Hidden in iCloud, kept on this PC: {name}': 'Sakriveno u iCloudu, ostaje na ovom PC-u: {name}',
+    "Deleted in iCloud, kept on this PC (it can't go to the Recycle Bin there): {name}": 'Obrisano u iCloudu, ostaje na ovom PC-u (tamo ne može u Koš): {name}',
 }
 
 _CATALOGS = {"bs": BS}

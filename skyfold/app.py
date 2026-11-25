@@ -736,6 +736,10 @@ class Controller(QObject):
                     warn(None, APP_NAME, t("Could not set up start with Windows: {error}", error=exc))
                     new.start_with_windows = self.settings.start_with_windows
             new.paused = self.settings.paused
+            # not shown in the window, and may have changed while it was open (an update announced,
+            # the photos folder confirmed): kept as they are now, never rolled back
+            new.update_told = self.settings.update_told
+            new.photos_dir_confirmed = self.settings.photos_dir_confirmed
             language_changed = new.language != self.settings.language
             theme_changed = new.theme != self.settings.theme
             self.settings = new
@@ -949,6 +953,15 @@ def main() -> int:
         log.error("Unexpected error", exc_info=(kind, value, tb))
 
     sys.excepthook = _log_uncaught
+
+    def _log_uncaught_thread(args) -> None:  # a background thread's error: in the log, not lost
+        if args.exc_type is not SystemExit:
+            log.error("Unexpected error in thread %s", getattr(args.thread, "name", "?"),
+                      exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+    import threading
+
+    threading.excepthook = _log_uncaught_thread
     if listen_error:
         log.warning("Single-instance server: %s", listen_error)
     log.info("Starting %s %s (%s)", APP_NAME, VERSION, "packaged" if getattr(sys, "frozen", False) else "from source")

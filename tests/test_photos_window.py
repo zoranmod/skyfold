@@ -377,3 +377,111 @@ def test_video_length_from_icloud_is_read_as_milliseconds():
                             dimensions=(1920, 1080))
     info = _info(asset)
     assert info is not None and round(info.duration) == 66 and info.favorite and not info.screenshot
+
+
+def test_a_lost_connection_stops_the_downloads_instead_of_parking_them_for_a_day(env_photos):
+    import requests
+
+    syncer, remote = env_photos
+    for i in range(8):
+        remote.add(f"n{i}", f"IMG_{i}.JPG", b"x" * (i + 1), date=datetime(2025, 1, 1 + i, tzinfo=timezone.utc))
+    calls = []
+
+    def offline(res, dest, on_bytes):
+        calls.append(res.filename)
+        raise requests.ConnectionError("network is gone")
+
+    remote.download = offline
+    with pytest.raises(requests.ConnectionError):
+        syncer.run()
+    assert len(calls) == 3  # stopped after three in a row, not one attempt per photo
+    assert not syncer.state.items("failed:")  # nothing put aside: all tried again at the next poll
+    assert syncer.state.get("cursor") is None
+
+
+@pytest.fixture()
+def env_photos(tmp_path, monkeypatch):
+    from skyfold import engine as eng
+    from skyfold.config import Settings
+    from tests.test_engine import FakeRemote
+
+    settings = Settings(photos_dir=str(tmp_path / "Slike"), delete_threshold=3, folder_structure="year_month")
+    remote = FakeRemote()
+    return eng.Syncer(State(tmp_path / "s2.db"), remote, settings), remote
+
+
+def test_a_photo_left_out_of_one_full_listing_is_not_recycled(env_photos, monkeypatch):
+    from skyfold import engine as eng
+
+    syncer, remote = env_photos
+    trashed = []
+    monkeypatch.setattr(eng.Syncer, "_trash", lambda self, p: trashed.append(p.name))
+    remote.add("k1", "IMG_1.JPG", b"one")
+    remote.add("k2", "IMG_2.JPG", b"two")
+    syncer.run()
+    every = remote.list_assets
+
+    def leaves_one_out(on_page=None):
+        yield from (a for a in every(on_page) if a.id != "k2")
+
+    remote.list_assets = leaves_one_out
+    syncer.run(force_full=True)
+    assert trashed == [] and "k2" in syncer.state.asset_ids()  # asked about by itself: still there
+
+
+def test_a_photo_hidden_in_icloud_stays_on_the_pc(env_photos, monkeypatch):
+    from skyfold import engine as eng
+
+    syncer, remote = env_photos
+    trashed = []
+    monkeypatch.setattr(eng.Syncer, "_trash", lambda self, p: trashed.append(p.name))
+    remote.add("h1", "IMG_7.JPG", b"seven")
+    syncer.run()
+    remote.remove("h1")
+    remote.hidden = {"h1"}
+    syncer.run()
+    assert trashed == [] and "h1" not in syncer.state.asset_ids()  # kept as an ordinary file
+    assert any(p.name == "IMG_7.JPG" for p in syncer.root.rglob("*.JPG"))
+
+
+def test_notes_names_windows_keeps_for_devices_get_a_prefix():
+    from skyfold.notes_engine import _safe
+
+    assert _safe("Con", "x") == "_Con" and _safe("aux.html", "x") == "_aux.html"
+    assert _safe("Console", "x") == "Console" and _safe("Nul ", "x") == "_Nul"
+
+
+def test_a_partial_download_left_by_a_crash_is_cleaned_up(env_photos):
+    syncer, remote = env_photos
+    remote.add("t1", "IMG_1.JPG", b"one")
+    syncer.run()
+    old = syncer.root / ".skyfold-tmp-abc1_3xy"
+    fresh = syncer.root / ".skyfold-tmp-def4_6xy"
+    stage = syncer.root / ".skyfold-tmp-album-x.JPG"
+    yours = syncer.root / ".skyfold-tmp-personal.jpg"
+    for p in (old, fresh, stage, yours):
+        p.write_bytes(b"part")
+    past = time.time() - 7 * 3600
+    os.utime(old, (past, past))
+    os.utime(stage, (past, past))
+    os.utime(yours, (past, past))
+    syncer._temps_cleaned = False  # (as at the next start of Skyfold)
+    syncer.run()
+    assert not old.exists() and fresh.exists() and stage.exists() and yours.exists()
+
+
+def test_a_photo_that_cant_go_to_the_recycle_bin_is_kept_not_retried_forever(env_photos, monkeypatch):
+    from skyfold import engine as eng
+
+    syncer, remote = env_photos
+    remote.add("r1", "IMG_9.JPG", b"nine")
+    syncer.run()
+
+    def no_bin(self, p):
+        raise eng.NoRecycleBin("no Recycle Bin on that drive")
+
+    monkeypatch.setattr(eng.Syncer, "_trash", no_bin)
+    remote.remove("r1")
+    res = syncer.run()
+    assert res.errors == 0 and "r1" not in syncer.state.asset_ids()
+    assert syncer.state.get("cursor") == remote.cursor()  # the change feed moves on

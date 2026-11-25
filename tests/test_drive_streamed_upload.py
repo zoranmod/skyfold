@@ -290,3 +290,43 @@ def test_unconfirmed_upload_is_not_taken_as_saved(tmp_path, answer):
     api._update_contentws = lambda *a, **k: answer
     with pytest.raises(Exception):
         adapter(api).upload(PARENT, f)
+
+
+def test_a_replacement_moves_the_old_version_away_only_after_the_bytes_arrived(tmp_path):
+    f = tmp_path / "Budget.xlsx"
+    f.write_bytes(b"new version")
+    steps = []
+    api = FakeApi()
+    sent = api.post
+    api.session = NS(post=lambda *a, **kw: (steps.append("bytes"), sent(*a, **kw))[1])
+    named = api._update_contentws
+    api._update_contentws = lambda *a, **kw: (steps.append("named"), named(*a, **kw))[1]
+    adapter(api).upload(PARENT, f, before_register=lambda: steps.append("old version away"))
+    assert steps == ["bytes", "old version away", "named"]
+
+    def broken(*a, **kw):
+        raise requests.ConnectionError("gone")
+
+    steps.clear()
+    api.session = NS(post=broken)
+    with pytest.raises(Exception):
+        adapter(api).upload(PARENT, f, before_register=lambda: steps.append("old version away"))
+    assert steps == []  # the transfer failed: the version other devices have stays
+
+
+def test_a_folder_answer_without_items_is_never_taken_for_an_empty_folder():
+    from skyfold.drive_remote import ROOT_ID
+
+    def answer(folder):
+        return lambda *a, **kw: NS(json=lambda: [dict(folder, drivewsid=ROOT_ID, docwsid="root")])
+
+    api = NS(service_root="https://x", params={}, _raise_if_error=lambda r: None,
+             session=NS(post=answer({"status": "OK"})))
+    a = adapter(api)
+    a.incomplete = set()
+    a.walk()
+    assert "" in a.incomplete  # says nothing about its contents: nothing there counts as deleted
+    api.session = NS(post=answer({"status": "OK", "numberOfItems": 0}))
+    a.incomplete = set()
+    a.walk()
+    assert a.incomplete == set()  # really empty

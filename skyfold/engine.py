@@ -48,6 +48,11 @@ class SyncError(Exception):
 DISK_RESERVE = 2 * 1024**3  # always leave this much free on the disk
 
 
+class NoRecycleBin(OSError):
+    """This file can't go to the Recycle Bin at all (a drive without one, too big for it): trying again
+    won't change that."""
+
+
 def recycle(path: Path) -> None:
     """Move to the Windows Recycle Bin, and never anything less. Windows itself deletes for good
     whatever it can't recycle (network shares, subst drives, a disabled or full Recycle Bin), so
@@ -62,10 +67,10 @@ def recycle(path: Path) -> None:
 
     p = os.path.abspath(str(path))
     if p.startswith("\\\\"):
-        raise OSError(t("{name} is on a network drive without a Recycle Bin; not deleted", name=p))
+        raise NoRecycleBin(t("{name} is on a network drive without a Recycle Bin; not deleted", name=p))
     drive_type = ctypes.windll.kernel32.GetDriveTypeW(os.path.splitdrive(p)[0] + "\\")
     if drive_type in (2, 4, 5):  # removable, network, CD: no Recycle Bin
-        raise OSError(t("{name} is on a drive without a Recycle Bin; not deleted", name=p))
+        raise NoRecycleBin(t("{name} is on a drive without a Recycle Bin; not deleted", name=p))
     _recycle_windows(p)
 
 
@@ -113,10 +118,10 @@ def _recycle_windows(p: str) -> None:
             aborted = op.GetAnyOperationsAborted()
         except pywintypes.com_error as exc:
             if sink_obj.refused:
-                raise OSError(t("{name} can't go to the Recycle Bin; not deleted", name=p)) from exc
+                raise NoRecycleBin(t("{name} can't go to the Recycle Bin; not deleted", name=p)) from exc
             raise OSError(None, exc.strerror, p) from exc
         if sink_obj.refused:
-            raise OSError(t("{name} can't go to the Recycle Bin; not deleted", name=p))
+            raise NoRecycleBin(t("{name} can't go to the Recycle Bin; not deleted", name=p))
         if result or aborted:
             raise OSError(t("{name} couldn't be moved to the Recycle Bin", name=p))
     finally:
@@ -226,6 +231,44 @@ def delete_on_pc(state: State, root: Path, asset_ids: list[str],
         if progress is not None:
             progress(n, len(asset_ids))
     return done, failed
+
+
+def transient(exc: BaseException) -> bool:
+    """A network break, a timeout, or Apple saying "too busy, later" (429/5xx): about the connection,
+    not about this file. Such a download is tried again shortly, never put aside for a day."""
+    import requests
+
+    cur: BaseException | None = exc
+    for _ in range(8):
+        if cur is None:
+            break
+        if isinstance(cur, (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError,
+                            ConnectionError, TimeoutError)):
+            return True
+        if type(cur).__name__ == "PyiCloudConnectionException":
+            return True
+        code = getattr(getattr(cur, "response", None), "status_code", None) or getattr(cur, "code", None)
+        if code in (429, 500, 502, 503, 504):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+# exactly the names tempfile.mkstemp gives our downloads (8 random characters, no extension): a file of
+# yours that merely starts like that is never touched
+_TEMP_NAME = re.compile(re.escape(TMP_PREFIX) + r"[a-z0-9_]{8}")
+
+
+def _drop_stale_temp(p: Path, age: float = 6 * 3600) -> None:
+    """A half-downloaded file of ours left by a crash or power cut (never a user's file: only Skyfold
+    names files .skyfold-tmp-). Removed once it is hours old, so it can't be one being written now."""
+    try:
+        st = os.lstat(p)
+        if stat.S_ISREG(st.st_mode) and time.time() - st.st_mtime > age:
+            os.remove(p)
+            log.info("Photos: removed a leftover partial download")
+    except OSError:
+        pass
 
 
 def create_marker(marker: Path, text: str) -> None:
@@ -703,6 +746,7 @@ class Syncer:
     UPLOAD_EXT = {".heic", ".heif", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff", ".webp", ".dng",
                   ".mov", ".mp4", ".m4v"}
     UPLOAD_MAX = 100  # per pass; the rest follows next time
+    TRANSIENT_STOP = 3  # network failures in a row that end a download pass (tried again at the next poll)
     PHOTO_UPLOAD_WORKERS = 2  # photos and videos sent at the same time (Apple limits each connection)
     UPLOAD_SETTLE = 120  # seconds a file must stay unchanged first (still being copied otherwise)
 
@@ -1362,6 +1406,18 @@ class Syncer:
                 tmp_path.unlink(missing_ok=True)
         return confirmed, unknown
 
+    def _clean_temps(self) -> None:
+        """Half-downloaded files left by a crash or power cut (only Skyfold names files .skyfold-tmp-;
+        an album's staged file is looked after by _recover_album_stage)."""
+        try:
+            for dirpath, dirs, files in os.walk(self.root):
+                dirs[:] = [d for d in dirs if not _is_link(Path(dirpath) / d)]
+                for fn in files:
+                    if _TEMP_NAME.fullmatch(fn):
+                        _drop_stale_temp(Path(dirpath) / fn)
+        except OSError:
+            pass
+
     def _trash(self, path: Path) -> None:
         self._touch_own(path)
         recycle(path)
@@ -1386,6 +1442,9 @@ class Syncer:
         self._id_index = None
         self._check_owner()
         self._migrate_upload_records()  # (only does something for records of an earlier version)
+        if not getattr(self, "_temps_cleaned", False):  # once per start of Skyfold
+            self._temps_cleaned = True
+            self._clean_temps()
         local_deleted, moved = self.scan_local()
         if moved:
             self.cb.activity("info", t("Followed {n} files moved inside the folder", n=moved))
@@ -1516,8 +1575,30 @@ class Syncer:
         local_deleted_set = set(local_deleted)
         if full:
             to_pc = [a for a in known_ids if a not in remote_assets and a not in local_deleted_set]
+            if to_pc:
+                # Missing from one full listing isn't proof yet (a listing page can leave a photo out when
+                # its parts arrive separately): each one is asked about by itself before any file goes.
+                try:
+                    still = self.remote.lookup(to_pc)
+                except LookupIncomplete:
+                    still = None
+                if still is None:
+                    log.info("Photos: %d photos missing from the listing couldn't be confirmed; decided next time",
+                             len(to_pc))
+                    to_pc = []
+                elif still:
+                    log.info("Photos: %d photos missing from the listing are still in iCloud", len(still))
+                    to_pc = [a for a in to_pc if a not in still]
         else:
             to_pc = [a for a in known_ids if a in gone and a not in local_deleted_set]
+        hidden = set(getattr(self.remote, "hidden", ()) or ())
+        for a in [a for a in to_pc if a in hidden]:
+            # Hidden on the iPhone, not deleted: the photo is still in iCloud (Hidden album). The PC copy
+            # stays where it is, as an ordinary file; shown again in iCloud, it is matched up again.
+            self._keep_on_pc(a, rows_by_asset[a])
+            self.cb.activity("local", t("Hidden in iCloud, kept on this PC: {name}",
+                                        name=rows_by_asset[a][0].rel_path if rows_by_asset[a] else a))
+        to_pc = [a for a in to_pc if a not in hidden]
         if to_pc:
             if not self.settings.delete_cloud_to_pc:
                 for a in to_pc:
@@ -1538,15 +1619,23 @@ class Syncer:
                         self.cb.activity("local", t("Deleted in iCloud, kept on this PC: {name}",
                                                     name=rows_now[0].rel_path))
                         continue
+                    no_bin = False
                     for r in rows_now:
                         p = self._abs(r.rel_path)
                         if not known_missing(p):  # also one that can't be looked at: that attempt fails, kept
                             try:
                                 self._trash_inside(p)
+                            except NoRecycleBin:
+                                no_bin = True  # never deleted for good: kept, instead of asking again forever
                             except OSError as exc:
                                 ok = False
                                 result.errors += 1
                                 self.cb.activity("error", t("Couldn't delete {name}: {error}", name=r.rel_path, error=brief(exc)))
+                    if ok and no_bin:
+                        self._keep_on_pc(a, rows_now)
+                        self.cb.activity("local", t("Deleted in iCloud, kept on this PC (it can't go to the Recycle "
+                                                    "Bin there): {name}", name=rows_now[0].rel_path))
+                        continue
                     if ok:
                         self.state.remove_asset(a)
                         result.deleted_local += 1
@@ -1582,6 +1671,7 @@ class Syncer:
         tracked_keys = {(r.asset_id, r.resource_key) for rows in rows_by_asset.values() for r in rows}
         retry_failed = force_full or stale  # parked failures are tried again on a scheduled or asked-for full read
         parked = 0
+        in_a_row: list[str] = []  # failed: keys of network failures one after another
         todo: list[tuple[RemoteAsset, RemoteResource]] = []
         for a in remote_assets.values():
             if a.id in excluded or a.id in held or a.id in local_deleted_set:
@@ -1669,6 +1759,8 @@ class Syncer:
                             self._note_file_id(a.id, res.key, rel)
                             taken.add(rel.lower())
                             continue
+                        ts = a.date.timestamp()
+                        os.utime(tmp_path, (ts, ts))  # before it gets its name: a crash never leaves it undated
                         for _attempt in range(20):
                             try:
                                 os.rename(tmp_path, target)  # fails if a file appeared there: never overwrites
@@ -1680,8 +1772,6 @@ class Syncer:
                                 target = self._abs(rel)
                         else:
                             raise SyncError(t("{name} already exists; not replaced", name=rel))
-                        ts = a.date.timestamp()
-                        os.utime(target, (ts, ts))
                     finally:
                         if tmp_path.exists():
                             tmp_path.unlink(missing_ok=True)
@@ -1690,12 +1780,25 @@ class Syncer:
                     )
                     self._note_file_id(a.id, res.key, rel)
                     self.state.set(f"failed:{a.id}#{res.key}", None)
+                    in_a_row.clear()
                     taken.add(rel.lower())
                     result.downloaded += 1
                     last_file = last_file or target
                 except (Cancelled, AuthRequired, RemoteUnavailable):
                     raise
                 except Exception as exc:  # noqa: BLE001
+                    if transient(exc):
+                        in_a_row.append(f"failed:{a.id}#{res.key}")
+                        if len(in_a_row) >= self.TRANSIENT_STOP:
+                            # The connection is gone (or Apple asks to wait): stop here and try again at the
+                            # next poll, instead of putting every remaining photo aside for a day.
+                            for key in in_a_row[:-1]:
+                                self.state.set(key, None)
+                                parked -= 1
+                                result.errors -= 1
+                            raise
+                    else:
+                        in_a_row.clear()
                     result.errors += 1
                     parked += 1
                     self.state.set(f"failed:{a.id}#{res.key}", now_iso())  # retried on the next full read

@@ -269,11 +269,16 @@ class DriveSyncer:
     def _abs(self, rel: str) -> Path:
         return self.root / Path(rel)
 
+    _own_lock = threading.Lock()
+
     def _touch_own(self, p: Path) -> None:
+        """(Called from the download threads at the same time: one at a time, so the clean-up never
+        reads the table while another thread adds to it.)"""
         now = time.monotonic()
-        if len(self.own_paths) > 2000:
-            self.own_paths = {k: v for k, v in self.own_paths.items() if now - v < 10}
-        self.own_paths[str(p).lower()] = now
+        with self._own_lock:
+            if len(self.own_paths) > 2000:
+                self.own_paths = {k: v for k, v in list(self.own_paths.items()) if now - v < 10}
+            self.own_paths[str(p).lower()] = now
 
     def is_own_path(self, p: str) -> bool:
         ts = self.own_paths.get(str(Path(p)).lower())
@@ -2667,9 +2672,14 @@ class DriveSyncer:
                     show()
             return on_bytes
 
-        def send(path: str, parent: DriveItem, here: bool, handle=None) -> tuple:
+        def send(path: str, parent: DriveItem, here: bool, handle=None, before_register=None) -> tuple:
+            late = before_register is not None and getattr(self.remote, "registers_late", False)
+            if before_register is not None and not late:
+                before_register()  # (a remote that sends and names in one step: done first)
             if getattr(self.remote, "streams_progress", False):
                 extra = {"handle": handle} if handle is not None and getattr(self.remote, "takes_handle", False) else {}
+                if late:
+                    extra["before_register"] = before_register
                 got = self.remote.upload(parent, self._abs(path), on_bytes=counter(here), **extra)
             else:
                 got = self.remote.upload(parent, self._abs(path))
@@ -2767,15 +2777,20 @@ class DriveSyncer:
                         self._check_cancel()
                     fh.seek(0)
                     self._check_cancel()
-                    # Replacing a file: move the old iCloud version to Recently Deleted first. Mark the row
-                    # "pending" so a failed upload is retried, never mistaken for a deletion. The tag of
-                    # the version replaced is kept: another version found there later is someone else's
+                    # Replacing a file: the new bytes go to iCloud first; only once they are there is the
+                    # old iCloud version moved to Recently Deleted, right before the new one takes its
+                    # name (iCloud would give it another name otherwise). A transfer that fails or is
+                    # stopped never costs the version other devices have. The row is marked "pending"
+                    # then, so a failed naming is retried, never mistaken for a deletion. The tag of the
+                    # version replaced is kept: another version found there later is someone else's
                     # save (or this upload, when its reply got lost: compared then), never trashed.
-                    self.state.put(Base(path, False, existing.etag, existing.size, lo.mtime, lo.size, True))
-                    self.remote.trash(existing)
-                    self._check_cancel()  # (the row stays "pending": the upload is done next time)
+                    def switch(path=path, existing=existing, lo=lo) -> None:
+                        self.state.put(Base(path, False, existing.etag, existing.size, lo.mtime, lo.size, True))
+                        self.remote.trash(existing)
+
                     st = os.fstat(fh.fileno())  # (an edit saved while it waited is what was sent)
-                    recorded(path, Local(False, st.st_size, st.st_mtime), send(path, parent, True, handle=fh))
+                    recorded(path, Local(False, st.st_size, st.st_mtime),
+                             send(path, parent, True, handle=fh, before_register=switch))
             except (AuthRequired, RemoteUnavailable, Cancelled):
                 raise
             except Exception as exc:  # noqa: BLE001

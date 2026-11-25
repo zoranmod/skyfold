@@ -200,6 +200,10 @@ class ICloudDrive:
                             listed, count = folder.get("items"), folder.get("numberOfItems")
                             if isinstance(listed, list) and isinstance(count, int) and len(listed) < count:
                                 self.incomplete.add(base)  # fewer items than iCloud says it holds
+                            elif not isinstance(listed, list) and count != 0:
+                                # neither a list nor "0 items": an answer that says nothing about what is
+                                # in it, never "empty" (that would recycle its synced files)
+                                self.incomplete.add(base)
                             if base == "" and folder.get("docwsid"):
                                 root.docwsid = folder["docwsid"]
                                 root.zone = folder.get("zone", root.zone)
@@ -285,13 +289,18 @@ class ICloudDrive:
 
     streams_progress = True  # upload() takes on_bytes
     takes_handle = True  # and the file already opened (locked) by the caller
+    registers_late = True  # and before_register: run between sending the bytes and naming the file
 
     def upload(self, parent: DriveItem, local: Path, data: bytes | None = None,
-               on_bytes: Callable[[int], None] | None = None, handle: Any = None) -> tuple:
+               on_bytes: Callable[[int], None] | None = None, handle: Any = None,
+               before_register: Callable[[], None] | None = None) -> tuple:
         """Sends the file; returns (size, sha256, etag) of exactly the bytes sent and the version
         iCloud gave them (etag None when its answer didn't say). Without `data` the file is
         streamed from disk: a big video never has to fit in memory. handle: the file already
-        opened with _upload_reader (a replacement locks it before the old version is trashed)."""
+        opened with _upload_reader (a replacement locks it before the old version is trashed).
+        before_register: called once the bytes are safely with iCloud, right before the file is named in
+        its folder (a replacement moves the old version away there: a failed or stopped transfer of
+        the bytes never costs the version other devices have)."""
         try:
             if data is not None:
                 fh: Any = io.BytesIO(data)
@@ -327,6 +336,8 @@ class ICloudDrive:
                 info = resp.json()["singleFile"]
                 if isinstance(info, dict) and "size" in info and int(info["size"]) != st.st_size:
                     raise RuntimeError(Text("iCloud received a different size; it is tried again later"))
+                if before_register is not None:
+                    before_register()
                 # Stop pressed while iCloud answered, or while this waited for its turn: not registered
                 with _before_send(d.session, (lambda: on_bytes(0)) if on_bytes else None):
                     result = d._update_contentws(parent.docwsid, info, document_id, named, parent.zone,

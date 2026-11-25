@@ -180,6 +180,7 @@ class ICloudRemote:
         self._api = api
         self._photos: Any = None
         self._assets: dict[str, Any] = {}
+        self.hidden: set[str] = set()  # photos last seen hidden in iCloud (not deleted): kept on the PC
 
     @property
     def photos(self) -> Any:
@@ -340,6 +341,14 @@ class ICloudRemote:
             return True
         return any(record_field_value(rec, f) == 1 for f in ("isDeleted", "isHidden", "isExpunged"))
 
+    def _note_hidden(self, rec: Any) -> None:
+        """Remember whether this photo is only hidden in iCloud (still there, in the Hidden album)."""
+        from pyicloud.services.photos_cloudkit.mappers import record_field_value
+
+        hidden = (not getattr(rec, "deleted", False) and record_field_value(rec, "isHidden") == 1
+                  and not any(record_field_value(rec, f) == 1 for f in ("isDeleted", "isExpunged")))
+        (self.hidden.add if hidden else self.hidden.discard)(rec.recordName)
+
     def _build(self, asset_recs: dict[str, Any], masters: dict[str, Any]) -> list[RemoteAsset]:
         """Pair CPLAsset records with their CPLMaster (fetching missing masters) into assets."""
         from pyicloud.common.cloudkit import CKRecord, CKZoneIDReq
@@ -388,6 +397,7 @@ class ICloudRemote:
                         assets.pop(rec.recordName, None)
                     elif isinstance(rec, CKRecord):
                         if rec.recordType == "CPLAsset":
+                            self._note_hidden(rec)
                             if self._gone(rec):
                                 gone.add(rec.recordName)
                                 assets.pop(rec.recordName, None)
@@ -418,8 +428,10 @@ class ICloudRemote:
                     record_names=asset_ids[i:i + 100], zone_id=CKZoneIDReq(**lib.zone_id)
                 )
                 for rec in resp.records:
-                    if isinstance(rec, CKRecord) and rec.recordType == "CPLAsset" and not self._gone(rec):
-                        recs[rec.recordName] = rec
+                    if isinstance(rec, CKRecord) and rec.recordType == "CPLAsset":
+                        self._note_hidden(rec)
+                        if not self._gone(rec):
+                            recs[rec.recordName] = rec
             built = {a.id: a for a in self._build(recs, {})}
         except (AuthRequired, RemoteUnavailable):
             raise

@@ -168,12 +168,13 @@ def test_a_locked_notes_old_page_is_removed_once_possible(notes_env, monkeypatch
 
     r.put("n1", "Secret")
     s.run()
-    real = ne.NotesSyncer._trash
-    monkeypatch.setattr(ne.NotesSyncer, "_trash", lambda self, p: (_ for _ in ()).throw(PermissionError(13, "busy")))
+    real = ne.NotesSyncer._drop  # (a locked note's copy is deleted outright, since 1.0.31)
+    monkeypatch.setattr(ne.NotesSyncer, "_drop",
+                        lambda self, p, forever: (_ for _ in ()).throw(PermissionError(13, "busy")))
     r.put("n1", "Secret", locked=True)
     s.run()
     assert (root / "Notes/Secret.html").exists()
-    monkeypatch.setattr(ne.NotesSyncer, "_trash", real)
+    monkeypatch.setattr(ne.NotesSyncer, "_drop", real)
     r.put("n1", "Secret", locked=True)  # any later read of it
     s.run(full=True)
     assert not (root / "Notes/Secret.html").exists()
