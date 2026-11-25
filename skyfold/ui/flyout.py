@@ -624,6 +624,13 @@ class Flyout(QWidget):
         head.addLayout(titles, 1)
         self.dot.hide()  # the status line under the title says it now (kept for its state logic)
         head.addWidget(self.storage_ring, 0, Qt.AlignVCenter)
+        from .notices import BellButton
+
+        self.bell = BellButton(palette)  # this session's notifications (shown once the app attaches them)
+        self.bell.clicked.connect(self.show_notices)
+        self.bell.hide()
+        self.notices_page = None
+        head.addWidget(self.bell, 0, Qt.AlignVCenter)
         head.addWidget(self.gear, 0, Qt.AlignVCenter)
         root.addLayout(head)
 
@@ -836,6 +843,9 @@ class Flyout(QWidget):
         """Called when Windows switches light/dark: re-tint the hand-drawn icons."""
         self.c = palette
         self.gear.setIcon(glyph("gear", palette["muted"]))
+        self.bell.apply_palette(palette)
+        if self.notices_page is not None:
+            self.notices_page.apply_palette(palette)
         self._brand.set_palette(palette, palette["accent_fg"])
         self.dot.c = palette
         self.storage_ring.c = palette
@@ -1256,7 +1266,42 @@ class Flyout(QWidget):
 
     def hideEvent(self, e) -> None:  # noqa: N802
         self._held = None  # opened again: its natural height
+        self.show_home()  # opened again: the panel itself, not the notifications
         super().hideEvent(e)
+
+    # notifications ----------------------------------------------------------------
+    def attach_notices(self, log, resolve) -> None:
+        """Show the bell for this session's notifications (a NoticeLog) and their page; resolve(key)
+        gives a notification button's (label, action, applies now)."""
+        from .notices import NoticesPage
+
+        page = NoticesPage(log, self.c, resolve)
+        page.hide()
+        page.back.connect(self.show_home)
+        self.layout().insertWidget(0, page, 1)
+        self.notices_page = page
+        self._notices = log
+        log.on_change(lambda: self.bell.set_count(log.unseen))
+        self.bell.set_count(log.unseen)
+        self.bell.show()
+
+    def show_notices(self) -> None:
+        """The notifications page in place of the panel's content; the panel keeps its size."""
+        if self.notices_page is None:
+            return
+        self._scroll.hide()
+        self._bottom.hide()
+        self.notices_page.show()
+        self._notices.mark_seen()
+        self.notices_page.setFocus(Qt.OtherFocusReason)
+
+    def show_home(self) -> None:
+        if self.notices_page is None or not self.notices_page.isVisible():
+            return
+        self.notices_page.hide()
+        self._scroll.show()
+        self._bottom.show()
+        self.setFocus(Qt.OtherFocusReason)
 
     def event(self, e) -> bool:  # noqa: N802
         if e.type() == QEvent.WindowDeactivate:
@@ -1265,7 +1310,9 @@ class Flyout(QWidget):
         return super().event(e)
 
     def keyPressEvent(self, e) -> None:  # noqa: N802
-        if e.key() == Qt.Key_Escape:
+        if e.key() == Qt.Key_Escape and self.notices_page is not None and self.notices_page.isVisible():
+            self.show_home()  # Escape on the notifications goes back first
+        elif e.key() == Qt.Key_Escape:
             self.hide()
         else:
             super().keyPressEvent(e)

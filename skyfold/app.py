@@ -23,6 +23,7 @@ from .ui.dialogs import (FindMyDialog, FolderSetupDialog, LoginDialog, PendingDi
                          make_popup_round)
 from .ui.flyout import STATE_TITLES, Flyout
 from .ui.icons import app_icon, tray_icon
+from .ui.notices import Notice, NoticeLog
 from .ui.toast import Toasts
 from .worker import SyncWorker
 
@@ -300,6 +301,8 @@ class Controller(QObject):
         self._build_menu()
         self.tray.show()
         self.toasts = Toasts(self.c, anchor=self.tray.geometry)  # Skyfold's own notification cards
+        self.notices = NoticeLog()  # this session's notifications: the panel's bell lists them again
+        self.flyout.attach_notices(self.notices, self._notice_action)
 
         self.anim = QTimer()
         self.anim.setInterval(120)
@@ -444,27 +447,42 @@ class Controller(QObject):
             self._show_notice(title, text, **self._notice_look(title))
 
     def _notice_look(self, title: str) -> dict:
-        """The tile, colour and buttons of one of the worker's notifications (on Skyfold's own cards)."""
+        """The tile, colour and buttons (keys of _notice_action) of one of the worker's notifications."""
         if title in (t("Photos synced"), t("Your photos are on this PC")):
-            return {"icon": "photo", "actions": [(t("Open"), lambda: self._on_service("photos")),
-                                                 (t("Show in folder"), lambda: self.open_folder("photos"))]}
+            return {"icon": "photo", "actions": ("open_photos", "folder_photos")}
         if title in (t("iCloud Drive synced"), t("iCloud Drive is ready")):
-            return {"icon": "folder", "actions": [(t("Show in folder"), lambda: self.open_folder("drive"))]}
+            return {"icon": "folder", "actions": ("folder_drive",)}
         if title == t("Sign-in required"):
-            return {"icon": "error", "tone": "err", "actions": [(t("Sign in"), self.open_login)]}
+            return {"icon": "error", "tone": "err", "actions": ("sign_in",)}
         if title == t("Confirmation needed"):
-            return {"icon": "trash", "tone": "warn", "actions": [(t("Review"), self.open_pending)]}
+            return {"icon": "trash", "tone": "warn", "actions": ("review",)}
         return {}
 
+    def _notice_action(self, key: str):
+        """A notification button: (label, what it does, whether it still applies now), or None."""
+        return {
+            "open_photos": (t("Open"), lambda: self._on_service("photos"), True),
+            "folder_photos": (t("Show in folder"), lambda: self.open_folder("photos"), True),
+            "folder_drive": (t("Show in folder"), lambda: self.open_folder("drive"), self.settings.drive_enabled),
+            "sign_in": (t("Sign in"), self.open_login, self.state == "auth"),
+            "review": (t("Review"), self.open_pending, bool(self._pending)),
+            "update": (t("What's new"), self.open_update, self._release is not None),
+        }.get(key)
+
     def _show_notice(self, title: str, text: str, *, icon: str = "cloud", tone: str | None = None,
-                     actions=(), on_click=None, timeout: int = 6000, about: str | None = None) -> None:
-        """A notification in the style chosen in Settings: Skyfold's own card, or Windows' own.
-        about: what a click on Windows' notification opens ("update"; None: what needs attention)."""
+                     actions: tuple[str, ...] = (), on_click=None, timeout: int = 6000,
+                     about: str | None = None) -> None:
+        """A notification in the style chosen in Settings: Skyfold's own card, or Windows' own. Either
+        way it is kept for the panel's bell (also when Windows asked for quiet and no card appeared).
+        actions: keys of _notice_action. about: what a click on Windows' notification opens
+        ("update"; None: what needs attention)."""
         self._last_msg = about
+        self.notices.add(Notice(title, text, icon, tone, tuple(actions)))
         if self.settings.notification_style == "windows":
             self.tray.showMessage(title, text, app_icon(), timeout)
             return
-        self.toasts.show(title, text, icon=icon, tone=tone, actions=actions,
+        buttons = [(found[0], found[1]) for found in map(self._notice_action, actions) if found]
+        self.toasts.show(title, text, icon=icon, tone=tone, actions=buttons,
                          on_click=on_click or self._on_message_clicked, timeout=timeout)
 
     # updates ------------------------------------------------------------------
@@ -492,7 +510,7 @@ class Controller(QObject):
                 self.settings.save()
                 self._show_notice(t("Update available"),
                                   t("Skyfold {version} is available. Click to see what's new.", version=rel.version),
-                                  icon="download", actions=[(t("What's new"), self.open_update)],
+                                  icon="download", actions=("update",),
                                   on_click=self.open_update, timeout=8000, about="update")
 
         def fail(msg: str) -> None:
