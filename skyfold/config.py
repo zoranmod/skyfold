@@ -426,6 +426,7 @@ class Settings:
     delete_threshold: int = 5  # more deletions than this at once are asked about first
     instant_local_deletes: bool = True
     notifications: bool = True
+    notification_style: str = "skyfold"  # skyfold (its own cards) | windows; notifications=False: off
     start_with_windows: bool = False
     check_updates: bool = True  # ask GitHub once a day whether a newer Skyfold is out
     update_told: str = ""  # the newest version already announced (told once per version)
@@ -462,6 +463,8 @@ class Settings:
                     clean[f.name] = v
         if clean.get("folder_structure") not in FOLDER_STRUCTURES:
             clean.pop("folder_structure", None)
+        if clean.get("notification_style") not in ("skyfold", "windows"):
+            clean.pop("notification_style", None)
         if "poll_minutes" in clean:  # hand-edited values: keep timers in a sane range
             clean["poll_minutes"] = min(max(1, clean["poll_minutes"]), 24 * 60)
         if "delete_threshold" in clean:

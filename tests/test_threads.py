@@ -56,6 +56,7 @@ def test_worker_signals_reach_ui_on_ui_thread(qapp, tmp_path, monkeypatch):
         monkeypatch.setattr(ctl.flyout, "set_state", record("state"))
         monkeypatch.setattr(ctl.flyout, "set_progress", record("progress"))
         monkeypatch.setattr(ctl.tray, "showMessage", record("notify"))
+        monkeypatch.setattr(ctl.toasts, "show", record("notify"))  # Skyfold's own cards (the default)
 
         def from_worker_thread():
             ctl.worker.stateChanged.emit("idle", "ok")

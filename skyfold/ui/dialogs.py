@@ -848,7 +848,15 @@ class SettingsDialog(_Dialog):
 
         sysc = self._card(lay, t("SYSTEM"))
         self.autostart = self._toggle(sysc, t("Start with Windows"), starts_with_windows(self.s.start_with_windows))
-        self.notif = self._toggle(sysc, t("Show notifications"), self.s.notifications)
+        self.notif = Combo()
+        self.notif.addItem(t("Skyfold's own"), "skyfold")
+        self.notif.addItem(t("Windows' own"), "windows")
+        self.notif.addItem(t("Off"), "off")
+        self.notif.setCurrentIndex(max(0, self.notif.findData(
+            self.s.notification_style if self.s.notifications else "off")))
+        sysc.addLayout(self._row(t("Notifications"), self.notif))
+        sysc.addWidget(_label(t("Skyfold's own notifications follow the app's theme and stay away while Do Not Disturb "
+                                "is on or a program runs full screen."), "Hint", True))
         self.updates = self._toggle(sysc, t("Check for new versions of Skyfold"), self.s.check_updates)
         self.lang = Combo()
         for code, name in LANGUAGES.items():
@@ -1322,7 +1330,9 @@ class SettingsDialog(_Dialog):
         s.instant_local_deletes = self.instant.isChecked()
         s.delete_threshold = self.threshold.value()
         s.start_with_windows = self.autostart.isChecked()
-        s.notifications = self.notif.isChecked()
+        s.notifications = self.notif.currentData() != "off"
+        if s.notifications:
+            s.notification_style = self.notif.currentData()
         s.check_updates = self.updates.isChecked()
         s.language = self.lang.currentData()
         s.theme = self.theme.currentData()

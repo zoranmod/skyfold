@@ -23,6 +23,7 @@ from .ui.dialogs import (FindMyDialog, FolderSetupDialog, LoginDialog, PendingDi
                          make_popup_round)
 from .ui.flyout import STATE_TITLES, Flyout
 from .ui.icons import app_icon, tray_icon
+from .ui.toast import Toasts
 from .worker import SyncWorker
 
 log = logging.getLogger("skyfold")
@@ -298,6 +299,7 @@ class Controller(QObject):
         self.tray.messageClicked.connect(self._on_message_clicked)
         self._build_menu()
         self.tray.show()
+        self.toasts = Toasts(self.c, anchor=self.tray.geometry)  # Skyfold's own notification cards
 
         self.anim = QTimer()
         self.anim.setInterval(120)
@@ -416,6 +418,7 @@ class Controller(QObject):
         self.app.setStyleSheet(theme.stylesheet(self.c))
         self.app.setPalette(theme.qpalette(self.c))
         self.flyout.apply_palette(self.c)
+        self.toasts.apply_palette(self.c)
         from .ui.dialogs import refresh_palette
 
         refresh_palette(self.c, skip=(self.flyout,))  # open Settings, Find My, … too
@@ -438,8 +441,31 @@ class Controller(QObject):
     def _notify(self, title: str, text: str) -> None:
         important = title in (t("Sign-in required"), t("Confirmation needed"))
         if self.settings.notifications or important:
-            self._last_msg = None
-            self.tray.showMessage(title, text, app_icon(), 6000)
+            self._show_notice(title, text, **self._notice_look(title))
+
+    def _notice_look(self, title: str) -> dict:
+        """The tile, colour and buttons of one of the worker's notifications (on Skyfold's own cards)."""
+        if title in (t("Photos synced"), t("Your photos are on this PC")):
+            return {"icon": "photo", "actions": [(t("Open"), lambda: self._on_service("photos")),
+                                                 (t("Show in folder"), lambda: self.open_folder("photos"))]}
+        if title in (t("iCloud Drive synced"), t("iCloud Drive is ready")):
+            return {"icon": "folder", "actions": [(t("Show in folder"), lambda: self.open_folder("drive"))]}
+        if title == t("Sign-in required"):
+            return {"icon": "error", "tone": "err", "actions": [(t("Sign in"), self.open_login)]}
+        if title == t("Confirmation needed"):
+            return {"icon": "trash", "tone": "warn", "actions": [(t("Review"), self.open_pending)]}
+        return {}
+
+    def _show_notice(self, title: str, text: str, *, icon: str = "cloud", tone: str | None = None,
+                     actions=(), on_click=None, timeout: int = 6000, about: str | None = None) -> None:
+        """A notification in the style chosen in Settings: Skyfold's own card, or Windows' own.
+        about: what a click on Windows' notification opens ("update"; None: what needs attention)."""
+        self._last_msg = about
+        if self.settings.notification_style == "windows":
+            self.tray.showMessage(title, text, app_icon(), timeout)
+            return
+        self.toasts.show(title, text, icon=icon, tone=tone, actions=actions,
+                         on_click=on_click or self._on_message_clicked, timeout=timeout)
 
     # updates ------------------------------------------------------------------
     def check_updates(self, manual: bool = False) -> None:
@@ -464,10 +490,10 @@ class Controller(QObject):
             elif self.settings.update_told != rel.version:  # told once per version
                 self.settings.update_told = rel.version
                 self.settings.save()
-                self._last_msg = "update"
-                self.tray.showMessage(t("Update available"),
-                                      t("Skyfold {version} is available. Click to see what's new.", version=rel.version),
-                                      app_icon(), 8000)
+                self._show_notice(t("Update available"),
+                                  t("Skyfold {version} is available. Click to see what's new.", version=rel.version),
+                                  icon="download", actions=[(t("What's new"), self.open_update)],
+                                  on_click=self.open_update, timeout=8000, about="update")
 
         def fail(msg: str) -> None:
             log.info("Update check failed: %s", msg)
@@ -838,6 +864,9 @@ class Controller(QObject):
         stop_tasks()  # background requests still waiting for a free thread (Find My…) never start
         self.worker.cancel()
         self.worker._stop_watchers()
+        toasts = getattr(self, "toasts", None)  # (none yet when quitting during start-up)
+        if toasts is not None:
+            toasts.close_all()
         self.tray.hide()
         self.thread.quit()
         self.thread.wait(3000)

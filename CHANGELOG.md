@@ -4,6 +4,10 @@ All notable changes to Skyfold are listed here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Added
+- **Skyfold's own notifications.** Instead of Windows' grey balloons, a small card slides in beside the tray in Skyfold's theme (light, dark or OLED), with the service's colour (Photos pink, iCloud Drive blue) and buttons that do the next thing: *Open* and *Show in folder* after a sync, *Sign in*, *Review* for deletions waiting for your OK, *What's new* for an update. A card goes after about six seconds, stays while the mouse is on it, and up to three stack above each other. It never takes the keyboard from the program you're typing in, and it stays away while Windows' *Do Not Disturb* is on or a game, film or presentation runs full screen. With Windows' animation effects off, cards appear and go without moving.
+- **Settings → General → Notifications** chooses *Skyfold's own* (the default), *Windows' own* or *Off* (sign-in and deletions waiting for your OK are still shown). If you had switched notifications off, they stay off.
+
 ## [1.0.31] - 2026-11-25
 
 ### Added
