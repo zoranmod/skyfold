@@ -27,7 +27,7 @@ from ..config import APP_NAME
 from ..i18n import t
 from ..worker import fmt_time
 from .icons import STATE_COLORS, glyph
-from .panel_parts import CenteredButton, LogoTile, StateBadge, Thumbs, TwoLineLabel, rounded, tint
+from .panel_parts import CenteredButton, LogoTile, RowScroll, StateBadge, Thumbs, TwoLineLabel, rounded, tint
 from .glow import GlowTile, animations_on
 from .theme import OLED, service_color, state_color
 
@@ -819,7 +819,7 @@ class Flyout(QWidget):
         sec.addWidget(self.clear_btn)
         self.last_sync.hide()  # each service row now shows its own "checked …" time
         root.addLayout(sec)
-        self.list = QScrollArea()
+        self.list = RowScroll()  # one wheel notch, one row
         self.list.setWidgetResizable(True)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.setFrameShape(QFrame.NoFrame)
@@ -1312,8 +1312,12 @@ class Flyout(QWidget):
         self._list_pad.setFixedHeight(0)
         other = self._needed_height() - (self.list.height() if self.list.isVisible() else self.empty.height())
         fill = max(self.MIN_LIST_HEIGHT, self.TARGET_HEIGHT - other)
-        step = 43  # one activity row (and its 1 px gap): whole rows only, never one cut in half
-        shown = max(2, (fill - 2) // step) * step + 2
+        # whole rows only, never one cut in half: the list is a whole number of rows tall (measured,
+        # since the row height follows the font and the display scale)
+        if rows:
+            self._row_step = max(30, rows[0].sizeHint().height())
+        step = getattr(self, "_row_step", 42)
+        shown = max(2, round(fill / step)) * step  # (the nearest whole number of rows: 3, not 2.9 cut to 2)
         if self.list.isVisible():
             self.list.setFixedHeight(shown)
         else:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QLabel, QSizePolicy, QToolButton, QWidget
+from PySide6.QtWidgets import QLabel, QScrollArea, QSizePolicy, QToolButton, QWidget
 
 from .icons import draw_logo, glyph
 
@@ -241,3 +241,67 @@ class CenteredButton(QToolButton):
     def set_glyph(self, name: str) -> None:
         self.icon_name = name
         self.update()
+
+
+class RowScroll(QScrollArea):
+    """The panel's activity list: one wheel notch moves exactly one row, with a short glide, and it
+    always stops on the edge of a row (Qt's own 60 px steps left rows cut in half and jumped by
+    one and a half rows). A touchpad scrolls pixel by pixel as usual."""
+
+    GLIDE_MS = 140
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        from PySide6.QtCore import QEasingCurve, QVariantAnimation
+
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(self.GLIDE_MS)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim.valueChanged.connect(lambda v: self.verticalScrollBar().setValue(int(v)))
+        self._target: int | None = None
+        self._notches = 0
+
+    def _row_tops(self) -> list[int]:
+        box = self.widget()
+        if box is None or box.layout() is None:
+            return []
+        lay = box.layout()
+        tops = []
+        for i in range(lay.count()):
+            w = lay.itemAt(i).widget()
+            if w is not None and w.isVisible():
+                tops.append(w.y())
+        return sorted(tops)
+
+    def wheelEvent(self, e) -> None:  # noqa: N802
+        bar = self.verticalScrollBar()
+        if bar.maximum() <= 0:
+            e.accept()  # nothing to scroll: the panel itself never moves either
+            return
+        if not e.pixelDelta().isNull():  # a precision touchpad: follow the fingers
+            self._anim.stop()
+            self._target = None
+            bar.setValue(bar.value() - e.pixelDelta().y())
+            e.accept()
+            return
+        self._notches += e.angleDelta().y()
+        steps = int(self._notches / 120)
+        if not steps:
+            e.accept()
+            return
+        self._notches -= steps * 120
+        start = self._target if self._target is not None and self._anim.state() else bar.value()
+        tops = self._row_tops() + [bar.maximum()]
+        target = start
+        for _ in range(abs(steps)):
+            if steps < 0:  # down: the next row's top
+                target = next((y for y in tops if y > target + 1), bar.maximum())
+            else:
+                target = next((y for y in reversed(tops) if y < target - 1), 0)
+        target = max(0, min(bar.maximum(), target))
+        self._target = target
+        self._anim.stop()
+        self._anim.setStartValue(bar.value())
+        self._anim.setEndValue(target)
+        self._anim.start()
+        e.accept()
