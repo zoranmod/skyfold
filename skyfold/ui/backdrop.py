@@ -106,3 +106,31 @@ def glass_colours(c: dict[str, str], dark: bool) -> dict[str, str]:
     return {"tint": "rgba(243, 244, 247, 150)", "card": "rgba(255, 255, 255, 170)", "stroke": "rgba(0, 0, 0, 15)",
             "stroke2": "rgba(0, 0, 0, 26)", "foot": "rgba(255, 255, 255, 70)", "hover": "rgba(0, 0, 0, 10)",
             "control": "rgba(255, 255, 255, 200)"}
+
+
+def blur_behind(widget: QWidget, tint: QColor | None = None) -> bool:
+    """Windows' own blur of what is behind a frameless window (the tray panel and the notification
+    cards): the accent policy behind Windows' acrylic, which, unlike the system backdrop, also
+    works on windows without a frame. tint: the colour laid over the blur (its alpha is the amount)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class ACCENT(ctypes.Structure):
+            _fields_ = [("state", ctypes.c_int), ("flags", ctypes.c_int), ("color", ctypes.c_uint),
+                        ("anim", ctypes.c_int)]
+
+        class DATA(ctypes.Structure):
+            _fields_ = [("attr", ctypes.c_int), ("data", ctypes.c_void_p), ("size", ctypes.c_size_t)]
+
+        c = tint or QColor(32, 34, 40, 120)
+        abgr = (c.alpha() << 24) | (c.blue() << 16) | (c.green() << 8) | c.red()
+        accent = ACCENT(4, 2, abgr, 0)  # ACCENT_ENABLE_ACRYLICBLURBEHIND, draw the tint colour
+        data = DATA(19, ctypes.cast(ctypes.pointer(accent), ctypes.c_void_p), ctypes.sizeof(accent))  # WCA_ACCENT_POLICY
+        fn = ctypes.windll.user32.SetWindowCompositionAttribute
+        fn.argtypes = [wintypes.HWND, ctypes.POINTER(DATA)]
+        return bool(fn(int(widget.winId()), ctypes.byref(data)))
+    except Exception:  # noqa: BLE001 - purely cosmetic
+        return False

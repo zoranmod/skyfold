@@ -889,14 +889,7 @@ class Flyout(QWidget):
             f"QFrame#Sep {{ background: {g['stroke']}; }}")
 
     def paintEvent(self, e) -> None:  # noqa: N802
-        if self.glass:  # the panel's tint over Windows' acrylic (the rest of the panel is see-through)
-            from .backdrop import glass_colours
-
-            g = glass_colours(self.c, QColor(self.c["bg"]).lightness() < 128)["tint"]
-            r, gg, b, a = (int(x) for x in g[5:-1].split(","))
-            p = QPainter(self)
-            p.fillRect(self.rect(), QColor(r, gg, b, a))
-            p.end()
+        if self.glass:  # Windows draws the blur and its tint behind: nothing to paint here
             return
         super().paintEvent(e)
 
@@ -1397,9 +1390,11 @@ class Flyout(QWidget):
         self._size_list()
         self._place(anchor if anchor and anchor.isValid() and not anchor.isEmpty() else None)
         if self.glass:
-            from .backdrop import apply_backdrop
+            from .backdrop import blur_behind, glass_colours
 
-            apply_backdrop(self, "acrylic", QColor(self.c["bg"]).lightness() < 128)
+            dark = QColor(self.c["bg"]).lightness() < 128
+            r, g, b, a = (int(x) for x in glass_colours(self.c, dark)["tint"][5:-1].split(","))
+            blur_behind(self, QColor(r, g, b, a))  # Windows blurs the desktop behind the panel and tints it
         self.show()
         round_corners(self)
         self.raise_()
