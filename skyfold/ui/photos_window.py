@@ -1618,12 +1618,20 @@ class PhotosWindow(_Dialog):
         self._selection_changed()
 
     def _layout_grid(self) -> None:
-        w = self.grid.viewport().width()
+        g = self.grid
+        # The width Qt lays the photos out in: the whole area less room for a scroll bar (Qt keeps
+        # that room even when the bar is there). Sizing the tiles from the plain viewport width left
+        # one column's worth of empty space on the right at many window sizes.
+        try:
+            w = g.maximumViewportSize().width() - g.style().pixelMetric(QStyle.PM_ScrollBarExtent, None,
+                                                                         g.verticalScrollBar())
+        except (AttributeError, RuntimeError):
+            w = g.viewport().width()
         if w <= 0:
             return
         cols = COLUMNS[max(0, min(len(COLUMNS) - 1, PhotosWindow.zoom_level))]
         cols = min(cols, max(2, w // 60))  # (fewer in a narrow window)
-        size = max(40, (w - 1) // cols)
+        size = max(40, (w - 4) // cols)  # (Qt wraps a few pixels before the end)
         if size != self.tile or self.grid.gridSize().width() != size:
             self.tile = size
             self.grid.setGridSize(QSize(size, size))

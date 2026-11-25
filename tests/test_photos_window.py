@@ -655,9 +655,15 @@ def test_the_same_photos_stay_in_view_when_the_window_is_maximized(qapp, made_up
         qapp.processEvents()
         after = w._anchor()
         assert after[0] == before[0]
-        vp = w.grid.viewport().width()
-        cols = vp // w.tile
-        assert vp - cols * w.tile < w.tile  # the photos fill the width: no empty column on the right
+        for level, want in enumerate(pw.COLUMNS[:4]):  # every size: as many columns as meant, no gap
+            pw.PhotosWindow.zoom_level = level
+            for width in (900, 1200, 1500, 1600, 1680):
+                w.resize(width, 900)
+                qapp.processEvents()
+                xs = {w.grid.visualRect(w.model.index(r)).x() for r in range(min(20, len(w.model.items)))}
+                vp = w.grid.viewport().width()
+                assert len(xs) == min(want, max(2, vp // 60)), (level, width, len(xs))
+                assert vp - len(xs) * w.tile < 40, (level, width)
     finally:
         pw.PhotosWindow.zoom_level = 2
         w.close()
