@@ -319,6 +319,17 @@ def glyph(name: str, color: str, size: int = 20) -> QIcon:
         p.drawLine(QPointF(s * 0.7, s * 0.3), QPointF(s * 0.3, s * 0.7))
     elif name == "chevron":
         p.drawPolyline([QPointF(s * 0.4, s * 0.26), QPointF(s * 0.64, s * 0.5), QPointF(s * 0.4, s * 0.74)])
+    elif name == "back":  # the chevron pointing left
+        p.drawPolyline([QPointF(s * 0.6, s * 0.26), QPointF(s * 0.36, s * 0.5), QPointF(s * 0.6, s * 0.74)])
+    elif name == "bell":
+        path = QPainterPath(QPointF(s * 0.2, s * 0.7))
+        path.cubicTo(s * 0.28, s * 0.6, s * 0.29, s * 0.52, s * 0.29, s * 0.42)
+        path.cubicTo(s * 0.29, s * 0.28, s * 0.38, s * 0.19, s * 0.5, s * 0.19)
+        path.cubicTo(s * 0.62, s * 0.19, s * 0.71, s * 0.28, s * 0.71, s * 0.42)
+        path.cubicTo(s * 0.71, s * 0.52, s * 0.72, s * 0.6, s * 0.8, s * 0.7)
+        path.closeSubpath()
+        p.drawPath(path)
+        p.drawArc(QRectF(s * 0.42, s * 0.7, s * 0.16, s * 0.14), 180 * 16, 180 * 16)
     elif name == "more":
         p.setBrush(QColor(color))
         for x in (0.26, 0.5, 0.74):

@@ -422,6 +422,12 @@ BS: dict[str, str] = {
         "program radi preko cijelog ekrana.",
     "Open": "Otvori",
     "Show in folder": "Prikaži u folderu",
+    "Notifications, {n} new": "Obavještenja, novih: {n}",
+    "Back": "Nazad",
+    "Clear all": "Očisti sve",
+    "Empty this list. Nothing else changes.": "Isprazni ovu listu. Ništa drugo se ne mijenja.",
+    "No notifications yet. The ones Skyfold shows while it runs are kept here.":
+        "Još nema obavještenja. Ona koja Skyfold prikaže dok radi čuvaju se ovdje.",
     "Language": "Jezik",
     "Save": "Sačuvaj",
     "{app} {version} · settings are kept in the 'data' folder next to the app.":

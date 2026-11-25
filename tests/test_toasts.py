@@ -427,3 +427,165 @@ def test_cards_glide_in_and_out_when_windows_animates(qapp, monkeypatch):
     finally:
         toasts.close_all()
         flush(qapp)
+
+
+# the notifications list (the panel's bell) -------------------------------------------------------
+def test_notice_log_keeps_the_newest_thirty_and_counts_new_ones():
+    from skyfold.ui.notices import LIMIT, Notice, NoticeLog
+
+    log = NoticeLog()
+    seen = []
+    log.on_change(lambda: seen.append(log.unseen))
+    for i in range(LIMIT + 5):
+        log.add(Notice(f"Note {i}", "x"))
+    assert len(log.items) == LIMIT and log.items[0].title == f"Note {LIMIT + 4}"  # newest first
+    assert log.unseen == LIMIT and seen
+    log.mark_seen()
+    assert log.unseen == 0
+    log.add(Notice("One more", "x"))
+    assert log.unseen == 1
+    log.clear()
+    assert log.items == [] and log.unseen == 0
+
+
+def _panel(qapp, actions=None):
+    from skyfold.ui.flyout import Flyout
+    from skyfold.ui.notices import Notice, NoticeLog
+
+    ran = []
+    table = actions or {"folder_photos": ("Show in folder", lambda: ran.append("folder"), True),
+                        "review": ("Review", lambda: ran.append("review"), False)}
+    log = NoticeLog()
+    f = Flyout(theme.DARK)
+    f.setAttribute(Qt.WA_DontShowOnScreen)
+    f.attach_notices(log, table.get)
+    log.add(Notice("Confirmation needed", "7 items", "trash", "warn", ("review",)))
+    log.add(Notice("Photos synced", "Downloaded: 2", "photo", None, ("folder_photos", "gone")))
+    return f, log, ran
+
+
+def test_bell_badge_counts_until_the_list_is_opened(qapp):
+    f, log, _ran = _panel(qapp)
+    try:
+        assert f.bell.isVisibleTo(f) and f.bell.badge_text() == "2"
+        assert "2" in f.bell.accessibleName()
+        f.show_at(None)
+        qapp.processEvents()
+        size = f.size()
+        f.show_notices()
+        qapp.processEvents()
+        assert f.notices_page.isVisible() and not f._scroll.isVisible() and not f._bottom.isVisible()
+        assert f.size() == size  # the panel keeps its size
+        assert log.unseen == 0 and f.bell.badge_text() == ""
+        for i in range(12):
+            log.add(toast_notice(i))
+        assert f.bell.badge_text() == "9+"
+    finally:
+        f.close()
+
+
+def toast_notice(i):
+    from skyfold.ui.notices import Notice
+
+    return Notice(f"N{i}", "x")
+
+
+def test_list_shows_newest_first_with_the_buttons_that_still_apply(qapp):
+    f, log, ran = _panel(qapp)
+    try:
+        f.show_at(None)
+        f.show_notices()
+        qapp.processEvents()
+        rows = f.notices_page.rows()
+        assert [r.notice.title for r in rows] == ["Photos synced", "Confirmation needed"]
+        assert [b.text() for b in rows[0].buttons] == ["Show in folder"]  # an unknown key is left out
+        assert rows[1].buttons == []  # the deletions were reviewed meanwhile: no Review button
+        assert rows[0].tile.color.name() == theme.SERVICE_COLORS["dark"]["photo"]
+        rows[0].buttons[0].click()
+        assert ran == ["folder"]
+        assert not f.notices_page.isVisible() and f._scroll.isVisible()  # back to the panel
+    finally:
+        f.close()
+
+
+def test_clear_all_back_and_escape(qapp):
+    from PySide6.QtGui import QKeyEvent
+
+    f, log, _ran = _panel(qapp)
+    try:
+        f.show_at(None)
+        f.show_notices()
+        qapp.processEvents()
+        f.notices_page.clear_button.click()
+        qapp.processEvents()
+        assert log.items == [] and f.notices_page.rows() == []
+        assert f.notices_page.empty.isVisible() and not f.notices_page.clear_button.isEnabled()
+        f.notices_page.back_button.click()
+        assert not f.notices_page.isVisible() and f._bottom.isVisible()
+        f.show_notices()
+        QApplication.sendEvent(f, QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+        assert not f.notices_page.isVisible() and f.isVisible()  # Escape goes back first
+        f.show_notices()
+        f.hide()
+        assert not f.notices_page.isVisible() and f._scroll.isVisibleTo(f)  # opens on the panel again
+    finally:
+        f.close()
+
+
+def test_list_text_is_never_read_as_markup(qapp):
+    from skyfold.ui.notices import Notice, NoticeRow
+
+    row = NoticeRow(Notice("<b>x</b>", "<img src=x> a.jpg"), theme.LIGHT, lambda key: None)
+    assert row.title.textFormat() == Qt.PlainText and row.text.textFormat() == Qt.PlainText
+    assert "a.jpg" in row.accessibleName()
+
+
+def test_every_shown_notification_lands_in_the_list(controller):
+    from skyfold.i18n import t
+
+    ctl, calls = controller
+    ctl._notify(t("Photos synced"), "Downloaded: 2")  # Skyfold's own card
+    ctl.settings.notification_style = "windows"
+    ctl._notify(t("iCloud Drive synced"), "Uploaded: 1")  # Windows' balloon
+    titles = [n.title for n in ctl.notices.items]
+    assert titles == [t("iCloud Drive synced"), t("Photos synced")]
+    assert ctl.notices.items[1].actions == ("open_photos", "folder_photos")
+    assert ctl.flyout.bell.badge_text() == "2"
+
+
+def test_off_collects_only_what_is_still_shown(controller):
+    from skyfold.i18n import t
+
+    ctl, _calls = controller
+    ctl.settings.notifications = False
+    ctl._notify(t("Photos synced"), "Downloaded: 2")
+    assert ctl.notices.items == []
+    ctl._notify(t("Sign-in required"), "Expired")  # shown even when Off, so kept too
+    assert [n.title for n in ctl.notices.items] == [t("Sign-in required")]
+
+
+def test_a_card_held_back_by_do_not_disturb_is_still_in_the_list(controller, monkeypatch):
+    from skyfold.i18n import t
+
+    ctl, _calls = controller
+    monkeypatch.setattr(ctl.toasts, "show", Toasts.show.__get__(ctl.toasts))  # the real cards again
+    ctl.toasts._quiet = lambda: "Do Not Disturb"
+    ctl._notify(t("Photos synced"), "Downloaded: 2")
+    assert ctl.toasts.cards == []  # no card…
+    assert [n.title for n in ctl.notices.items] == [t("Photos synced")]  # …but nothing is missed
+
+
+def test_list_buttons_apply_only_while_they_make_sense(controller):
+    from types import SimpleNamespace
+
+    ctl, _calls = controller
+    applies = lambda key: ctl._notice_action(key)[2]  # noqa: E731
+    assert applies("open_photos") and applies("folder_photos")
+    assert not applies("review") and not applies("sign_in") and not applies("update")
+    assert not applies("folder_drive")
+    assert ctl._notice_action("nonsense") is None
+    ctl._pending = object()
+    ctl.state = "auth"
+    ctl._release = SimpleNamespace(version="99.0.0")
+    ctl.settings.drive_enabled = True
+    assert applies("review") and applies("sign_in") and applies("update") and applies("folder_drive")
