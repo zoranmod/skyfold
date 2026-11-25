@@ -27,7 +27,7 @@ from ..config import APP_NAME
 from ..i18n import t
 from ..worker import fmt_time
 from .icons import STATE_COLORS, glyph
-from .panel_parts import LogoTile, StateBadge, Thumbs, TwoLineLabel, rounded, tint
+from .panel_parts import CenteredButton, LogoTile, StateBadge, Thumbs, TwoLineLabel, rounded, tint
 from .glow import GlowTile, animations_on
 from .theme import OLED, service_color, state_color
 
@@ -500,7 +500,7 @@ class ActivityRow(QFrame):
     def _service_colour(self, palette: dict[str, str]) -> str:
         """The colour of the service this entry is about (Photos pink, Drive blue, Notes amber...)."""
         where = f"{self.detail_text} {self.target}".lower()
-        if "icloud drive" in where:
+        if "icloud drive" in where or self.message.lower().startswith("drive:"):
             key = "folder"
         elif "note" in where or "bilje" in where:
             key = "note"
@@ -832,8 +832,8 @@ class Flyout(QWidget):
         bl.setContentsMargins(12, 10, 12, 10)
         bl.setSpacing(8)
 
-        def bar_button(text: str, slot, tip: str = "") -> QToolButton:
-            b = QToolButton()
+        def bar_button(text: str, slot, tip: str = "", kind=QToolButton) -> QToolButton:
+            b = kind()
             b.setObjectName("Bar")
             b.setToolButtonStyle(Qt.ToolButtonIconOnly)
             b.setIconSize(QSize(18, 18))
@@ -850,7 +850,7 @@ class Flyout(QWidget):
         self.checked_label.setMinimumWidth(0)
         self.checked_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         bl.addWidget(self.checked_label, 1)
-        self.sync_btn = bar_button(t("Sync now"), self._on_sync_clicked)
+        self.sync_btn = bar_button(t("Sync now"), self._on_sync_clicked, kind=CenteredButton)
         self.sync_btn.setProperty("primary", True)
         self.sync_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.sync_btn.setIconSize(QSize(16, 16))
@@ -1016,6 +1016,7 @@ class Flyout(QWidget):
             self.sync_btn.style().unpolish(self.sync_btn)
             self.sync_btn.style().polish(self.sync_btn)
         self.sync_btn.setIcon(glyph("stop" if quiet else name, self.c["text"] if quiet else self.c["accent_text"]))
+        self.sync_btn.set_glyph("stop" if quiet else name)  # drawn centred with the text, in its colour
         self.sync_btn.setEnabled(True)  # paused: this button is the way to continue
         self._status_line()
         self._size_list()

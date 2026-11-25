@@ -61,6 +61,10 @@ def glass_supported() -> bool:
     if sys.platform != "win32":
         return False
     try:
+        from PySide6.QtGui import QGuiApplication
+
+        if QGuiApplication.platformName() != "windows":  # (offscreen renders: screenshots, tests)
+            return False
         if sys.getwindowsversion().build < 22621:
             return False
         import winreg

@@ -194,7 +194,7 @@ class ToastCard(QWidget):
     SHADOW = 18  # room around the card for its shadow
     SHADOW_DROP = 4  # the shadow falls a little below the card
     PAD = 14
-    TILE = 36
+    TILE = 32
 
     clicked = Signal()  # the card itself (not a button) was clicked
     closeRequested = Signal()  # the cross
@@ -206,6 +206,15 @@ class ToastCard(QWidget):
                          | Qt.WindowDoesNotAcceptFocus | Qt.NoDropShadowWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
+        from .backdrop import glass_supported
+
+        # Windows 11 with transparency effects: the card is the window itself, Windows blurs what is
+        # behind it and gives it its round corners and shadow; otherwise it paints its own shadow.
+        self.glass = glass_supported()
+        if self.glass:
+            self.SHADOW = 0
+            self.SHADOW_DROP = 0
+            self.RADIUS = 8.0
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setFocusPolicy(Qt.NoFocus)
         self.setWindowTitle(f"{APP_NAME}: {title}")
@@ -219,8 +228,8 @@ class ToastCard(QWidget):
 
         m = self.SHADOW
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(m + self.PAD, m + 11, m + self.PAD - 4, m + self.PAD)
-        outer.setSpacing(8)
+        outer.setContentsMargins(m + self.PAD, m + 10, m + self.PAD - 4, m + self.PAD)
+        outer.setSpacing(4)
 
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
@@ -286,29 +295,34 @@ class ToastCard(QWidget):
             accent = service_color(c, self.icon) or c["accent_fg"]
         light = kind == "light"
         shadow = QColor(0, 0, 0)
+        border = QColor(0, 0, 0, 26) if light else QColor(255, 255, 255, 30)
         return {
             "kind": kind,  # type: ignore[dict-item]
             "surface": QColor(c["surface"] if kind != "oled" else "#151517"),
-            "border": QColor(c["border"]),
+            "border": border if self.glass else QColor(c["border"]),
             "highlight": QColor(255, 255, 255, 0 if light else 16),  # a hairline of light along the top
             "shadow": shadow,
             "shadow_alpha": 0.16 if light else 0.42,  # type: ignore[dict-item]
             "accent": QColor(accent),
             "glow_alpha": 0.07 if light else 0.13,  # type: ignore[dict-item]
             "text": QColor(c["text"]),
-            "muted": QColor(c["muted"]),
-            "hover": QColor(c["hover"]),
-            "button": QColor(c["surface2"]),
+            "muted": QColor(c.get("muted2", c["muted"])),
+            "hover": QColor(255, 255, 255, 26) if self.glass and not light else
+            QColor(0, 0, 0, 14) if self.glass else QColor(c["hover"]),
+            "button": QColor(255, 255, 255, 20) if self.glass and not light else
+            QColor(255, 255, 255, 200) if self.glass else QColor(c["surface2"]),
+            "btn": QColor(c["btn"]),
+            "btn_text": QColor(c["accent_text"]),
         }
 
     def set_palette(self, palette: dict[str, str]) -> None:
         self.c = palette
         col = self._colors()
-        self._glyph = glyph(self.icon, col["accent"].name(), 20)
+        self._glyph = glyph(self.icon, col["accent"].name(), 17)
         base = QFont(self.font())
-        for lbl, pt, weight, color in ((self._app, 8.25, QFont.Normal, col["muted"]),
+        for lbl, pt, weight, color in ((self._app, 8.5, QFont.Normal, col["muted"]),
                                        (self._title, 10.5, QFont.DemiBold, col["text"]),
-                                       (self._text, 9.25, QFont.Normal, col["muted"])):
+                                       (self._text, 9.75, QFont.Normal, col["muted"])):
             f = QFont(base)
             f.setPointSizeF(pt)
             f.setWeight(weight)
@@ -335,7 +349,8 @@ class ToastCard(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         r = self.card_rect()
 
-        # soft shadow: rounded rings that fade out, a little lower than the card
+        # soft shadow: rounded rings that fade out, a little lower than the card (Windows draws it
+        # itself around a card over its blur)
         p.setPen(Qt.NoPen)
         steps = self.SHADOW - 2
         for i in range(steps, 0, -1):
@@ -348,7 +363,8 @@ class ToastCard(QWidget):
 
         card = QPainterPath()
         card.addRoundedRect(r, self.RADIUS, self.RADIUS)
-        p.fillPath(card, col["surface"])
+        if not self.glass:  # (over Windows' blur the card is see-through)
+            p.fillPath(card, col["surface"])
         # the service colour as a soft light from the top-left corner
         glow = QRadialGradient(QPointF(r.left() + 30, r.top() + 34), r.width() * 0.75)
         a = QColor(col["accent"])
@@ -376,21 +392,24 @@ class ToastCard(QWidget):
         draw_logo(p, lg.width())
         p.restore()
 
-        # the service tile: the colour as a tint, the glyph in the colour
-        tr = QRectF(self._tile.geometry()).adjusted(0.5, 0.5, -0.5, -0.5)
-        top, bottom, edge = QColor(col["accent"]), QColor(col["accent"]), QColor(col["accent"])
-        light = col["kind"] == "light"
-        top.setAlphaF(0.18 if light else 0.28)
-        bottom.setAlphaF(0.07 if light else 0.08)
-        edge.setAlphaF(0.30 if light else 0.38)
-        grad = QLinearGradient(tr.topLeft(), tr.bottomRight())
-        grad.setColorAt(0, top)
-        grad.setColorAt(1, bottom)
-        p.setBrush(grad)
-        p.setPen(QPen(edge, 1))
-        p.drawRoundedRect(tr, 10, 10)
-        s = 20
+        # the service tile: a flat tint of the colour, the glyph in the colour (as in the panel)
+        tr = QRectF(self._tile.geometry())
+        fill = QColor(col["accent"])
+        fill.setAlphaF(0.14 if col["kind"] == "light" else 0.18)
+        p.setBrush(fill)
+        p.setPen(Qt.NoPen)
+        p.drawRoundedRect(tr, 9, 9)
+        s = 17
         self._glyph.paint(p, QRect(int(tr.center().x() - s / 2 + 0.5), int(tr.center().y() - s / 2 + 0.5), s, s))
+        # the time left, as a thin line along the bottom that stops while the pointer is on the card
+        if self._timer.isActive() and self.timeout > 0:
+            left = max(0.0, min(1.0, self._timer.remainingTime() / self.timeout))
+            line = QColor(col["accent"])
+            line.setAlphaF(0.75)
+            p.save()
+            p.setClipPath(card)
+            p.fillRect(QRectF(r.left(), r.bottom() - 2, r.width() * left, 2), line)
+            p.restore()
         p.end()
 
     def paint_button(self, p: QPainter, b: _CardButton) -> None:
@@ -400,6 +419,8 @@ class ToastCard(QWidget):
         down = b.isDown()
         r = QRectF(b.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         if b.kind == "close":
+            if not (self.hovered or hot):
+                return  # the cross shows while the pointer is on the card
             if hot:
                 p.setPen(Qt.NoPen)
                 p.setBrush(col["hover"])
@@ -411,17 +432,18 @@ class ToastCard(QWidget):
             p.drawLine(QPointF(c.x() - d, c.y() - d), QPointF(c.x() + d, c.y() + d))
             p.drawLine(QPointF(c.x() - d, c.y() + d), QPointF(c.x() + d, c.y() - d))
             return
-        if b.kind == "primary":
-            bg = QColor(col["accent"])
-            bg.setAlphaF((0.30 if down else 0.24 if hot else 0.16) if col["kind"] != "light"
-                         else (0.22 if down else 0.17 if hot else 0.11))
-            fg = QColor(col["accent"]) if col["kind"] != "light" else QColor(col["accent"]).darker(110)
+        if b.kind == "primary":  # the app's main button: filled with the accent
+            bg = QColor(col["btn"])
+            if hot or down:
+                bg = bg.lighter(108) if col["kind"] != "light" else bg.darker(106)
+            fg = QColor(col["btn_text"])
+            p.setPen(Qt.NoPen)
         else:
             bg = QColor(col["hover"] if (hot or down) else col["button"])
             fg = QColor(col["text"])
-        p.setPen(Qt.NoPen)
+            p.setPen(QPen(col["border"], 1))
         p.setBrush(bg)
-        p.drawRoundedRect(r, 8, 8)
+        p.drawRoundedRect(r, 6, 6)
         p.setPen(fg)
         p.setFont(b.font())
         p.drawText(r, Qt.AlignCenter, b.text())
@@ -430,6 +452,21 @@ class ToastCard(QWidget):
     def start_timer(self, ms: int | None = None) -> None:
         if not self.hovered and not self.leaving:
             self._timer.start(self.timeout if ms is None else ms)
+            if not hasattr(self, "_tick"):
+                self._tick = QTimer(self)  # redraws the time-left line
+                self._tick.setInterval(80)
+                self._tick.timeout.connect(self.update)
+            self._tick.start()
+
+    def showEvent(self, e) -> None:  # noqa: N802
+        super().showEvent(e)
+        if self.glass:
+            from .backdrop import blur_behind
+            from .flyout import round_corners
+
+            light = theme_kind(self.c) == "light"
+            blur_behind(self, QColor(243, 244, 247, 150) if light else QColor(30, 33, 39, 150))
+            round_corners(self)
 
     def remaining(self) -> int:
         return self._timer.remainingTime() if self._timer.isActive() else -1
@@ -437,11 +474,14 @@ class ToastCard(QWidget):
     def enterEvent(self, e) -> None:  # noqa: N802 - the card stays while the pointer is on it
         self.hovered = True
         self._timer.stop()
+        self.close_button.update()
+        self.update()
         super().enterEvent(e)
 
     def leaveEvent(self, e) -> None:  # noqa: N802
         self.hovered = False
         self.start_timer(min(self.timeout, LINGER_MS))
+        self.close_button.update()
         super().leaveEvent(e)
 
     def mouseReleaseEvent(self, e) -> None:  # noqa: N802

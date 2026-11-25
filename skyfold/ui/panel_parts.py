@@ -6,8 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QLabel, QSizePolicy, QWidget
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtWidgets import QLabel, QSizePolicy, QToolButton, QWidget
 
 from .icons import draw_logo, glyph
 
@@ -206,3 +206,38 @@ class TwoLineLabel(QLabel):
         fm = QFontMetrics(self.font())
         n = max(1, super().text().count("\n") + 1) if super().text() else 1
         return QSize(super().sizeHint().width(), fm.lineSpacing() * n)
+
+
+class CenteredButton(QToolButton):
+    """A text button whose icon and text sit centred together (a tool button puts them at the
+    left), the icon drawn in the text's colour at the text's weight: the panel's main button."""
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        from PySide6.QtWidgets import QStyle, QStyleOptionToolButton, QStylePainter
+
+        sp = QStylePainter(self)
+        opt = QStyleOptionToolButton()
+        self.initStyleOption(opt)
+        opt.text = ""
+        opt.icon = QIcon()
+        sp.drawComplexControl(QStyle.CC_ToolButton, opt)  # the background and border from the style sheet
+        colour = self.palette().buttonText().color()
+        fm = QFontMetrics(self.font())
+        icon = 16 if self.icon_name else 0
+        gap = 8 if icon else 0
+        w = icon + gap + fm.horizontalAdvance(self.text())
+        x = (self.width() - w) / 2
+        if icon:
+            from .svgicons import pixmap
+
+            pm = pixmap(self.icon_name, colour.name(), icon, max(1.0, self.devicePixelRatioF()), stroke=1.8)
+            sp.drawPixmap(int(round(x)), int(round((self.height() - icon) / 2)), pm)
+        sp.setPen(colour)
+        sp.setFont(self.font())
+        sp.drawText(QRectF(x + icon + gap, 0, w, self.height()), Qt.AlignVCenter | Qt.AlignLeft, self.text())
+
+    icon_name = ""
+
+    def set_glyph(self, name: str) -> None:
+        self.icon_name = name
+        self.update()
