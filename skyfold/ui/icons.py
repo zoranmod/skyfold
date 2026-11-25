@@ -207,7 +207,11 @@ def tray_icon(state: str, phase: int = 0) -> QIcon:
 
 
 def glyph(name: str, color: str, size: int = 20) -> QIcon:
-    """Small line icons for buttons and activity rows."""
+    """Small line icons for buttons and activity rows (the 1.1 icon set, see svgicons)."""
+    from . import svgicons
+
+    if name in svgicons.ICONS:
+        return svgicons.icon(name, color, size)
     pm = QPixmap(size * 2, size * 2)
     pm.setDevicePixelRatio(2)
     pm.fill(Qt.transparent)

@@ -9,7 +9,7 @@ import time
 import logging
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -27,6 +27,7 @@ from ..config import APP_NAME
 from ..i18n import t
 from ..worker import fmt_time
 from .icons import STATE_COLORS, glyph
+from .panel_parts import LogoTile, StateBadge, Thumbs, TwoLineLabel, rounded, tint
 from .glow import GlowTile, animations_on
 from .theme import OLED, service_color, state_color
 
@@ -224,7 +225,7 @@ class StorageBar(QFrame):
         self.title = QLabel(t("iCloud storage"))
         self.title.setObjectName("Hint")
         self.amount = QLabel("")
-        self.amount.setObjectName("Hint")
+        self.amount.setObjectName("Amount")
         head.addWidget(self.title)
         head.addStretch(1)
         head.addWidget(self.amount)
@@ -261,7 +262,7 @@ class StorageBar(QFrame):
 
         self.amount.setText(t("{used} of {total}", used=size(self.used), total=size(self.total)))
         self.legend.setText("&nbsp;&nbsp;&nbsp;&nbsp;".join(
-            f'<span style="color:{self.c[key]}">&#9679;</span>&nbsp;{label}&nbsp;<b>{size(n)}</b>'
+            f'<span style="color:{self.c[key]};font-size:10pt">&#9679;</span>&nbsp;{label}&nbsp;<b>{size(n)}</b>'
             for label, n, key in self.parts if n))
         pct = round(100 * self.used / self.total) if self.total else 0
         self.details.setText(t("{pct}% used · {free} available", pct=pct, free=size(max(0, self.total - self.used))))
@@ -282,11 +283,14 @@ class StorageBar(QFrame):
         p.setClipPath(clip)
         p.fillRect(QRectF(0, 0, w, h), QColor(self.c["track"]))
         x = 0.0
+        p.setClipping(False)
         for _label, n, key in self.parts:
             if not n or not self.total:
                 continue
-            seg = max(2.0, w * n / self.total)
-            p.fillRect(QRectF(x, 0, seg - 1, h), QColor(self.c[key]))  # 1 px gap in the surface colour
+            seg = max(h, w * n / self.total)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(self.c[key]))
+            p.drawRoundedRect(QRectF(x, 0, max(h, seg - 2), h), h / 2, h / 2)  # each part rounded, 2 px apart
             x += seg
         p.end()
 
@@ -320,11 +324,12 @@ class ServiceRow(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)  # Tab reaches it; Enter or Space opens it, like a button
         self.glyph_name = glyph_name
-        self.setMinimumHeight(52)
+        self.setMinimumHeight(58)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(11, 8, 9, 8)
-        lay.setSpacing(11)
-        self.icon = GlowTile(glyph_name, palette, service_color(palette, glyph_name) or palette["muted"])
+        lay.setContentsMargins(12, 9, 12, 9)
+        lay.setSpacing(12)
+        self.icon = GlowTile(glyph_name, palette, service_color(palette, glyph_name) or palette["muted"],
+                             size=32, icon=17, radius=9)
         col = QVBoxLayout()
         col.setSpacing(2)
         self.name = QLabel(name)
@@ -347,7 +352,7 @@ class ServiceRow(QFrame):
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette
         self.icon.set_palette(palette, service_color(palette, self.glyph_name) or palette["muted"])
-        self.chevron.setPixmap(glyph("chevron", palette["muted"], 14).pixmap(QSize(14, 14)))
+        self.chevron.setPixmap(glyph("chevron", palette.get("muted2", palette["muted"]), 14).pixmap(QSize(14, 14)))
 
     def set(self, detail: str, state: str | None, checked: str = "") -> None:
         """detail: the one quiet line; checked: when it was last checked (tooltip and screen readers)."""
@@ -424,11 +429,12 @@ class ActivityRow(QFrame):
             self.setCursor(Qt.PointingHandCursor)
             self.setToolTip(target or t("Click for details"))
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(2, 5, 2, 5)
-        lay.setSpacing(9)
+        lay.setContentsMargins(4, 5, 4, 5)
+        lay.setSpacing(12)
         self.tile = QFrame()
         self.tile.setObjectName("FileTile")
-        self.tile.setFixedSize(16, 16)
+        self.tile.setFixedSize(32, 32)
+        self.thumbed = False
         tl = QVBoxLayout(self.tile)
         tl.setContentsMargins(0, 0, 0, 0)
         self.icon = QLabel()
@@ -446,7 +452,7 @@ class ActivityRow(QFrame):
         self.detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.detail.setVisible(bool(self.detail_text))
         self.when = QLabel(fmt_time(ts))
-        self.when.setObjectName("Hint")
+        self.when.setObjectName("ActWhen")
         col = QVBoxLayout()
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(0)
@@ -476,12 +482,43 @@ class ActivityRow(QFrame):
         self.setToolTip(chr(10).join(tip))
 
     def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
+        if self.thumbed:
+            return  # the photo itself is shown
         if self.kind == "error":
             name, color = "error", palette["err_text"]
         else:
             name = ACTIVITY_GLYPH.get(self.kind) or file_glyph(self.title_text if self.detail_text else "", self.kind)
-            color = palette["accent_fg"] if self.kind in ("download", "upload") else palette["muted"]
-        self.icon.setPixmap(glyph(name, color, 14).pixmap(QSize(14, 14)))
+            color = self._service_colour(palette)
+            if color == service_color(palette, "note") and self.kind not in ("trash", "error"):
+                name = "note"  # a note changed: the note glyph, not an arrow
+        alpha = 34 if QColor(palette["bg"]).lightness() > 128 else 44
+        self.tile.setStyleSheet(f"QFrame#FileTile {{ background: {tint(color, alpha).name(QColor.HexArgb)}; "
+                                f"border-radius: 9px; }}")
+        self.icon.setPixmap(glyph(name, color, 17).pixmap(QSize(17, 17)))
+
+    def _service_colour(self, palette: dict[str, str]) -> str:
+        """The colour of the service this entry is about (Photos pink, Drive blue, Notes amber...)."""
+        where = f"{self.detail_text} {self.target}".lower()
+        if "icloud drive" in where:
+            key = "folder"
+        elif "note" in where or "bilje" in where:
+            key = "note"
+        elif "bookmark" in where or "oznak" in where:
+            key = "bookmark"
+        elif Thumbs.wanted(self.target) or "photo" in where or "fotograf" in where:
+            key = "photo"
+        else:
+            return palette["muted"]
+        return service_color(palette, key) or palette["muted"]
+
+    def set_thumb(self, img: QImage) -> None:
+        """The photo this entry is about, in place of the icon."""
+        if img.isNull():
+            return
+        self.thumbed = True
+        self.tile.setStyleSheet("QFrame#FileTile { background: transparent; }")
+        self.icon.setPixmap(rounded(img, 32, 8, max(1.0, self.devicePixelRatioF())))
 
     def refresh(self) -> None:
         self.when.setText(fmt_time(self.ts))
@@ -559,6 +596,11 @@ class Flyout(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFixedWidth(self.WIDTH)
         self.setFocusPolicy(Qt.StrongFocus)
+        from .backdrop import glass_supported
+
+        self.glass = glass_supported()  # Windows 11 with transparency effects: the desktop shows through
+        if self.glass:
+            self.setAttribute(Qt.WA_TranslucentBackground)
         self.state = "idle"
         self.paused = False
 
@@ -577,19 +619,18 @@ class Flyout(QWidget):
         self._scroll.setWidget(body)
         outer.addWidget(self._scroll, 1)
         root = QVBoxLayout(body)
-        root.setContentsMargins(16, 16, 16, 8)
-        root.setSpacing(11)
+        root.setContentsMargins(12, 12, 12, 8)
+        root.setSpacing(8)
 
         # header
         head = QHBoxLayout()
         # the brand mark: the cloud in the accent colour on its tint, glowing under the pointer
-        logo = GlowTile("cloud", palette, palette["accent_fg"], size=34, icon=20, radius=11, hover_self=True)
-        logo.setObjectName("Brand")
+        logo = LogoTile(36)  # the app's own icon, as on the taskbar
         self._brand = logo
         titles = QVBoxLayout()
         titles.setSpacing(0)
         app_title = QLabel(APP_NAME)
-        app_title.setObjectName("Title")
+        app_title.setObjectName("PanelTitle")
         self.account = QLabel(t("Not signed in"))  # shown as the title's tooltip and in Settings
         self.account.setObjectName("Muted")
         self.account.hide()
@@ -612,6 +653,7 @@ class Flyout(QWidget):
         self.gear = QToolButton()
         self.gear.setIcon(glyph("gear", palette["muted"]))
         self.gear.setIconSize(QSize(18, 18))
+        self.gear.setFixedSize(34, 34)
         self.gear.setToolTip(t("Settings"))
         self.gear.setCursor(Qt.PointingHandCursor)
         self.gear.clicked.connect(self.openSettings)
@@ -619,8 +661,8 @@ class Flyout(QWidget):
         self.dot = StatusDot(palette)
         self.storage_ring = StorageRing(palette)
         self.storage_ring.hide()
+        head.setSpacing(12)
         head.addWidget(logo)
-        head.addSpacing(6)
         head.addLayout(titles, 1)
         self.dot.hide()  # the status line under the title says it now (kept for its state logic)
         head.addWidget(self.storage_ring, 0, Qt.AlignVCenter)
@@ -630,6 +672,8 @@ class Flyout(QWidget):
         self.bell.clicked.connect(self.show_notices)
         self.bell.hide()
         self.notices_page = None
+        self.thumbs = Thumbs(self)  # small pictures of the photos named in the activity list
+        self.thumbs.ready.connect(self._thumb_ready)
         head.addWidget(self.bell, 0, Qt.AlignVCenter)
         head.addWidget(self.gear, 0, Qt.AlignVCenter)
         root.addLayout(head)
@@ -663,19 +707,29 @@ class Flyout(QWidget):
         cl = QVBoxLayout(card)
         cl.setContentsMargins(12, 10, 12, 10)
         cl.setSpacing(8)
+        card.setFixedHeight(72)  # one height in every state: the panel never moves
         row = QHBoxLayout()
         row.setSpacing(12)
+        self.badge = StateBadge(palette)
+        row.addWidget(self.badge, 0, Qt.AlignVCenter)
         txt = QVBoxLayout()
-        txt.setSpacing(2)
+        txt.setSpacing(1)
+        txt.addStretch(1)
         self.status_title = QLabel(STATE_TITLES["idle"])
-        self.status_title.setObjectName("H2")
-        self.status_text = QLabel("")
+        self.status_title.setObjectName("HeroTitle")
+        self.status_text = TwoLineLabel("")  # two lines at most; the whole text in its tooltip
         self.status_text.setObjectName("Muted")
-        self.status_text.setWordWrap(True)
         txt.addWidget(self.status_title)
         txt.addWidget(self.status_text)
+        txt.addStretch(1)
         row.addLayout(txt, 1)
+        self.review_btn = QPushButton(t("Review"))  # a large deletion waits: decided here, never by a card
+        self.review_btn.setCursor(Qt.PointingHandCursor)
+        self.review_btn.clicked.connect(self.reviewPending)
+        self.review_btn.hide()
+        row.addWidget(self.review_btn, 0, Qt.AlignVCenter)
         cl.addLayout(row)
+        self._progress: float | None = None
         self.bar = QProgressBar()
         self.bar.setTextVisible(False)
         self.bar.setRange(0, 1000)
@@ -720,7 +774,7 @@ class Flyout(QWidget):
                 sep = QFrame()
                 sep.setObjectName("Sep")
                 inset = QHBoxLayout()  # the line starts after the icon tile, like a grouped list
-                inset.setContentsMargins(48, 0, 11, 0)
+                inset.setContentsMargins(56, 0, 0, 0)
                 inset.addWidget(sep)
                 sl.addLayout(inset)
             sl.addWidget(row)
@@ -732,12 +786,13 @@ class Flyout(QWidget):
 
         # activity
         sec = QHBoxLayout()
+        sec.setContentsMargins(4, 6, 4, 0)
         lbl = QLabel(t("Recent activity"))
-        lbl.setObjectName("Section")
+        lbl.setObjectName("ListHead")
         self.last_sync = QLabel("")
         self.last_sync.setObjectName("Hint")
         self.clear_btn = QPushButton(t("Clear"))
-        self.clear_btn.setObjectName("Link")
+        self.clear_btn.setObjectName("ListLink")
         self.clear_btn.setCursor(Qt.PointingHandCursor)
         self.clear_btn.setToolTip(t("Clear the activity list. Your files are not touched."))
         self.clear_btn.clicked.connect(self._clear_activity)
@@ -752,6 +807,7 @@ class Flyout(QWidget):
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.setFrameShape(QFrame.NoFrame)
         self.list.setFocusPolicy(Qt.NoFocus)  # its rows take the focus themselves
+        self.list.setStyleSheet("QScrollBar:vertical { width: 6px; margin: 0; }")  # a slim bar, only when it scrolls
         self._rows_box = QWidget()
         self._rows_box.setObjectName("Root")
         self._rows = QVBoxLayout(self._rows_box)
@@ -764,14 +820,17 @@ class Flyout(QWidget):
         self.empty.setAlignment(Qt.AlignCenter)
         root.addWidget(self.list)
         root.addWidget(self.empty)
+        self._list_pad = QWidget()  # what is left under the last whole row: the panel keeps one height
+        self._list_pad.setFixedHeight(0)
+        root.addWidget(self._list_pad)
         self.list.hide()
 
         # footer: one primary button, then icon-only buttons (each with a tooltip and an accessible name)
         bar = QFrame()
         bar.setObjectName("BottomBar")
         bl = QHBoxLayout(bar)
-        bl.setContentsMargins(13, 10, 13, 11)
-        bl.setSpacing(6)
+        bl.setContentsMargins(12, 10, 12, 10)
+        bl.setSpacing(8)
 
         def bar_button(text: str, slot, tip: str = "") -> QToolButton:
             b = QToolButton()
@@ -786,11 +845,16 @@ class Flyout(QWidget):
             bl.addWidget(b)
             return b
 
+        self.checked_label = QLabel("")  # "Last checked / 14:32"
+        self.checked_label.setObjectName("Legend")
+        self.checked_label.setMinimumWidth(0)
+        self.checked_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        bl.addWidget(self.checked_label, 1)
         self.sync_btn = bar_button(t("Sync now"), self._on_sync_clicked)
         self.sync_btn.setProperty("primary", True)
         self.sync_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.sync_btn.setIconSize(QSize(16, 16))
-        self.sync_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.sync_btn.setFixedSize(132, 34)  # Stop takes Sync now's place: the same size, the same spot
         self.open_btn = bar_button(t("Open folder"), self._open_folder_menu)
         self.folder_btn = bar_button(t("Find My"), self.findMy, t("Find My devices…"))  # (name kept: other code refers to it)
         self.more_btn = bar_button(t("More"), self._more_menu)
@@ -803,6 +867,38 @@ class Flyout(QWidget):
         outer.addWidget(bar)
         self._bar_icons()
         self.set_paused(False)
+        self._glass_style()
+
+    def _glass_style(self) -> None:
+        """Over Windows' acrylic: everything see-through, a light tint over the whole panel."""
+        if not self.glass:
+            self.setStyleSheet("")
+            return
+        from .backdrop import glass_colours
+
+        g = glass_colours(self.c, QColor(self.c["bg"]).lightness() < 128)
+        self.setStyleSheet(
+            f"QWidget#Root {{ background: transparent; }}"
+            f"QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; }}"
+            f"QFrame#Card {{ background: {g['card']}; border: 1px solid {g['stroke']}; }}"
+            f"QFrame#BottomBar {{ background: {g['foot']}; border-top: 1px solid {g['stroke']}; }}"
+            f"QFrame#Row:hover, QFrame#ActRow[link=\"true\"]:hover {{ background: {g['hover']}; }}"
+            f"QToolButton#Bar {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
+            f"QToolButton#Bar[wide=\"true\"] {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
+            f"QToolButton#Bar[primary=\"true\"] {{ background: {self.c['btn']}; border-color: {self.c['btn']}; }}"
+            f"QFrame#Sep {{ background: {g['stroke']}; }}")
+
+    def paintEvent(self, e) -> None:  # noqa: N802
+        if self.glass:  # the panel's tint over Windows' acrylic (the rest of the panel is see-through)
+            from .backdrop import glass_colours
+
+            g = glass_colours(self.c, QColor(self.c["bg"]).lightness() < 128)["tint"]
+            r, gg, b, a = (int(x) for x in g[5:-1].split(","))
+            p = QPainter(self)
+            p.fillRect(self.rect(), QColor(r, gg, b, a))
+            p.end()
+            return
+        super().paintEvent(e)
 
     def _more_menu(self) -> None:
         from PySide6.QtWidgets import QMenu
@@ -842,12 +938,14 @@ class Flyout(QWidget):
     def apply_palette(self, palette: dict[str, str]) -> None:
         """Called when Windows switches light/dark: re-tint the hand-drawn icons."""
         self.c = palette
+        self._glass_style()
         self.gear.setIcon(glyph("gear", palette["muted"]))
         self.bell.apply_palette(palette)
         if self.notices_page is not None:
             self.notices_page.apply_palette(palette)
         self._brand.set_palette(palette, palette["accent_fg"])
         self.dot.c = palette
+        self.badge.set_palette(palette)
         self.storage_ring.c = palette
         self.storage_ring.update()
         self.storage_bar.apply_palette(palette)
@@ -900,12 +998,14 @@ class Flyout(QWidget):
                                  else short_text(text, 260 if state in ("error", "auth") else 110))
         self.status_text.setVisible(bool(self.status_text.text()))
         self._dot_tip()
-        self.status_card.setVisible(state != "idle")  # all in sync: the green badge says it
+        self.status_card.setVisible(True)  # always there, one height: the panel never jumps
         self.status_card.setCursor(Qt.PointingHandCursor if state == "auth" else Qt.ArrowCursor)
         syncing = state == "syncing"
+        self.bar.hide()  # the badge's ring shows the progress
+        self.bar_label.hide()
         if not syncing:
-            self.bar.hide()
-            self.bar_label.hide()
+            self._progress = None
+        self._render_hero()
         self._render_services()
         self.auth_banner.hide()  # the status card and the main button already say "Sign in"
         if state == "auth":
@@ -916,10 +1016,32 @@ class Flyout(QWidget):
         self.sync_btn.setText(label)
         self.sync_btn.setToolTip(t("Resume syncing") if state == "paused" else label)
         self.sync_btn.setAccessibleName(self.sync_btn.toolTip())
-        self.sync_btn.setIcon(glyph(name, self.c["accent_text"]))  # on the filled accent button
+        quiet = state == "syncing"  # Stop is a quiet button in the same place; the rest is the accent
+        if bool(self.sync_btn.property("wide")) != quiet:
+            self.sync_btn.setProperty("primary", not quiet)
+            self.sync_btn.setProperty("wide", quiet)
+            self.sync_btn.style().unpolish(self.sync_btn)
+            self.sync_btn.style().polish(self.sync_btn)
+        self.sync_btn.setIcon(glyph("stop" if quiet else name, self.c["text"] if quiet else self.c["accent_text"]))
         self.sync_btn.setEnabled(True)  # paused: this button is the way to continue
         self._status_line()
         self._size_list()
+
+    def _render_hero(self) -> None:
+        """The status card: its badge, and a quiet second line when all is well."""
+        state = self._dot_state()
+        self.badge.set_state(state, self._progress if self.state == "syncing" else None)
+        pending = state == "attention"
+        self.review_btn.setVisible(pending)
+        if pending:
+            self.status_title.setText(t("Deletion needs your OK"))
+            self.status_text.setText(getattr(self, "_pending_short", "") or self._pending_text)
+            self.status_text.setToolTip(self._pending_text)
+            self.status_text.show()
+        elif self.state == "idle":
+            self.status_title.setText(t("Up to date"))  # (the line under the name says "in sync")
+            self.status_text.setText(t("Everything matches iCloud."))
+            self.status_text.show()
 
     def _status_line(self) -> None:
         state = self._dot_state()
@@ -959,11 +1081,18 @@ class Flyout(QWidget):
         p.drawPixmap(0, 0, self._spin_base)
         p.end()
         self.status_icon.setPixmap(canvas)
+        self.badge.spin(self._spin_angle * 1.6)
 
     def set_progress(self, done: int, total: int, text: str) -> None:
         if self.state != "syncing" or total <= 0:
             return
         self.bar.setValue(int(1000 * min(done, total) / total))
+        self._progress = min(done, total) / total
+        self.badge.set_state("syncing", self._progress)
+        if text and " · " in text:  # "Downloading photos · 812 of 1,284": the action above, the numbers below
+            head, _, rest = text.partition(" · ")
+            self.status_title.setText(head)
+            text = rest
         text = break_at_dots(text) if text else text
         if text and text != self.status_text.text():
             lines_before = self.status_text.heightForWidth(max(1, self.status_text.width()))
@@ -972,9 +1101,7 @@ class Flyout(QWidget):
             if self.isVisible() and self.status_text.heightForWidth(max(1, self.status_text.width())) != lines_before:
                 QTimer.singleShot(0, self._size_list)  # wraps to more or fewer lines: fit again
             self.dot.setToolTip(STATE_TITLES.get(self.state, self.state) + "\n" + text.replace(chr(0xA0), " "))
-        if self.bar.isHidden():
-            self.bar.show()
-            self._size_list()  # the same sizing as everywhere: the buttons stay on screen
+
 
     def set_update(self, version: str | None) -> None:
         """A newer Skyfold is out (None: not, or already installed)."""
@@ -1048,6 +1175,10 @@ class Flyout(QWidget):
     def refresh_times(self) -> None:
         ts = getattr(self, "_last_sync_ts", None)
         self.last_sync.setText(t("Last check: {when}", when=fmt_time(ts)) if ts else "")
+        self.checked_label.setText(t("Last checked") + "\n" + fmt_time(ts) if ts else "")
+        self.checked_label.setToolTip(self.last_sync.text())
+        if self.state == "idle":
+            self._render_hero()
         self._render_services()
 
     def _dot_tip(self) -> None:
@@ -1072,14 +1203,18 @@ class Flyout(QWidget):
                 parts.append(t("{n} deleted on this PC",
                                n=getattr(pending, "files_to_cloud", 0) or len(pending.to_cloud)))
             self._pending_text = t("A large deletion is waiting for your OK: {what}.", what=t(" and ").join(parts))
-            self.pending_banner.text.setText(self._pending_text)
-            self.pending_banner.show()
+            self._pending_short = t(" and ").join(parts)
+            self.pending_banner.text.setText(self._pending_text)  # (said by the status card now)
         self.dot.set_state(self._dot_state())
         self._dot_tip()
         self._status_line()
+        if not pending and self.state in STATE_TITLES:
+            self.status_title.setText(STATE_TITLES[self.state])
+        self._render_hero()
         self._size_list()
 
     MAX_ROWS_VISIBLE = 6
+    TARGET_HEIGHT = 624  # the panel's height (less on a small screen): the same in every state
     MIN_LIST_HEIGHT = 104  # the panel keeps a calm, steady height instead of jumping with each entry
     HELD_LIST_MIN = 56  # while open, the list may shrink this far to keep the panel's height
 
@@ -1095,6 +1230,8 @@ class Flyout(QWidget):
         row = ActivityRow(ts, kind, text, self.c, target)
         row.errorClicked.connect(self._error_details)
         self._rows.insertWidget(0, row)
+        if Thumbs.wanted(target):
+            self.thumbs.request(target)
         while self._rows.count() - 1 > 60:  # keep the newest 60 (the last item is the stretch)
             old = self._rows.takeAt(self._rows.count() - 2).widget()
             old.deleteLater()
@@ -1102,6 +1239,11 @@ class Flyout(QWidget):
         self.empty.hide()
         self.clear_btn.show()
         QTimer.singleShot(0, self._size_list)  # after styles are applied, so heights are exact
+
+    def _thumb_ready(self, target: str, img) -> None:
+        for row in self._activity_rows():
+            if row.target == target:
+                row.set_thumb(img)
 
     def _error_details(self, row: "ActivityRow") -> None:
         from PySide6.QtWidgets import QApplication, QMessageBox
@@ -1155,16 +1297,19 @@ class Flyout(QWidget):
         self._fit_width()
         self.services_card.show()
         self.list.setFixedHeight(max(height, self.MIN_LIST_HEIGHT if rows else 1) + 2)
+        # One height in every state: the list (or the empty-list line) fills what the rest leaves.
+        self._list_pad.setFixedHeight(0)
+        other = self._needed_height() - (self.list.height() if self.list.isVisible() else self.empty.height())
+        fill = max(self.MIN_LIST_HEIGHT, self.TARGET_HEIGHT - other)
+        step = 43  # one activity row (and its 1 px gap): whole rows only, never one cut in half
+        shown = max(2, (fill - 2) // step) * step + 2
+        if self.list.isVisible():
+            self.list.setFixedHeight(shown)
+        else:
+            self.empty.setFixedHeight(shown)  # the same height with or without entries
         room = self._limit() - (self._needed_height() - self.list.height())
         if self.list.height() > room:  # the list gives way first; below that the panel content scrolls
             self.list.setFixedHeight(max(room, min(self.list.height(), 120)))
-        held = getattr(self, "_held", None)
-        if held and self.isVisible() and self.list.isVisible():
-            # Open: the panel keeps its height when "Syncing…" comes or goes (or its text takes
-            # another line); the list of recent activity takes up the difference instead.
-            diff = self._needed_height() - held
-            if diff:
-                self.list.setFixedHeight(max(self.HELD_LIST_MIN, self.list.height() - diff))
         self._fit()
 
     def refresh_activity_times(self) -> None:
@@ -1251,6 +1396,10 @@ class Flyout(QWidget):
         self.refresh_activity_times()
         self._size_list()
         self._place(anchor if anchor and anchor.isValid() and not anchor.isEmpty() else None)
+        if self.glass:
+            from .backdrop import apply_backdrop
+
+            apply_backdrop(self, "acrylic", QColor(self.c["bg"]).lightness() < 128)
         self.show()
         round_corners(self)
         self.raise_()

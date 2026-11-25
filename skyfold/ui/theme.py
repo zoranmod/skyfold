@@ -28,7 +28,7 @@ LIGHT = {
     "bg": "#f3f4f7", "surface": "#ffffff", "surface2": "#f8f9fb", "hover": "#eaedf1",
     "group": "#ffffff", "tile": "#eef0f4",
     "border": "#e2e5ea", "border_strong": "#8a93a0",
-    "text": "#1a1c21", "muted": "#566070", "disabled": "#959daa",
+    "text": "#1a1c21", "muted": "#566070", "muted2": "#5f6773", "disabled": "#959daa",
     "accent": ACCENT, "accent_hover": "#1667d9", "accent_pressed": "#0b4fae",
     "btn": ACCENT, "btn_hover": "#1667d9", "btn_pressed": "#0b4fae", "focus": ACCENT, "focus_ring": ACCENT,
     "accent_fg": ACCENT,  # accent used as text or thin icon on a light background
@@ -45,11 +45,11 @@ DARK = {
     "bg": "#1f2228", "surface": "#2a2e35", "surface2": "#262a30", "hover": "#31363e",
     "group": "#272b31", "tile": "#30353c",
     "border": "#33383f", "border_strong": "#7a8492",
-    "text": "#f3f5f8", "muted": "#b3bbc6", "disabled": "#6e7682",
+    "text": "#f3f5f8", "muted": "#b3bbc6", "muted2": "#959ca6", "disabled": "#6e7682",
     "accent": "#7db0ff", "accent_hover": "#97c0ff", "accent_pressed": "#679ff0",
-    "btn": "#7db0ff", "btn_hover": "#97c0ff", "btn_pressed": "#679ff0", "focus": "#97c0ff", "focus_ring": "#97c0ff",
+    "btn": "#4a90ff", "btn_hover": "#5c9bff", "btn_pressed": "#3f82ea", "focus": "#97c0ff", "focus_ring": "#97c0ff",
     "accent_fg": "#97c0ff",
-    "accent_text": "#0a1a33", "accent_soft": "#283a55", "accent_soft_border": "#35507a",
+    "accent_text": "#06142b", "accent_soft": "#283a55", "accent_soft_border": "#35507a",
     "warn_bg": "#3a3122", "warn_border": "#4d3f26", "warn_text": "#f3c969",
     "err_bg": "#432a2f", "err_border": "#5a343b", "err_text": "#ff9ba4",
     "ok_bg": "#213429", "ok_text": "#7fd9a4",
@@ -192,21 +192,31 @@ QLabel#SvcTile {{ background: {c['tile']}; border-radius: 9px; }}
 QFrame#BottomBar {{ background: {c['bg']}; border: none; border-top: 1px solid {c['border']};
     border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }}
 QToolButton#Bar {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 8px; padding: 0;
-    min-width: 34px; max-width: 34px; min-height: 34px; max-height: 34px; color: {c['muted']}; }}
+    min-width: 32px; max-width: 32px; min-height: 32px; max-height: 32px; color: {c['muted']}; }}
 QToolButton#Bar:hover {{ background: {c['hover']}; color: {c['text']}; }}
 QToolButton#Bar:pressed {{ background: {c['surface2']}; color: {c['muted']}; }}
 QToolButton#Bar:disabled {{ color: {c['disabled']}; }}
 QToolButton#Bar:focus {{ border: 2px solid {c['focus_ring']}; }}
 QToolButton#Bar::menu-indicator {{ image: none; width: 0; }}
-QToolButton#Bar[primary="true"] {{ background: {c['btn']}; color: {c['accent_text']}; border-color: {c['btn']};
-    font-size: 9pt; font-weight: 600; padding: 0 12px; min-width: 60px; max-width: 16777215px; }}
+QToolButton#Bar[primary="true"], QToolButton#Bar[wide="true"] {{ font-size: 9.75pt; font-weight: 600;
+    padding: 0 12px; min-width: 106px; max-width: 106px; }}
+QToolButton#Bar[primary="true"] {{ background: {c['btn']}; color: {c['accent_text']}; border-color: {c['btn']}; }}
+QToolButton#Bar[wide="true"] {{ color: {c['text']}; border-color: {c['border_strong']}; }}
 QToolButton#Bar[primary="true"]:hover {{ background: {c['btn_hover']}; border-color: {c['btn_hover']}; color: {c['accent_text']}; }}
 QToolButton#Bar[primary="true"]:pressed {{ background: {c['btn_pressed']}; color: {c['accent_text']}; }}
 QToolButton#Bar[primary="true"]:focus {{ border: 2px solid {c['text']}; }}
 QToolButton#Bar[primary="true"]:disabled {{ background: {c['track']}; border-color: {c['track']}; color: {c['disabled']}; }}
 QFrame#FileTile {{ background: transparent; border: none; }}
 QLabel#RowTitle {{ font-size: 9.75pt; font-weight: 600; }}
-QLabel#ActTitle {{ font-size: 8.75pt; }}
+QLabel#ActTitle {{ font-size: 10.5pt; font-weight: 500; }}
+QLabel#ActWhen {{ font-size: 9pt; color: {c.get('muted2', c['muted'])}; }}
+QLabel#ListHead {{ font-size: 9pt; font-weight: 600; color: {c.get('muted2', c['muted'])}; }}
+QPushButton#ListLink {{ background: transparent; border: none; color: {c['accent_fg']}; font-size: 9.5pt; font-weight: 600;
+    padding: 0; min-height: 0; }}
+QPushButton#ListLink:hover {{ text-decoration: underline; }}
+QLabel#PanelTitle {{ font-family: "Segoe UI Variable Display","Segoe UI"; font-size: 12pt; font-weight: 600; }}
+QLabel#HeroTitle {{ font-family: "Segoe UI Variable Display","Segoe UI"; font-size: 10.5pt; font-weight: 600; }}
+QLabel#Amount {{ font-size: 9.5pt; color: {c['muted']}; }}
 QLabel#StatusLine {{ font-size: 8.25pt; color: {c['muted']}; }}
 QFrame#Sep {{ background: {c['border']}; border: none; max-height: 1px; min-height: 1px; }}
 QFrame#Warn {{ background: {c['warn_bg']}; border: 1px solid {c['warn_border']}; border-radius: 8px; }}
@@ -230,7 +240,7 @@ QLabel#Legend {{ font-size: 8pt; color: {c['muted']}; }}
 QFrame#ActRow {{ background: transparent; border: none; border-radius: 6px; }}
 QFrame#ActRow[link="true"]:hover {{ background: {c['hover']}; }}
 QFrame#ActRow:focus {{ border: 2px solid {c['focus_ring']}; }}
-QLabel#Muted, QLabel#Hint {{ font-size: 8.5pt; color: {c['muted']}; }}
+QLabel#Muted, QLabel#Hint {{ font-size: 8.5pt; color: {c.get('muted2', c['muted'])}; }}
 QLabel#ErrorText {{ color: {c['err_text']}; }}
 QLabel#WarnText {{ color: {c['warn_text']}; }}
 QFrame#Option {{ background: {c['group']}; border: 1px solid {c['border']}; border-radius: 8px; }}

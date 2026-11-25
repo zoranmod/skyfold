@@ -100,20 +100,10 @@ class GlowTile(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        top, bottom, edge = QColor(self.color), QColor(self.color), QColor(self.color)
-        if self._light:
-            top.setAlphaF(0.17 + 0.05 * self._level)
-            bottom.setAlphaF(0.06 + 0.03 * self._level)
-            edge.setAlphaF(0.28 + 0.2 * self._level)
-        else:
-            top.setAlphaF(0.26 + 0.08 * self._level)
-            bottom.setAlphaF(0.07 + 0.04 * self._level)
-            edge.setAlphaF(0.34 + 0.26 * self._level)
-        grad = QLinearGradient(r.topLeft(), r.bottomRight())
-        grad.setColorAt(0, top)
-        grad.setColorAt(1, bottom)
-        p.setBrush(grad)
-        p.setPen(QPen(edge, 1))
+        fill = QColor(self.color)  # a flat tint of the service colour, no outline (1.1 design)
+        fill.setAlphaF((0.13 if self._light else 0.17) + 0.07 * self._level)
+        p.setBrush(fill)
+        p.setPen(Qt.NoPen)
         p.drawRoundedRect(r, self.radius, self.radius)
         x = (self.width() - self.icon_size) // 2
         y = (self.height() - self.icon_size) // 2

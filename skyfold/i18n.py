@@ -887,6 +887,10 @@ BS: dict[str, str] = {
     "PHOTOS WINDOW": "PROZOR FOTOGRAFIJE",
     "Open the Photos window when I click Photos": "Otvori prozor Fotografije kad kliknem na Fotografije",
     "Off: a click on Photos opens the photos folder in File Explorer instead.": "Isključeno: klik na Fotografije otvara folder sa slikama u File Exploreru.",
+    "Last checked": "Zadnja provjera",
+    "Deletion needs your OK": "Brisanje čeka tvoju potvrdu",
+    "Up to date": "Sve je ažurno",
+    "Everything matches iCloud.": "Sve je usklađeno sa iCloudom.",
 }
 
 _CATALOGS = {"bs": BS}
