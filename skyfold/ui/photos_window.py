@@ -942,7 +942,7 @@ class SideDelegate(NavDelegate):
         opt = QStyleOptionViewItem(option)
         opt.rect.adjust(0, 0, -cw, 0)
         super().paint(p, opt, index)
-        if option.state & QStyle.State_HasFocus and self.win.side.hasFocus():
+        if option.state & QStyle.State_HasFocus and self.win.side.hasFocus() and self.win.keyboard_used:
             p.save()
             p.setRenderHint(QPainter.Antialiasing)
             p.setPen(QPen(QColor(c["focus_ring"]), 2))
@@ -1308,6 +1308,10 @@ class PhotosWindow(LibraryDialog):
     def apply_palette(self, palette: dict[str, str]) -> None:
         c = self.c = palette
         raised = c["surface"]
+        if self.glass and c["bg"] != "#000000":  # the floating controls: see-through over the material
+            tinted = QColor(c["surface"])
+            tinted.setAlphaF(0.86)
+            raised = tinted.name(QColor.HexArgb)
         vbg = c["bg"]
         self._ui = {"raised": raised, "ring": c["border"], "hover": c["hover"], "text": c["text"],
                     "nav": raised, "nav_hover": c["hover"]}

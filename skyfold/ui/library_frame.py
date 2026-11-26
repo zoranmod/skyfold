@@ -48,6 +48,11 @@ class LibraryDialog(_Dialog):
             f"SoftCard#LibrarySearch {{ qproperty-fill:{g.get('control', c['surface2'])};"
             f" qproperty-stroke:{g.get('stroke2', c['border'])}; qproperty-shade:transparent; }}"
             "SoftCard#LibrarySearch QLineEdit { background:transparent; border:none; padding:0; min-height:0; }"
+            "QSplitter::handle { background:transparent; }"
+            # over the material, buttons and lists are light layers too (as in Settings)
+            + (f"QPushButton, QComboBox {{ background:{g['control']}; border-color:{g['stroke2']}; }}"
+               f"QPushButton:hover, QComboBox:hover {{ background:{g['hover']}; }}"
+               f"QPushButton#Primary {{ background:{c['btn']}; border-color:{c['btn']}; }}" if material else "") +
             "QSplitter, QStackedWidget, QAbstractScrollArea, QAbstractScrollArea > QWidget"
             " { background:transparent; border:none; }"
         )

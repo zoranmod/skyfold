@@ -218,8 +218,10 @@ def _label(text: str, name: str | None = None, wrap: bool = False) -> QLabel:
 
 
 class _Dialog(QDialog):
-    GLASS = False  # a window that shows Windows 11's Mica behind it (when Windows allows it)
-    MATERIAL = "mica"
+    GLASS = False  # a window that shows Windows 11's material behind it (when Windows allows it)
+    # acrylic: what is behind the window shows through, blurred, as in the 1.1 design and the tray
+    # panel (Mica only tints with the wallpaper and looked like a plain colour)
+    MATERIAL = "acrylic"
 
     def __init__(self, title: str) -> None:
         # A normal top-level window: own taskbar button (so it can be minimised and found again),

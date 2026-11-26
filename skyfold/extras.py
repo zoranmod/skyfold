@@ -39,25 +39,60 @@ def storage(api: Any) -> dict[str, Any]:
 PHOTO_MAX = 8 * 1024 * 1024
 
 
+def _card_photo_url(raw: Any) -> str | None:
+    contacts = raw.get("contacts") if isinstance(raw, dict) else None
+    contact = contacts[0] if isinstance(contacts, list) and contacts and isinstance(contacts[0], dict) else {}
+    photo = contact.get("photo")
+    url = photo.get("url") if isinstance(photo, dict) else None
+    return url if isinstance(url, str) and url.startswith("https://") else None
+
+
 def account_photo(api: Any) -> bytes | None:
     """The picture on the user's own card in Contacts ("My Card"), as iCloud.com shows it, or None
-    when the card has none. Read-only: two small requests."""
-    def run() -> bytes | None:
+    when the card has none. Read-only, a few small requests.
+
+    Apple answers the card only with the parameters its own Contacts web app sends (pyicloud's
+    plain request got 400), and on some accounts only after the app's start-up request, whose
+    tokens it then passes along: tried in that order, stopping at the first answer."""
+    def get(url: str, params: dict) -> Any:
         try:
-            raw = api.contacts.me.raw_data
-        except (KeyError, IndexError, TypeError, ValueError):
-            return None  # no card of one's own
-        contacts = raw.get("contacts") if isinstance(raw, dict) else None
-        contact = contacts[0] if isinstance(contacts, list) and contacts and isinstance(contacts[0], dict) else {}
-        photo = contact.get("photo")
-        url = photo.get("url") if isinstance(photo, dict) else None
-        if not isinstance(url, str) or not url.startswith("https://"):
+            r = api.session.get(url, params=params, timeout=30)
+        except Exception as exc:  # noqa: BLE001 - pyicloud raises on Apple's error answers
+            code = getattr(exc, "code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+            tried.append(str(code or exc.__class__.__name__))
             return None
+        tried.append(str(r.status_code))
+        if r.status_code != 200:
+            return None
+        try:
+            return r.json()
+        except ValueError:
+            return None
+
+    def run() -> bytes | None:
+        root = api.get_webservice_url("contacts") + "/co"
+        params = dict(api.params)
+        params.update({"clientVersion": "2.1", "locale": "en_US", "order": "last,first"})
+        raw = get(f"{root}/mecard/", params) or get(f"{root}/mecard", params)
+        if raw is None:
+            start = get(f"{root}/startup", params)
+            if isinstance(start, dict) and start.get("prefToken") is not None:
+                params.update({"prefToken": start.get("prefToken"), "syncToken": start.get("syncToken")})
+                raw = get(f"{root}/mecard/", params)
+        if raw is None:
+            log.info("Account picture: no card (answers %s)", ", ".join(tried))
+            return None
+        url = _card_photo_url(raw)
+        if url is None:
+            return None  # a card without a photo
         r = api.session.get(url, timeout=30)
         if r.status_code != 200:
+            log.info("Account picture: photo not downloaded (%s)", r.status_code)
             return None
         data = r.content
         return data if 0 < len(data) <= PHOTO_MAX else None
+
+    tried: list[str] = []
     return _call(run)
 
 

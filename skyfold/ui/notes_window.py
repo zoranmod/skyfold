@@ -112,6 +112,41 @@ def _key(r: nv.Row) -> tuple:
     return (r.rel, r.modified)
 
 
+
+BOX_SCHEME = "sfbox"
+CHECK_ON_IMG = f'<img src="{BOX_SCHEME}:on" width="18" height="18" align="middle"> '
+CHECK_OFF_IMG = f'<img src="{BOX_SCHEME}:off" width="18" height="18" align="middle"> '
+
+
+def _check_box(c: dict, on: bool, dpr: float):
+    """A checklist box as Windows 11 draws one: rounded, filled with the accent and a tick when done."""
+    from PySide6.QtCore import QPointF, QRectF
+    from PySide6.QtGui import QImage, QPainterPath
+
+    size = 18
+    img = QImage(int(size * dpr), int(size * dpr), QImage.Format_ARGB32_Premultiplied)
+    img.setDevicePixelRatio(dpr)
+    img.fill(Qt.transparent)
+    p = QPainter(img)
+    p.setRenderHint(QPainter.Antialiasing)
+    box = QRectF(1.5, 1.5, size - 3, size - 3)
+    if on:
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(c["btn"]))
+        p.drawRoundedRect(box, 4, 4)
+        tick = QPainterPath(QPointF(5.2, 9.3))
+        tick.lineTo(QPointF(7.9, 12.0))
+        tick.lineTo(QPointF(12.9, 6.4))
+        p.setPen(QPen(QColor(c["accent_text"]), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(tick)
+    else:
+        p.setPen(QPen(QColor(c["border_strong"]), 1.2))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(box, 4, 4)
+    p.end()
+    return img
+
 class _Indexer(QObject):
     """Reads the note pages in the background for search and the first lines in the list. Results
     carry a generation: anything from an earlier one (the list changed since) is thrown away."""
@@ -238,7 +273,7 @@ class _NoteDelegate(QStyledItemDelegate):
             p.drawRoundedRect(r, 8, 8)
         if lit and k["on"] is not None:
             text = muted = k["on"]
-        if selected and self.win.notes.hasFocus():
+        if selected and self.win.notes.hasFocus() and getattr(self.win, "keyboard_used", False):
             p.setPen(QPen(focus, 2))
             p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 8, 8)
@@ -322,7 +357,7 @@ class _FolderDelegate(QStyledItemDelegate):
             p.drawRoundedRect(QRectF(r.left(), r.center().y() - 8, 3, 16), 1.5, 1.5)
         if lit and k["on"] is not None:
             text = muted = k["on"]
-        if selected and tree.hasFocus():
+        if selected and tree.hasFocus() and getattr(self.win, "keyboard_used", False):
             p.setPen(QPen(focus, 2))
             p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 8, 8)
@@ -396,7 +431,7 @@ class _Reader(QTextBrowser):
             doc.setDefaultStyleSheet(css)
         if font is not None:
             doc.setDefaultFont(font)
-        doc.setHtml(body)
+        doc.setHtml(body.replace(nv.CHECK_ON, CHECK_ON_IMG).replace(nv.CHECK_OFF, CHECK_OFF_IMG))
         if title and font is not None:
             cur = QTextCursor(doc)
             if cur.block().text().strip() != title.strip():
@@ -446,6 +481,8 @@ class _Reader(QTextBrowser):
         super().wheelEvent(e)
 
     def loadResource(self, kind: int, url: QUrl):  # noqa: N802
+        if kind == QTextDocument.ImageResource and url.scheme() == BOX_SCHEME:
+            return _check_box(self.win.c, url.path() == "on", self.devicePixelRatioF() or 1.0)
         if kind != QTextDocument.ImageResource or self.page is None or self.win.root is None:
             return None
         if url.scheme() != nv.IMAGE_SCHEME or not url.path().isdigit():
@@ -714,6 +751,10 @@ class NotesWindow(LibraryDialog):
         self.folders.currentItemChanged.connect(self._on_folder)
         self.notes.currentItemChanged.connect(lambda *_: self._show_current())
         self.notes.itemActivated.connect(lambda *_: self._focus_reader())
+        self.keyboard_used = False  # the focus ring shows once the keyboard is used, not on a click
+        self._watched = (self.notes, self.folders, self.notes.viewport(), self.folders.viewport())
+        for w in self._watched:  # (clicks arrive at the viewports)
+            w.installEventFilter(self)
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(180)
@@ -1257,6 +1298,17 @@ class NotesWindow(LibraryDialog):
                    -1)
         if order:
             order[(now + step) % len(order)].setFocus()
+
+    def eventFilter(self, obj, e) -> bool:  # noqa: N802
+        from PySide6.QtCore import QEvent
+
+        if e.type() in (QEvent.KeyPress, QEvent.MouseButtonPress) and obj in getattr(self, "_watched", ()):
+            used = e.type() == QEvent.KeyPress
+            if used != self.keyboard_used:
+                self.keyboard_used = used
+                self.notes.viewport().update()
+                self.folders.viewport().update()
+        return super().eventFilter(obj, e)
 
     def keyPressEvent(self, e) -> None:  # noqa: N802
         if e.key() == Qt.Key_Escape and self.search.text():

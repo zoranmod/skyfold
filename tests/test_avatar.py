@@ -20,38 +20,90 @@ def _png(w: int, h: int, colour: str = "#3366cc") -> bytes:
     return bytes(data)
 
 
+PHOTO_URL = "https://p01-contacts.example.invalid/a.jpg"
+
+
 class _Api:
-    def __init__(self, raw, status=200, content=b""):
-        self.contacts = SimpleNamespace(me=SimpleNamespace(raw_data=raw))
+    """A fake iCloud: the Contacts service answers the card (or refuses, like the real one did with
+    pyicloud's own request), and the photo address answers the picture."""
+
+    def __init__(self, card, status=200, content=b"", refuse=()):
+        self.params = {"dsid": "1"}
+        self.card, self.refuse = card, set(refuse)
         self.asked: list[str] = []
         self._status, self._content = status, content
         self.session = SimpleNamespace(get=self._get)
 
-    def _get(self, url, timeout=None):
-        self.asked.append(url)
-        return SimpleNamespace(status_code=self._status, content=self._content)
+    def get_webservice_url(self, name):
+        assert name == "contacts"
+        return "https://p01-contactsws.example.invalid"
+
+    def _get(self, url, params=None, timeout=None):
+        self.asked.append(url.rsplit("/co", 1)[-1] if "/co" in url else url)
+        if url == PHOTO_URL:
+            return SimpleNamespace(status_code=self._status, content=self._content)
+        key = url.rsplit("/co", 1)[-1]
+        if key in self.refuse or (key.startswith("/mecard") and "/startup" in self.refuse_until_startup()
+                                  and "prefToken" not in (params or {})):
+            return SimpleNamespace(status_code=400, json=lambda: {})
+        if key == "/startup":
+            return SimpleNamespace(status_code=200, json=lambda: {"prefToken": "p", "syncToken": "s"})
+        assert params.get("clientVersion") and params.get("locale")  # the Contacts app's parameters
+        return SimpleNamespace(status_code=200, json=lambda: self.card)
+
+    def refuse_until_startup(self):
+        return self.refuse
 
 
 def test_the_photo_on_my_card_is_read(qapp):  # noqa: F811
     png = _png(30, 20)
-    api = _Api({"contacts": [{"firstName": "River", "photo": {"url": "https://p01-contacts.example.invalid/a.jpg"}}]},
-               content=png)
+    api = _Api({"contacts": [{"firstName": "River", "photo": {"url": PHOTO_URL}}]}, content=png)
     assert extras.account_photo(api) == png
-    assert api.asked == ["https://p01-contacts.example.invalid/a.jpg"]
+    assert api.asked == ["/mecard/", PHOTO_URL]
 
 
-@pytest.mark.parametrize("raw", [{"contacts": []}, {"contacts": [{"firstName": "River"}]}, {},
-                                 {"contacts": [{"photo": {"url": "http://plain.example.invalid/a.jpg"}}]}])
-def test_no_photo_means_no_picture_and_nothing_fetched(qapp, raw):  # noqa: F811
-    api = _Api(raw, content=b"x")
+def test_the_card_after_the_start_up_request_when_apple_wants_it(qapp):  # noqa: F811
+    png = _png(30, 20)
+    api = _Api({"contacts": [{"photo": {"url": PHOTO_URL}}]}, content=png, refuse={"/startup-needed"})
+    api.refuse = {"/startup"}  # (marker: the card is refused until the start-up tokens come along)
+    api.refuse_until_startup = lambda: {"/startup"}
+    real = api._get
+
+    def get(url, params=None, timeout=None):
+        key = url.rsplit("/co", 1)[-1]
+        if key == "/startup":
+            api.asked.append(key)
+            return SimpleNamespace(status_code=200, json=lambda: {"prefToken": "p", "syncToken": "s"})
+        if key.startswith("/mecard") and "prefToken" not in (params or {}):
+            api.asked.append(key)
+            return SimpleNamespace(status_code=400, json=lambda: {})
+        return real(url, params, timeout)
+
+    api.session.get = get
+    assert extras.account_photo(api) == png
+    assert api.asked == ["/mecard/", "/mecard", "/startup", "/mecard/", PHOTO_URL]
+
+
+@pytest.mark.parametrize("card", [{"contacts": []}, {"contacts": [{"firstName": "River"}]}, {},
+                                  {"contacts": [{"photo": {"url": "http://plain.example.invalid/a.jpg"}}]}])
+def test_no_photo_means_no_picture_and_nothing_fetched(qapp, card):  # noqa: F811
+    api = _Api(card, content=b"x")
     assert extras.account_photo(api) is None
-    assert api.asked == []
+    assert PHOTO_URL not in api.asked
 
 
 def test_a_failed_or_huge_download_gives_no_picture(qapp):  # noqa: F811
-    raw = {"contacts": [{"photo": {"url": "https://p01-contacts.example.invalid/a.jpg"}}]}
-    assert extras.account_photo(_Api(raw, status=404, content=b"x")) is None
-    assert extras.account_photo(_Api(raw, content=b"x" * (extras.PHOTO_MAX + 1))) is None
+    card = {"contacts": [{"photo": {"url": PHOTO_URL}}]}
+    assert extras.account_photo(_Api(card, status=404, content=b"x")) is None
+    assert extras.account_photo(_Api(card, content=b"x" * (extras.PHOTO_MAX + 1))) is None
+
+
+def test_a_refused_card_gives_no_picture(qapp):  # noqa: F811
+    api = _Api({"contacts": [{"photo": {"url": PHOTO_URL}}]}, content=b"x",
+               refuse={"/mecard/", "/mecard", "/startup"})
+    api.refuse_until_startup = lambda: set()
+    assert extras.account_photo(api) is None
+    assert PHOTO_URL not in api.asked
 
 
 def test_saved_as_a_small_square_per_apple_id_and_forgotten(qapp, tmp_path):  # noqa: F811
