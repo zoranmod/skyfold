@@ -18,12 +18,13 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QDateTime, QLocale, QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFont, QImage, QImageIOHandler, QImageReader,
                            QKeySequence, QPainter, QPalette, QPen, QShortcut, QTextCharFormat, QTextCursor,
-                           QTextDocument)
+                           QTextBlockFormat, QTextDocument, QTextLayout)
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                                QMenu, QPushButton, QSizePolicy, QSplitter, QStyle, QStyledItemDelegate,
                                QTextBrowser, QTextEdit, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
@@ -34,7 +35,10 @@ from shiboken6 import isValid
 from ..i18n import t
 from ..notes_engine import local_datetime
 from .. import notes_view as nv
-from .dialogs import Combo, _Dialog
+from .dialogs import Combo
+from .library_frame import LibraryDialog, SearchField, count_font
+from .panel_parts import SoftCard
+from .settings_parts import ElidedLabel
 from .icons import glyph
 from .theme import service_color
 
@@ -158,6 +162,54 @@ class _Indexer(QObject):
         self.gen += 1
 
 
+def _list_date(value: str) -> str:
+    try:
+        when = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    if when.tzinfo is not None:
+        when = when.astimezone()
+    today = datetime.now().date()
+    stamp = QDateTime(when)
+    locale = QLocale.system()
+    if when.date() == today:
+        return locale.toString(stamp.time(), QLocale.ShortFormat)
+    return locale.toString(stamp.date(), "d MMM" if when.year == today.year else QLocale.ShortFormat)
+
+
+def _match_ranges(text: str, terms: list[str], limit: int) -> list[tuple[int, int]]:
+    """Qt text offsets for accent-insensitive matches, including supplementary characters."""
+    folded = nv.fold(text)
+    spans = []
+    for term in terms:
+        i = folded.find(term)
+        while i >= 0 and len(spans) < limit:
+            spans.append((i, i + len(term)))
+            i = folded.find(term, i + len(term))
+    offsets = nv.fold_positions(text, [n for span in spans for n in span]) if spans else []
+    return list(zip(offsets[::2], offsets[1::2]))
+
+
+def _list_line(p: QPainter, rect: QRectF, text: str, terms: list[str], mark: QTextCharFormat | None) -> None:
+    text = p.fontMetrics().elidedText(text, Qt.ElideRight, max(0, int(rect.width())))
+    spans = _match_ranges(text, terms, MAX_MARKS) if terms else []
+    if not spans:
+        p.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, text)
+        return
+    layout = QTextLayout(text, p.font(), p.device())
+    ranges = []
+    for start, end in spans:
+        fmt = QTextLayout.FormatRange()
+        fmt.start, fmt.length, fmt.format = start, end - start, mark
+        ranges.append(fmt)
+    layout.setFormats(ranges)
+    layout.beginLayout()
+    line = layout.createLine()
+    line.setLineWidth(rect.width())
+    layout.endLayout()
+    layout.draw(p, QPointF(rect.left(), rect.center().y() - line.height() / 2))
+
+
 class _NoteDelegate(QStyledItemDelegate):
     def __init__(self, win: "NotesWindow") -> None:
         super().__init__(win)
@@ -194,25 +246,27 @@ class _NoteDelegate(QStyledItemDelegate):
         x, w = r.left() + 12, r.width() - 24
         line = fm.height()
         top = r.top() + (r.height() - 2 * line - 4) / 2
-        when = local_datetime(row.modified) if row.modified else ""
+        when = _list_date(row.modified) if row.modified else ""
         f = QFont(opt.font)
         p.setFont(f)
-        dw = fm.horizontalAdvance(when) + 8 if when else 0
+        p.setFont(count_font(f))
+        dw = min(p.fontMetrics().horizontalAdvance(when) + 8, int(w * 0.46)) if when else 0
         p.setPen(muted)
         if when:
-            p.drawText(QRectF(x + w - dw, top, dw, line), Qt.AlignRight | Qt.AlignVCenter, when)
+            p.drawText(QRectF(x + w - dw, top, dw, line), Qt.AlignRight | Qt.AlignVCenter,
+                       p.fontMetrics().elidedText(when, Qt.ElideRight, max(0, dw - 4)))
         bold = QFont(opt.font)
         bold.setWeight(QFont.DemiBold)
         p.setFont(bold)
         p.setPen(text)
         title = row.title or t("Untitled")
-        p.drawText(QRectF(x, top, max(0, w - dw), line), Qt.AlignLeft | Qt.AlignVCenter,
-                   p.fontMetrics().elidedText(title, Qt.ElideRight, int(max(0, w - dw))))
+        terms = self.win._terms()
+        mark = self.win._match_format() if terms else None
+        _list_line(p, QRectF(x, top, max(0, w - dw), line), title, terms, mark)
         p.setFont(f)
         p.setPen(muted)
         second = ("\U0001F512 " + t("Locked note")) if row.locked else (idx.data(ROW_SNIPPET) or "")
-        p.drawText(QRectF(x, top + line + 4, w, line), Qt.AlignLeft | Qt.AlignVCenter,
-                   fm.elidedText(second, Qt.ElideRight, int(max(0, w))))
+        _list_line(p, QRectF(x, top + line + 4, w, line), second, terms, mark)
         p.restore()
 
 
@@ -241,7 +295,7 @@ class _FolderDelegate(QStyledItemDelegate):
         self.win = win
 
     def sizeHint(self, opt, idx) -> QSize:  # noqa: N802
-        return QSize(120, opt.fontMetrics.height() + 16)
+        return QSize(120, max(34, opt.fontMetrics.height() + 12))
 
     def paint(self, p: QPainter, opt, idx) -> None:
         tree = self.win.folders
@@ -260,8 +314,12 @@ class _FolderDelegate(QStyledItemDelegate):
         lit = selected or bool(opt.state & QStyle.State_MouseOver)
         if lit:
             p.setPen(Qt.NoPen)
-            p.setBrush(sel if selected else hover)
-            p.drawRoundedRect(r, 8, 8)
+            selected_fill = QColor(self.win.c["surface"]) if k["on"] is None else sel
+            p.setBrush(selected_fill if selected else hover)
+            p.drawRoundedRect(r, 6, 6)
+        if selected:
+            p.setBrush(k["on"] or QColor(self.win.c["accent"]))
+            p.drawRoundedRect(QRectF(r.left(), r.center().y() - 8, 3, 16), 1.5, 1.5)
         if lit and k["on"] is not None:
             text = muted = k["on"]
         if selected and tree.hasFocus():
@@ -292,9 +350,9 @@ class _FolderDelegate(QStyledItemDelegate):
         cw = 0
         if count is not None:
             label = str(count)
-            cw = fm.horizontalAdvance(label) + 6
+            p.setFont(count_font(opt.font))
+            cw = p.fontMetrics().horizontalAdvance(label) + 6
             p.setPen(muted)
-            p.setFont(opt.font)
             p.drawText(QRectF(right - cw, r.top(), cw, r.height()), Qt.AlignRight | Qt.AlignVCenter, label)
         p.setPen(text)
         p.setFont(opt.font)
@@ -328,7 +386,7 @@ class _Reader(QTextBrowser):
         self._cache.clear()
         self._bytes = 0
 
-    def _new_document(self, css: str = "", font: QFont | None = None, body: str = "") -> None:
+    def _new_document(self, css: str = "", font: QFont | None = None, body: str = "", title: str = "") -> None:
         """Every note gets a document of its own. The old one is never emptied in place: Qt may still
         be laying it out, painting it or answering a screen reader about it, so it is let go and
         deleted once Qt is done with whatever it was doing (emptying it in place crashed Qt)."""
@@ -339,18 +397,38 @@ class _Reader(QTextBrowser):
         if font is not None:
             doc.setDefaultFont(font)
         doc.setHtml(body)
+        if title and font is not None:
+            cur = QTextCursor(doc)
+            if cur.block().text().strip() != title.strip():
+                # Some exports begin with the body instead of the note title. Insert literal text
+                # while keeping the first original block's formatting and its links intact.
+                original = cur.blockFormat()
+                cur.insertText(title, QTextCharFormat())
+                cur.insertBlock(original)
+                cur.movePosition(QTextCursor.Start)
+                cur.setBlockFormat(QTextBlockFormat())
+            cur.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
+            heading = QTextCharFormat()
+            heading.setFontPointSize(font.pointSizeF() * 1.75)
+            heading.setFontWeight(QFont.DemiBold)
+            cur.mergeCharFormat(heading)
+            block = cur.blockFormat()
+            block.setHeadingLevel(1)
+            block.setTopMargin(0)
+            block.setBottomMargin(12)
+            cur.setBlockFormat(block)
         old = self.document()
         self.setDocument(doc)
         if old is not None and old is not doc and isValid(old) and old.parent() is self:
             old.deleteLater()  # (Qt itself deletes the first, built-in one)
 
     def show_page(self, page: Path, clean: nv.Page, keep_pictures: bool, css: str = "",
-                  font: QFont | None = None) -> None:
+                  font: QFont | None = None, title: str = "") -> None:
         if self.page != page or not keep_pictures:
             self._drop_cache()
         self.page = page
         self.images = list(clean.images)
-        self._new_document(css, font, clean.body)
+        self._new_document(css, font, clean.body, title)
 
     def clear_note(self) -> None:
         self.page = None
@@ -445,7 +523,7 @@ class _Reader(QTextBrowser):
         return img
 
 
-class NotesWindow(_Dialog):
+class NotesWindow(LibraryDialog):
     """source() gives (Notes database, Notes folder), or None when Notes isn't set up or nobody
     is signed in."""
 
@@ -492,26 +570,23 @@ class NotesWindow(_Dialog):
         self.indexer.done.connect(self._on_index_done)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 12, 12, 12)
-        lay.setSpacing(10)
-        top = QHBoxLayout()
+        lay.setContentsMargins(4, 4, 8, 8)
+        lay.setSpacing(0)
         self.search = QLineEdit()
         self.search.setPlaceholderText(t("Search notes (Ctrl+K)"))
         self.search.setClearButtonEnabled(True)
         self.search.setAccessibleName(t("Search notes"))
         self.search.setMinimumWidth(160)
         self.search.returnPressed.connect(lambda: self.notes.setFocus())
-        top.addWidget(self.search, 1)
-        self.status = QLabel("")
+        self.search_field = SearchField(self.search, palette)
+        self.status = ElidedLabel("", Qt.ElideRight)
         self.status.setObjectName("Hint")
         self.status.setMaximumWidth(380)
         self.status.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
         self.status.setMinimumWidth(0)
-        top.addWidget(self.status)
-        lay.addLayout(top)
 
         self.split = QSplitter(Qt.Horizontal)
-        self.split.setHandleWidth(10)
+        self.split.setHandleWidth(4)
         self.folders = _FolderTree()
         self.folders.setHeaderHidden(True)
         self.folders.setIndentation(0)  # the delegate indents; the highlight spans the whole row
@@ -522,6 +597,14 @@ class NotesWindow(_Dialog):
         self.folders.itemCollapsed.connect(self._on_fold)
         self.folders.setAccessibleName(t("Folders"))
         self.folders.setMinimumWidth(110)
+        sidebar = QWidget()
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(0, 4, 0, 0)
+        side.setSpacing(0)
+        group = QLabel(t("Folders"))
+        group.setObjectName("FolderHeading")
+        side.addWidget(group)
+        side.addWidget(self.folders, 1)
         self.notes = QListWidget()
         self.notes.setAccessibleName(t("Notes"))
         self.notes.setItemDelegate(_NoteDelegate(self))
@@ -532,8 +615,9 @@ class NotesWindow(_Dialog):
         middle = QWidget()
         middle.setMinimumWidth(190)
         ml = QVBoxLayout(middle)
-        ml.setContentsMargins(0, 0, 0, 0)
-        ml.setSpacing(6)
+        ml.setContentsMargins(8, 8, 8, 8)
+        ml.setSpacing(4)
+        ml.addWidget(self.search_field)
         self.sorter = Combo()
         self.sorter.setAccessibleName(t("Sort notes"))
         self.sorter.setSizeAdjustPolicy(Combo.AdjustToMinimumContentsLengthWithIcon)
@@ -542,16 +626,18 @@ class NotesWindow(_Dialog):
             self.sorter.addItem(label, key)
         self.sorter.setCurrentIndex(max(0, self.sorter.findData(NotesWindow.sort)))
         self.sorter.currentIndexChanged.connect(self._on_sort)
-        ml.addWidget(self.sorter)
         ml.addWidget(self.notes, 1)
+        ml.addWidget(self.status)
+        ml.addWidget(self.sorter)
 
         right = QWidget()
         right.setMinimumWidth(260)
         rl = QVBoxLayout(right)
-        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setContentsMargins(20, 12, 20, 12)
         rl.setSpacing(6)
         bar = QHBoxLayout()
-        self.meta = QLabel("")
+        self.meta = ElidedLabel("", Qt.ElideMiddle)
+        self.meta.setTextFormat(Qt.PlainText)
         self.meta.setObjectName("Hint")
         self.meta.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)  # long folder paths never widen the window
         bar.addWidget(self.meta, 1)
@@ -598,15 +684,30 @@ class NotesWindow(_Dialog):
         self.empty.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         rl.addWidget(self.empty, 1)
 
-        for w in (self.folders, middle, right):
-            self.split.addWidget(w)
-        self.split.setCollapsible(0, True)  # the folders give way first on a small screen
+        self.split.addWidget(sidebar)
+        pane = SoftCard()
+        pane.setObjectName("LibraryPane")
+        content = QHBoxLayout(pane)
+        content.setContentsMargins(3, 3, 3, 4)
+        columns = QSplitter(Qt.Horizontal)
+        columns.setObjectName("NoteColumns")
+        columns.setChildrenCollapsible(False)
+        columns.setHandleWidth(4)
+        columns.addWidget(middle)
+        columns.addWidget(right)
+        columns.setStretchFactor(0, 0)
+        columns.setStretchFactor(1, 1)
+        columns.setSizes([290, 590])
+        content.addWidget(columns)
+        self.split.addWidget(pane)
+        self.split.setCollapsible(0, True)
         self.split.setCollapsible(1, False)
-        self.split.setCollapsible(2, False)
         self.split.setStretchFactor(0, 0)
-        self.split.setStretchFactor(1, 0)
-        self.split.setStretchFactor(2, 1)
-        self.split.setSizes([200, 300, 620])
+        self.split.setStretchFactor(1, 1)
+        self.split.setSizes([216, 884])
+        QWidget.setTabOrder(self.folders, self.search)
+        QWidget.setTabOrder(self.search, self.notes)
+        QWidget.setTabOrder(self.notes, self.sorter)
         lay.addWidget(self.split, 1)
         self.resize(1120, 720)
 
@@ -837,7 +938,7 @@ class NotesWindow(_Dialog):
                                           t("Locked note") if r.locked else "") if x)
             it.setData(Qt.AccessibleTextRole, text)
             it.setData(Qt.AccessibleDescriptionRole, snip)
-            it.setToolTip(r.title or t("Untitled"))
+            it.setToolTip(text)
             self.notes.addItem(it)
             if r.id == keep:
                 select = it
@@ -919,7 +1020,8 @@ class NotesWindow(_Dialog):
             self._empty(t("This note can't be read right now. Skyfold tries again in a moment."))
             return
         clean = nv.note_html(text, self.shown_pages)
-        clean.body = self._sized(page, clean)
+        clean.body = self._sized(page, clean).replace(
+            '<ul style="list-style-type:none">', '<ul style="list-style-type:none;-qt-list-indent:0">')
         # the same note shown again (zoom, a wider window, more pages): it stays at the same text,
         # not the same number of pixels; a reopened window: back where it was closed
         anchor = self._top_position() if (same_note and self.reader.page == page) else None
@@ -931,7 +1033,8 @@ class NotesWindow(_Dialog):
         font = QFont(QApplication.font())
         base = font.pointSizeF() if font.pointSizeF() > 0 else 10.0
         font.setPointSizeF(base * 1.1 * NotesWindow.zoom)
-        self.reader.show_page(page, clean, keep_pictures=same_note, css=self._css(), font=font)
+        self.reader.show_page(page, clean, keep_pictures=same_note, css=self._css(), font=font,
+                              title=row.title or t("Untitled"))
         self._fitted_width = self.reader.viewport().width()
         self._pending_anchor = anchor if (anchor and not self.isVisible()) else None
         self._scroll_to_position(anchor or 0)
@@ -1010,38 +1113,36 @@ class NotesWindow(_Dialog):
         if not self.current:
             self.meta.setText("")
 
+    def _match_format(self) -> QTextCharFormat:
+        fmt = QTextCharFormat()
+        hc = contrast_colors()
+        fmt.setBackground(hc["high"] if hc else QColor(_blend(self.c["surface"], self.c["warn"], 0.35)))
+        fmt.setForeground(hc["high_text"] if hc else QColor(self.c["text"]))
+        if hc:
+            fmt.setFontUnderline(True)
+        return fmt
+
     def _highlight(self, jump: bool) -> None:
         """Mark the searched words in the open note (without changing the note); with jump, scroll
         to the first one. Positions are counted the way Qt counts them (an emoji is two)."""
         self._hl_query = self.search.text()
         terms = self._terms()
         sels = []
-        fmt = QTextCharFormat()
-        fmt.setBackground(QColor(_blend(self.c["bg"], service_color(self.c, "note"), 0.45)))
-        fmt.setForeground(QColor(self.c["text"]))
+        fmt = self._match_format()
         first = None
         doc = self.reader.document()
         block = doc.begin()
         while terms and block.isValid() and len(sels) < MAX_MARKS:
             text = block.text()
-            folded = nv.fold(text)
-            spans = []  # (start, end) in the folded text; positions in the block looked up only for these
-            for w in terms:
-                i = folded.find(w)
-                while i >= 0 and len(spans) + len(sels) < MAX_MARKS:
-                    spans.append((i, i + len(w)))
-                    i = folded.find(w, i + len(w))
-            if spans:
-                pos = nv.fold_positions(text, [x for span in spans for x in span])
-                for k in range(len(spans)):
-                    a, b = block.position() + pos[2 * k], block.position() + pos[2 * k + 1]
-                    cur = QTextCursor(doc)
-                    cur.setPosition(a)
-                    cur.setPosition(b, QTextCursor.KeepAnchor)
-                    sel = QTextEdit.ExtraSelection()
-                    sel.cursor, sel.format = cur, fmt
-                    sels.append(sel)
-                    first = a if first is None else min(first, a)
+            for start, end in _match_ranges(text, terms, MAX_MARKS - len(sels)):
+                a, b = block.position() + start, block.position() + end
+                cur = QTextCursor(doc)
+                cur.setPosition(a)
+                cur.setPosition(b, QTextCursor.KeepAnchor)
+                sel = QTextEdit.ExtraSelection()
+                sel.cursor, sel.format = cur, fmt
+                sels.append(sel)
+                first = a if first is None else min(first, a)
             block = block.next()
         self.reader.setExtraSelections(sels)
         if first is not None and jump:
@@ -1058,10 +1159,11 @@ class NotesWindow(_Dialog):
                 f"h1{{font-size:x-large;font-weight:600}} h2{{font-size:large;font-weight:600}}"
                 f"h3{{font-size:medium;font-weight:600}}"
                 f"pre,code{{background-color:{c['group']}}}"
-                f"th{{background-color:{c['group']}}} table{{border-color:{c['border']}}}"
+                f"th{{background-color:{c['surface2']};font-weight:600}}"
+                f"table{{border-collapse:collapse}} td,th{{padding:5px 10px;border:1px solid {c['border']}}}"
                 f"blockquote{{color:{c['muted']}}} .sf-file{{color:{c['muted']}}}"
                 f".sf-box{{font-family:'Segoe UI Symbol';font-size:large;color:{c['muted']}}}"
-                f".sf-done{{color:{c['accent_fg']}}}" + hl)
+                f".sf-done{{background-color:{c['btn']};color:{c['accent_text']}}}" + hl)
 
     # --- links --------------------------------------------------------------------------------
     def _on_link(self, url: QUrl) -> None:
@@ -1150,7 +1252,7 @@ class NotesWindow(_Dialog):
 
     def _cycle(self, step: int) -> None:
         order = [w for w in (self.search, self.folders, self.notes, self.reader)
-                 if w.isVisible() and w.isEnabled() and w.width() > 0]
+                 if w.isEnabled() and not w.visibleRegion().isEmpty()]
         now = next((i for i, w in enumerate(order) if w.hasFocus() or w.isAncestorOf(QApplication.focusWidget())),
                    -1)
         if order:
@@ -1187,28 +1289,30 @@ class NotesWindow(_Dialog):
 
         self.app_c = palette
         own = NotesWindow.own_theme
-        if own is None:
-            self.setStyleSheet("")
-            self.setPalette(QApplication.palette())
-        else:
+        if own is not None:
             palette = theme.palette(own)
-            self.setStyleSheet(theme.stylesheet(palette))
-            self.setPalette(theme.qpalette(palette))
+        self.c = palette
+        self.setPalette(theme.qpalette(palette) if own else QApplication.palette())
+        self.setStyleSheet((theme.stylesheet(palette) if own else "") + self.frame_style() +
+                           f"QSplitter#NoteColumns::handle{{border-left:1px solid {palette['border']};background:transparent}}"
+                           f"QLabel#FolderHeading{{color:{palette['muted2']};font-size:12px;padding:4px 12px}}")
+        if self.glass and self.isVisible():
+            self._material()
         self._apply(palette)
 
     def _apply(self, palette: dict[str, str]) -> None:
         c = self.c = palette
-        self.notes.setStyleSheet(f"QListWidget{{background:{c['surface']};border:1px solid {c['border']};"
-                                 f"border-radius:8px;padding:4px;outline:0}}"
-                                 f"QListWidget::item{{border:none;background:transparent}}")
-        self.reader.setStyleSheet(f"QTextBrowser{{background:{c['surface']};border:1px solid {c['border']};"
-                                  f"border-radius:8px;padding:12px 18px;selection-background-color:{c['accent']};"
-                                  f"selection-color:{c['accent_text']}}}")
-        self.folders.setStyleSheet(f"QTreeView{{background:{c['surface']};border:1px solid {c['border']};"
-                                   f"border-radius:8px;padding:4px;outline:0;show-decoration-selected:0}}"
-                                   f"QTreeView::item,QTreeView::branch{{border:none;background:transparent}}")
-        self.more.setStyleSheet(f"QToolButton{{border:none;color:{c['accent_fg']};font-size:16px;padding:0 6px}}"
-                                f"QToolButton::menu-indicator{{image:none}}")
+        self.search_field.apply_palette(c)
+        self.notes.setStyleSheet("QListWidget{background:transparent;border:none;outline:0}"
+                                 "QListWidget::item{border:none;background:transparent}")
+        self.reader.setStyleSheet(f"QTextBrowser{{background:transparent;border:none;padding:0;"
+                                  f"selection-background-color:{c['btn']};selection-color:{c['accent_text']}}}")
+        self.folders.setStyleSheet("QTreeView{background:transparent;border:none;padding:4px;outline:0;"
+                                   "show-decoration-selected:0} QTreeView::item,QTreeView::branch"
+                                   "{border:none;background:transparent}")
+        self.more.setIcon(glyph("more", c["muted"], 20))
+        self.more.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.more.setStyleSheet("QToolButton::menu-indicator{image:none}")
         if not self.closed:
             self._fill_folders()
             self.current_key = None
