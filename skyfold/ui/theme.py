@@ -193,7 +193,7 @@ QTreeView::item:hover, QTreeView::item:selected {{ background: {c['hover']}; col
 QTreeView::indicator {{ width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid {c['border_strong']}; background: transparent; }}
 QTreeView::indicator:checked {{ background: {c['accent']}; border-color: {c['accent']}; image: url({tick}); }}
 QTreeView::indicator:indeterminate {{ background: {c['accent']}; border-color: {c['accent']}; image: url({dash}); }}
-* {{ font-family: "Segoe UI Variable Text","Segoe UI Variable","Segoe UI",sans-serif; font-size: 9.75pt; color: {c['text']}; }}
+* {{ font-family: "Segoe UI Variable Text","Segoe UI Variable","Segoe UI",sans-serif; font-size: 10.5pt; color: {c['text']}; }}
 QWidget#Root, QDialog {{ background: {c['bg']}; }}
 QWidget#Footer {{ background: {c['bg']}; border-top: 1px solid {c['border']}; }}
 QWidget#NavPane {{ background: {c['bg']}; border: none; }}
@@ -243,6 +243,7 @@ QLabel#HeroTitle {{ font-family: "Segoe UI Variable Display","Segoe UI"; font-si
 QLabel#Amount {{ font-family: "Cascadia Mono","Cascadia Code","Consolas"; font-size: 9.25pt; font-weight: 600; color: {c['muted']}; }}
 QLabel#StatusLine {{ font-size: 9pt; color: {c['muted']}; }}
 QLabel#HeroText {{ font-size: 9.25pt; color: {c['muted']}; }}
+QLabel#HeroMono {{ font-family: "Cascadia Mono","Cascadia Code","Consolas"; font-size: 9.25pt; color: {c['muted']}; }}
 QLabel#Lead {{ font-size: 10.5pt; color: {c['muted']}; }}
 QLabel#HeroBig {{ font-family: "Segoe UI Variable Display","Segoe UI"; font-size: 18pt; font-weight: 600; }}
 QLabel#OptionTitle {{ font-size: 9.75pt; font-weight: 600; }}

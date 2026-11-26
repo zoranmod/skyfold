@@ -25,11 +25,9 @@ def test_translucent_client_has_no_click_through_pixels(kind, monkeypatch):
             alpha = bytes(image.constBits())[3::4]
             assert min(alpha) > 0
             corner = image.pixelColor(0, 0)
-            if palette is theme.OLED:
-                assert corner.getRgb() == (0, 0, 0, 255)
-            else:
-                assert 1 < corner.alpha() < 255
-                assert (corner.lightness() > 128) == (palette is theme.LIGHT)
+            # (1.1: OLED too is see-through over the material, at the user's choice)
+            assert 1 < corner.alpha() < 255
+            assert (corner.lightness() > 128) == (palette is theme.LIGHT)
     finally:
         window.close()
         app.processEvents()

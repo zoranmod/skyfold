@@ -965,6 +965,19 @@ class Controller(QObject):
             QTimer.singleShot(400, self.open_login)
         elif show:
             QTimer.singleShot(300, lambda: self.flyout.show_at(self.tray.geometry()))
+        QTimer.singleShot(8000, self._warm_up)
+
+    def _warm_up(self) -> None:
+        """Build the Settings window once, unseen, a few seconds after start: Qt's first build of its
+        cards, icons and fonts made the first click on the gear noticeably slow."""
+        if self._dialogs.get("settings") is not None:
+            return
+        try:
+            dlg = SettingsDialog(self.settings, self.c, storage=getattr(self.worker, "_storage", None))
+            dlg.ensurePolished()
+            dlg.deleteLater()
+        except Exception:  # noqa: BLE001 - only a head start
+            log.info("Settings warm-up skipped", exc_info=True)
 
 
 def main() -> int:

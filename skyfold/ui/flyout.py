@@ -148,6 +148,32 @@ def round_corners(widget: QWidget) -> None:
 BADGE = 32  # header badges (status, iCloud storage): small round buttons beside the gear
 
 
+def _short_time(ts: str) -> str:
+    """When an activity happened, short: now, 09:36 (today), Sat (this week), 18 Nov (earlier)."""
+    from datetime import datetime
+
+    from PySide6.QtCore import QDate, QLocale, QTime
+
+    from ..i18n import language
+
+    try:
+        dt = datetime.fromisoformat(ts).astimezone()
+    except (TypeError, ValueError):
+        return fmt_time(ts)
+    now = datetime.now().astimezone()
+    secs = (now - dt).total_seconds()
+    if secs < 60:
+        return t("now")
+    loc = QLocale(QLocale.Bosnian, QLocale.BosniaAndHerzegowina) if language() == "bs" else QLocale(
+        QLocale.English, QLocale.UnitedKingdom)
+    if dt.date() == now.date():
+        return loc.toString(QTime(dt.hour, dt.minute), "HH:mm")
+    day = QDate(dt.year, dt.month, dt.day)
+    if (now.date() - dt.date()).days < 7:
+        return loc.toString(day, "ddd")
+    return loc.toString(day, "d MMM" if dt.year == now.year else "d MMM yyyy")
+
+
 def _status_dot(color: str, dpr: float) -> QPixmap:
     """A 7 px dot in the state's colour inside a soft halo of the same colour (13 px in all)."""
     pm = QPixmap(round(13 * dpr), round(13 * dpr))
@@ -563,7 +589,8 @@ class ActivityRow(QFrame):
         self.icon.setPixmap(rounded(img, 32, 8, max(1.0, self.devicePixelRatioF())))
 
     def refresh(self) -> None:
-        self.when.setText(fmt_time(self.ts))
+        self.when.setText(_short_time(self.ts))
+        self.when.setToolTip(fmt_time(self.ts))
         self.setAccessibleName(", ".join(x for x in (self.title_text, self.detail_text, self.when.text()) if x))
 
     def _activate(self) -> None:
@@ -1070,6 +1097,10 @@ class Flyout(QWidget):
 
     def _render_hero(self) -> None:
         """The status card: its badge, and a quiet second line when all is well."""
+        if self.state != "syncing" and self.status_text.objectName() != "HeroText":
+            self.status_text.setObjectName("HeroText")
+            self.status_text.style().unpolish(self.status_text)
+            self.status_text.style().polish(self.status_text)
         state = self._dot_state()
         self.badge.set_state(state, self._progress if self.state == "syncing" else None)
         pending = state == "attention"
@@ -1137,6 +1168,10 @@ class Flyout(QWidget):
         self.bar.setValue(int(1000 * min(done, total) / total))
         self._progress = min(done, total) / total
         self.badge.set_state("syncing", self._progress)
+        if self.status_text.objectName() != "HeroMono":
+            self.status_text.setObjectName("HeroMono")  # the numbers: "812 of 1,284 · 4.2 MB/s · ~3 min"
+            self.status_text.style().unpolish(self.status_text)
+            self.status_text.style().polish(self.status_text)
         if text and " · " in text:  # "Downloading photos · 812 of 1,284": the action above, the numbers below
             head, _, rest = text.partition(" · ")
             self.status_title.setText(head)

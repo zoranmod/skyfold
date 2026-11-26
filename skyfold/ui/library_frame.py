@@ -38,7 +38,7 @@ class LibraryDialog(_Dialog):
 
     def frame_style(self) -> str:
         c = self.c
-        material = self.glass and c["bg"] != "#000000"
+        material = self.glass  # (OLED too: the user chose the see-through look for every theme)
         g = glass_colours(c, self._dark()) if material else {}
         # The root tint has nonzero alpha everywhere, including under splitter handles.
         return (

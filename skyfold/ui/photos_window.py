@@ -1308,7 +1308,7 @@ class PhotosWindow(LibraryDialog):
     def apply_palette(self, palette: dict[str, str]) -> None:
         c = self.c = palette
         raised = c["surface"]
-        if self.glass and c["bg"] != "#000000":  # the floating controls: see-through over the material
+        if self.glass:  # the floating controls: see-through over the material (every theme)
             tinted = QColor(c["surface"])
             tinted.setAlphaF(0.86)
             raised = tinted.name(QColor.HexArgb)
