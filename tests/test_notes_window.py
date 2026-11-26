@@ -750,3 +750,59 @@ def test_reopened_window_is_at_the_same_place_at_once(qapp, library):
     qapp.processEvents()
     assert abs(w2._top_position() - pos) < 60
     w2.close()
+
+
+def test_reader_uses_one_literal_heading_and_keeps_the_original_body(qapp, library):
+    from PySide6.QtGui import QTextCursor
+
+    st, root = library
+    title = "Dinner <menu>"
+    (root / "Home" / "Dinner.html").write_text(
+        '<div class="note-content"><ul><li><a href="https://example.invalid/menu"><b>First course</b>'
+        '</a></li></ul></div>', encoding="utf8")
+    st.put("new", "Home/Dinner.html", title, "Home", "2026-11-25T13:00:00", False)
+    w = window(qapp, library)
+    try:
+        select(w, "new")
+        first = w.reader.document().begin()
+        assert first.text() == title and first.blockFormat().headingLevel() == 1
+        assert first.textList() is None and first.next().textList() is not None
+        heading = QTextCursor(first)
+        heading.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor)
+        assert not heading.charFormat().isAnchor()
+        assert first.next().text() == "First course"
+        cursor = QTextCursor(first.next())
+        cursor.movePosition(QTextCursor.NextCharacter, QTextCursor.KeepAnchor)
+        assert cursor.charFormat().fontWeight() >= 600 and cursor.charFormat().isAnchor()
+        select(w, "g")
+        assert w.reader.toPlainText().splitlines().count("Groceries") == 1
+    finally:
+        w.close()
+
+
+def test_list_and_reader_match_the_same_utf16_ranges():
+    from skyfold.ui.notes_window import _match_ranges
+
+    text = "😀 Cafe\u0301 café"
+    ranges = _match_ranges(text, ["cafe"], 4)
+    utf16 = text.encode("utf-16-le")
+    matches = [utf16[2 * a:2 * b].decode("utf-16-le") for a, b in ranges]
+    assert matches == ["Cafe\u0301", "café"]
+    assert _match_ranges(text, ["cafe"], 1) == ranges[:1]
+
+
+def test_f6_skips_collapsed_folder_pane(qapp, library):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    w = window(qapp, library)
+    try:
+        w.split.setSizes([0, w.width()])
+        w.search.setFocus()
+        qapp.processEvents()
+        QTest.keyClick(w.search, Qt.Key_F6)
+        assert w.notes.hasFocus()
+        QTest.keyClick(w.notes, Qt.Key_Return)
+        assert w.reader.hasFocus()
+    finally:
+        w.close()

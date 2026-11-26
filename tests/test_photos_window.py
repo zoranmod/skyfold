@@ -976,3 +976,31 @@ def test_a_click_on_photos_opens_the_folder_when_the_window_is_switched_off(monk
     app_mod.Controller._on_service(fake, "photos")
     app_mod.Controller.open_photos_or_folder(fake)
     assert calls == ["window", "window", "folder:photos", "folder:photos"]
+
+
+def test_viewer_commands_follow_current_photo_and_live_theme(qapp, made_up, monkeypatch):
+    from skyfold.ui import theme
+
+    w = window(qapp, made_up)
+    try:
+        w.resize(760, 550)
+        w.open_viewer(0)
+        qapp.processEvents()
+        assert w.v_more.isVisible() and not w.v_open.isVisible()
+        opened = []
+        monkeypatch.setattr(w, "open_file", opened.append)
+        w.step(1)
+        item = w.viewer_items[w.viewer_row]
+        w.v_more.menu().actions()[0].trigger()
+        assert opened == [item.path]
+        for c in (theme.LIGHT, theme.OLED, theme.DARK):
+            w.apply_palette(c)
+            assert w.pages.currentWidget() is w.viewer
+            assert w.viewer_items[w.viewer_row] is item
+            assert w.v_fav.accessibleName() == w.v_fav.toolTip()
+            assert not w.v_fav.icon().isNull()
+        w.resize(1450, 820)
+        qapp.processEvents()
+        assert w.v_open.isVisible() and w.v_show.isVisible() and not w.v_more.isVisible()
+    finally:
+        w.close()
