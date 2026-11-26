@@ -332,8 +332,6 @@ QListWidget {{ background: transparent; border: none; outline: none; }}
 QListWidget::item {{ padding: 6px 4px; border-bottom: 1px solid {c['border']}; }}
 QListWidget#Nav {{ font-size: 10.5pt; }}
 QLabel#StorageHead {{ font-size: 10.5pt; color: {c['muted']}; }}
-QFrame#SetCard {{ background: {c['group']}; border: 1px solid {c['border']}; border-radius: 8px; }}
-QFrame#SetCard[hot="true"] {{ background: {c['surface2'] if c['bg'] != c['group'] else c['hover']}; border-color: {c['border']}; }}
 QLabel#PageTitle {{ font-family: "Segoe UI Variable Display","Segoe UI"; font-size: 20pt; font-weight: 600; padding-bottom: 2px; }}
 QLabel#GroupLabel {{ font-size: 10.5pt; font-weight: 600; }}
 QLabel#SetTitle {{ font-size: 10.5pt; font-weight: 600; }}

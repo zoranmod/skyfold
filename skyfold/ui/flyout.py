@@ -1130,9 +1130,12 @@ class Flyout(QWidget):
         icon = {"idle": "check", "syncing": "sync", "paused": "pause", "error": "error", "auth": "error",
                 "offline": "cloud", "setup": "folder", "attention": "error"}.get(state, "check")
         color = state_color(self.c, state)
-        pix = _status_dot(color, max(1.0, self.devicePixelRatioF()))
+        if icon == "sync":  # syncing: the turning arrows (the user liked them; other states show a dot)
+            pix = glyph("sync", color, 13).pixmap(QSize(13, 13), max(1.0, self.devicePixelRatioF()))
+        else:
+            pix = _status_dot(color, max(1.0, self.devicePixelRatioF()))
         self.status_icon.setPixmap(pix)
-        if False:  # (the dot doesn't spin; the badge in the status card shows the progress)
+        if icon == "sync" and animations_on():
             self._spin_base = pix
             if not self._spin.isActive():
                 self._spin.start()

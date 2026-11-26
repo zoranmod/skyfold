@@ -347,8 +347,10 @@ class SoftCard(QFrame):
 
     def event(self, e) -> bool:
         done = super().event(e)
-        if e.type() == QEvent.Polish:
-            self.setAttribute(Qt.WA_StyledBackground, False)  # the style sheet never paints it (jagged)
+        if e.type() in (QEvent.Polish, QEvent.StyleChange):
+            # the style sheet never paints it: its rounded corners are jagged, and a solid background
+            # under a see-through card hid the window's material (Settings looked solid)
+            self.setAttribute(Qt.WA_StyledBackground, False)
         return done
 
     def card_path(self) -> QPainterPath:
