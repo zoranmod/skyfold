@@ -143,6 +143,7 @@ class SyncWorker(QObject):
         self._drive_last = 0.0
         self._storage: dict | None = None
         self._storage_at = 0.0
+        self._avatar_at = 0.0  # when the account picture was last read (once a day)
         self._drive_changes: set[str] = set()  # PC paths changed since the last quick Drive pass
         self._drive_retry: set[str] = set()  # paths of a failed quick pass
         self._drive_lock = threading.Lock()
@@ -421,6 +422,7 @@ class SyncWorker(QObject):
     @Slot()
     def sign_out(self) -> None:
         self.cancel()
+        self._avatar_at = 0.0
         self.api = None
         self.syncer = None
         self.drive = None
@@ -696,6 +698,7 @@ class SyncWorker(QObject):
         if self._halt():
             return
         self._refresh_storage(force=full)
+        self._refresh_avatar()
         if self._halt():
             return  # quitting or paused: no further service starts (a new pass would clear the stop)
         if self.notes is not None and not self._run_notes(full, problems):
@@ -815,6 +818,26 @@ class SyncWorker(QObject):
             self._storage_at = time.monotonic()
         except Exception as exc:  # noqa: BLE001 - purely informational
             log.info("Storage info unavailable: %s", describe(exc))
+
+    def _refresh_avatar(self) -> None:
+        """The account picture for Settings (the photo on the user's own card in Contacts): once
+        after signing in, then once a day. Purely cosmetic: any failure only leaves the letter."""
+        if self.api is None or not self.settings.apple_id:
+            return
+        if self._avatar_at and time.monotonic() - self._avatar_at < 24 * 3600:
+            return
+        self._avatar_at = time.monotonic()
+        from . import avatar
+
+        try:
+            data = extras.account_photo(self.api)
+        except Exception as exc:  # noqa: BLE001 - purely cosmetic
+            log.info("Account picture unavailable: %s", describe(exc))
+            return
+        if data is None:
+            avatar.forget(self.settings.apple_id)  # (taken off the card: the letter again)
+        elif not avatar.save(self.settings.apple_id, data):
+            log.info("Account picture unreadable")
 
     def _run_bookmarks(self, problems: list[str]) -> bool:
         """Safari bookmarks → "Safari Bookmarks.html" (read-only in iCloud)."""

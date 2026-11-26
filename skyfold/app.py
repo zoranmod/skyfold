@@ -841,6 +841,9 @@ class Controller(QObject):
         from . import netdiag
 
         netdiag.stop()  # connection diagnostics end with the account
+        from . import avatar
+
+        avatar.forget_all()  # the account picture leaves with the account
         self._login_api = None
         self.worker.cancel()  # stop the running pass now; the rest happens on the worker thread
         # Right now, not queued: a sign-in made while the worker is still busy must never be undone by it.

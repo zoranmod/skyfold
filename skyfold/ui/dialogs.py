@@ -840,7 +840,11 @@ class SettingsDialog(_Dialog):
         row.setContentsMargins(8, 4, 8, 14)
         row.setSpacing(12)
         who = self.s.apple_id or ""
-        row.addWidget(Avatar(who or "?", 40), 0, Qt.AlignVCenter)
+        from .. import avatar
+
+        picture = avatar.path_for(who) if who else None
+        row.addWidget(Avatar(who or "?", 40, str(picture) if picture and picture.exists() else None), 0,
+                      Qt.AlignVCenter)
         col = QVBoxLayout()
         col.setSpacing(0)
         name = ElidedLabel(who or t("Not signed in"))

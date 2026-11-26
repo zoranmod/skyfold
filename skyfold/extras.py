@@ -36,6 +36,31 @@ def storage(api: Any) -> dict[str, Any]:
     return _call(run)
 
 
+PHOTO_MAX = 8 * 1024 * 1024
+
+
+def account_photo(api: Any) -> bytes | None:
+    """The picture on the user's own card in Contacts ("My Card"), as iCloud.com shows it, or None
+    when the card has none. Read-only: two small requests."""
+    def run() -> bytes | None:
+        try:
+            raw = api.contacts.me.raw_data
+        except (KeyError, IndexError, TypeError, ValueError):
+            return None  # no card of one's own
+        contacts = raw.get("contacts") if isinstance(raw, dict) else None
+        contact = contacts[0] if isinstance(contacts, list) and contacts and isinstance(contacts[0], dict) else {}
+        photo = contact.get("photo")
+        url = photo.get("url") if isinstance(photo, dict) else None
+        if not isinstance(url, str) or not url.startswith("https://"):
+            return None
+        r = api.session.get(url, timeout=30)
+        if r.status_code != 200:
+            return None
+        data = r.content
+        return data if 0 < len(data) <= PHOTO_MAX else None
+    return _call(run)
+
+
 @dataclass
 class Device:
     id: str

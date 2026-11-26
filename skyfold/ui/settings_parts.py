@@ -44,16 +44,28 @@ class IconLabel(QWidget):
 class Avatar(QWidget):
     """A round picture with the first letter of the Apple ID, as at the top of Windows' Settings."""
 
-    def __init__(self, who: str, size: int = 40) -> None:
+    def __init__(self, who: str, size: int = 40, picture: str | None = None) -> None:
         super().__init__()
         self.setFixedSize(size, size)
         self.letter = (who.strip()[:1] or "?").upper()
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        from PySide6.QtGui import QImage
+
+        self.picture = QImage(picture) if picture else QImage()  # the photo on the user's own card
 
     def paintEvent(self, _e) -> None:  # noqa: N802
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        if not self.picture.isNull():
+            from PySide6.QtGui import QPainterPath
+
+            clip = QPainterPath()
+            clip.addEllipse(r)
+            p.setClipPath(clip)
+            p.drawImage(r, self.picture)
+            return
         g = QLinearGradient(r.topLeft(), r.bottomRight())
         g.setColorAt(0, QColor("#6fa8ff"))
         g.setColorAt(1, QColor("#b6a3ff"))
