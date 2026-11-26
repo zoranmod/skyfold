@@ -239,13 +239,19 @@ def test_settings_signout_requires_its_confirmation(ui):
     d = dialogs.SettingsDialog(c.settings, c.c); seen=[]; answered=[]
     d.signOut.connect(lambda: seen.append(1)); d.show(); d.activateWindow(); app.processEvents()
     out = next(b for b in d.findChildren(QPushButton) if b.text() == dialogs.t('Sign out'))
+    tries = []
+
     def dismiss():
         box = app.activeModalWidget()
         if isinstance(box, QMessageBox):
             answered.append(box.windowTitle())
             QTest.keyClick(box, Qt.Key_Escape)
-    QTimer.singleShot(30, dismiss)
-    tab_to(app, out); key(app, Qt.Key_Return)
+        elif len(tries) < 200:  # not open yet: look again (never leave a question open: the run would hang)
+            tries.append(1)
+            QTimer.singleShot(30, dismiss)
+    tab_to(app, out)
+    QTimer.singleShot(30, dismiss)  # (after the Tabs: on a slow machine it fired before the question opened)
+    key(app, Qt.Key_Return)
     assert answered and not seen and d.isVisible()
     d.close()
 
