@@ -36,13 +36,18 @@ class LibraryDialog(_Dialog):
             option.initFrom(self)
             self.style().drawPrimitive(QStyle.PE_Widget, option, p, self)
 
+    def _veil(self) -> str:
+        return "rgba(30, 33, 39, 46)" if self._dark() else "rgba(243, 244, 247, 60)"
+
     def frame_style(self) -> str:
         c = self.c
         material = self.glass  # (OLED too: the user chose the see-through look for every theme)
         g = glass_colours(c, self._dark()) if material else {}
         # The root tint has nonzero alpha everywhere, including under splitter handles.
         return (
-            f"QDialog#Root {{ background:{g.get('tint', c['bg'])}; }}"
+            # a light veil over Windows' acrylic (which brings its own tint): what is behind shows
+            # through as in the design; the old 150/255 veil made the windows look nearly solid
+            f"QDialog#Root {{ background:{self._veil() if material else c['bg']}; }}"
             f"SoftCard#LibraryPane {{ qproperty-fill:{g.get('card', c['surface'])};"
             f" qproperty-stroke:{g.get('stroke', c['border'])}; qproperty-shade:transparent; }}"
             f"SoftCard#LibrarySearch {{ qproperty-fill:{g.get('control', c['surface2'])};"

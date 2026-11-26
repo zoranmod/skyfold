@@ -362,6 +362,7 @@ def test_temporarily_unreadable_note_comes_back(qapp, library, monkeypatch):
 def test_sort_zoom_full_screen_and_keys(qapp, library):
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
+    from skyfold.ui.notes_window import NotesWindow
     w = window(qapp, library)
     w.sorter.setCurrentIndex(w.sorter.findData("old"))
     assert ids(w) == ["l", "d", "g"]
@@ -369,18 +370,27 @@ def test_sort_zoom_full_screen_and_keys(qapp, library):
     assert ids(w) == ["l", "d", "g"]  # Bank, Diary, Groceries
     w.sorter.setCurrentIndex(w.sorter.findData("new"))
     before = w.reader.document().defaultFont().pointSizeF()
+    # the size is shown for a moment ("110%") and in the "More" menu, which also changes it
+    assert not w.zoom_hint.isVisible() and not w.zoom_reset.isEnabled()
     QTest.keyClick(w, Qt.Key_Plus, Qt.ControlModifier)
-    assert w.reader.document().defaultFont().pointSizeF() > before and w.zoom_reset.text() == "110%"
+    assert w.reader.document().defaultFont().pointSizeF() > before and w.zoom_hint.text() == "110%"
+    assert w.zoom_hint.isVisible() and "110%" in w.zoom_reset.text() and w.zoom_reset.isEnabled()
+    assert pump(qapp, lambda: not w.zoom_hint.isVisible())  # then it fades away
     for _ in range(30):
         w.set_zoom(1)
-    assert w.zoom_reset.text() == "240%" and "Buy" in w.reader.toPlainText()
+    assert w.zoom_hint.text() == "240%" and "Buy" in w.reader.toPlainText() and not w.zoom_in.isEnabled()
     QTest.keyClick(w, Qt.Key_0, Qt.ControlModifier)
-    assert w.zoom_reset.text() == "100%"
+    assert w.zoom_hint.text() == "100%" and not w.zoom_reset.isEnabled()
     assert abs(w.reader.document().defaultFont().pointSizeF() - before) < 0.01
+    w.zoom_out.trigger()
+    assert w.zoom_hint.text() == "90%" and NotesWindow.zoom == 0.9
+    w.zoom_reset.trigger()
+    assert NotesWindow.zoom == 1.0
+    assert all(a in w.more.menu().actions() for a in (w.zoom_in, w.zoom_out, w.zoom_reset))
     # Enter in the search box: to the results, never a button
     w.search.setFocus()
     QTest.keyClick(w.search, Qt.Key_Return)
-    assert w.zoom_reset.text() == "100%" and pump(qapp, lambda: w.notes.hasFocus())
+    assert NotesWindow.zoom == 1.0 and pump(qapp, lambda: w.notes.hasFocus())
     # F6 from a locked note moves on
     select(w, "l")
     w.notes.setFocus()
@@ -806,3 +816,114 @@ def test_f6_skips_collapsed_folder_pane(qapp, library):
         assert w.reader.hasFocus()
     finally:
         w.close()
+
+
+# --- the 1.1 design ----------------------------------------------------------------------------
+
+def _blocks(doc):
+    b = doc.begin()
+    while b.isValid():
+        yield b
+        b = b.next()
+
+
+def test_the_note_reads_like_the_design(qapp, library):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QFont, QImage, QTextFormat, QTextTable
+    from skyfold.ui.notes_window import HEAD_MARK, _layers
+    st, root = library
+    (root / "Home" / "Garden.html").write_text(page("Garden", "Jobs for spring.", "").replace(
+        '<table><tr><td colspan="2" onclick="x()">cell</td></tr></table>',
+        "<h3>Budget</h3><table><tr><th>Item</th><th>Price</th></tr><tr><td>Seedlings</td><td>12</td></tr></table>"),
+        encoding="utf-8")
+    st.put("z", "Home/Garden.html", "Garden", "Home", "2026-11-30T10:00:00", False)
+    w = window(qapp, library)
+    try:
+        select(w, "z")
+        doc = w.reader.document()
+        blocks = list(_blocks(doc))
+        title = blocks[0].begin().fragment().charFormat()
+        # the title: 26 px, 600, without Qt's own h1 size step on top
+        assert blocks[0].text() == "Garden" and abs(title.fontPointSize() - 19.5) < 0.01
+        assert title.fontWeight() == QFont.DemiBold and title.property(QTextFormat.FontSizeAdjustment) is None
+        budget = next(b for b in blocks if b.text() == "Budget").begin().fragment().charFormat()
+        assert abs(budget.font().pointSizeF() - 10.5) < 0.01  # section headings as big as the text, 600
+        # a ticked item struck through and dimmed, an open one not
+        dim = _layers(w.c)["text3"]
+        milk = next(b for b in blocks if "milk" in b.text())
+        bread = next(b for b in blocks if "bread" in b.text())
+        it = milk.begin()
+        it += 1
+        assert it.fragment().charFormat().fontStrikeOut() and it.fragment().charFormat().foreground().color() == dim
+        it = bread.begin()
+        it += 1
+        assert not it.fragment().charFormat().fontStrikeOut()
+        assert milk.begin().fragment().charFormat().toImageFormat().name() == "sfbox:on"
+        # tables: no grid, the head row known (painted on a lighter layer), no marker colour left
+        tables = [f for f in doc.rootFrame().childFrames() if isinstance(f, QTextTable)]
+        head = next(t for t in tables if t.rows() == 2 and t.columns() == 2)
+        assert head.format().border() == 0 and w.reader.table_heads[head.firstPosition()] == 1
+        assert all(head.cellAt(r, c).format().background().style() == Qt.NoBrush for r in range(2) for c in range(2))
+        assert all(f.charFormat().background().color().name() != HEAD_MARK
+                   for b in blocks for f in [b.begin().fragment()] if f.isValid())
+        assert w.reader._table_cards()  # drawn as cards
+        img = QImage(w.reader.size(), QImage.Format_ARGB32)
+        w.reader.render(img)
+        # the meta line: folder and the long date
+        assert w.meta.text().startswith("Home · 30 November 2026")
+    finally:
+        w.close()
+
+
+def test_sidebar_list_and_controls_like_the_design(qapp, library):
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from skyfold.ui import theme
+    from skyfold.ui.notes_window import GROUP_LABEL, ROW_COMPACT, _layers
+    st, root = library
+    (root / "Home" / "Empty.html").write_text(page("Empty", "", "").split("<p>")[0] + "</div></body></html>",
+                                              encoding="utf-8")
+    st.put("e", "Home/Empty.html", "Empty", "Home", "2026-11-21T10:00:00", False)
+    w = window(qapp, library)
+    try:
+        # "All notes" first, then the "iCloud" label above the folders (it is not a folder itself)
+        tree = w.folders
+        first, second = tree.topLevelItem(0), tree.topLevelItem(1)
+        assert first.text(0) == "All notes"
+        r0, r1 = tree.visualItemRect(first), tree.visualItemRect(second)
+        assert r1.height() == r0.height() + GROUP_LABEL
+        tree.setCurrentItem(first)
+        pos = QPointF(40, r1.top() + 8)
+        ev = QMouseEvent(QEvent.MouseButtonPress, pos, pos, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+        tree.mousePressEvent(ev)
+        assert tree.currentItem() is first  # a click on the label chooses nothing
+        pos = QPointF(40, r1.bottom() - 8)
+        ev = QMouseEvent(QEvent.MouseButtonPress, pos, pos, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+        tree.mousePressEvent(ev)
+        assert tree.currentItem() is second
+        tree.setCurrentItem(first)
+        # a note without text after its title: a one-line row, the others two lines
+        rows = {w.notes.item(i).data(Qt.UserRole): w.notes.item(i) for i in range(w.notes.count())}
+        assert pump(qapp, lambda: rows["e"].data(ROW_COMPACT))
+        assert not rows["g"].data(ROW_COMPACT) and not rows["l"].data(ROW_COMPACT)  # (locked: "Locked note")
+        assert w.notes.visualItemRect(rows["e"]).height() < w.notes.visualItemRect(rows["g"]).height()
+        # no visible zoom buttons; the quiet "More" button and the order of the list stay
+        assert w.more.isVisible() and w.sorter.isVisible() and w.sorter.height() <= 28
+        assert w.search.placeholderText() == "Search notes" and "Ctrl+K" in w.search.toolTip()
+        # the layers are see-through in every theme, OLED as Dark (over the window's material)
+        for mode in ("light", "dark", "oled"):
+            k = _layers(theme.palette(mode))
+            assert all(k[n].alpha() < 255 for n in ("layer2", "hover", "stroke", "stroke2", "sel"))
+        assert _layers(theme.OLED)["layer2"] == _layers(theme.DARK)["layer2"]
+    finally:
+        w.close()
+
+
+def test_list_dates_are_short():
+    from datetime import datetime
+    from skyfold.ui.notes_window import _list_date
+    now = datetime(2026, 11, 24, 12, 0)
+    assert ":" in _list_date("2026-11-24T07:15:00", now)  # today: the time
+    assert _list_date("2026-11-22T09:15:00", now) == "Sun"  # this week: the day
+    assert _list_date("2026-11-18T18:40:00", now) == "18 Nov"  # this year: day and month
+    assert "Nov" not in _list_date("2025-11-18T18:40:00", now)  # before: the date as Windows writes it

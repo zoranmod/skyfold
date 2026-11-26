@@ -20,12 +20,12 @@ from pathlib import Path
 from PySide6.QtCore import (QAbstractListModel, QEasingCurve, QEvent, QItemSelection, QItemSelectionModel, QObject,
                             QMimeData, QModelIndex, QPoint, QRect, QRectF, QSize, Qt, QTimer, QUrl, QVariantAnimation,
                             Signal)
-from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QImage, QKeySequence, QLinearGradient,
-                           QPainter, QPainterPath, QPen, QPixmap, QShortcut)
-from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-                               QListView, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea,
-                               QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton, QVBoxLayout,
-                               QWidget)
+from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetricsF, QGuiApplication, QIcon, QImage, QKeySequence,
+                           QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QShortcut)
+from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractScrollArea, QApplication, QFrame, QGridLayout,
+                               QHBoxLayout, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QMenu, QMessageBox,
+                               QPushButton, QScrollArea, QScrollBar, QSizePolicy, QStackedWidget, QStyle,
+                               QStyledItemDelegate, QStyleOptionSlider, QToolButton, QVBoxLayout, QWidget)
 from shiboken6 import isValid
 
 from .. import photo_library as lib
@@ -79,56 +79,201 @@ def _is_light(c: dict) -> bool:
     return QColor(c["bg"]).lightness() > 128
 
 
+# --- the look (the 1.1 design's tokens) --------------------------------------------------------------
+# Everything the window draws over the material is a see-through layer (rgba), in every theme: OLED
+# too is see-through like Dark (the user's choice). Only the photos themselves are solid.
+HEAD = 74  # the title band over the photos: they scroll on under it
+
+
+def _qc(r: int, g: int, b: int, a: float = 1.0) -> QColor:
+    c = QColor(r, g, b)
+    c.setAlphaF(a)
+    return c
+
+
+def _alpha(colour, a: float) -> QColor:
+    c = QColor(colour)
+    c.setAlphaF(a)
+    return c
+
+
+def _tokens(c: dict, glass: bool) -> dict:
+    """The design's layers for this palette: mica (the floating bars), solid (the chosen segment, the
+    title band), layer / layer2 (cards, buttons), hover, stroke / stroke2 (hairlines), text2 / text3,
+    shadows, and the window's own tint (what lies around the content pane)."""
+    from .backdrop import glass_colours
+
+    light = _is_light(c)
+    text = QColor(c["text"])
+    oled_solid = not light and QColor(c["bg"]).lightness() < 8 and not glass  # OLED without the material
+    if light:
+        t = {"mica": _qc(244, 245, 248, .84), "solid": _qc(244, 245, 248), "layer": _qc(255, 255, 255, .72),
+             "layer2": _qc(255, 255, 255, .92), "hover": _qc(0, 0, 0, .04), "stroke": _qc(0, 0, 0, .06),
+             "stroke2": _qc(0, 0, 0, .11), "shadow1": _qc(0, 0, 0, .07), "shadow2": _qc(20, 30, 60, .13),
+             "text2": _alpha(text, .72), "text3": _alpha(text, .52)}
+    else:
+        solid = QColor(c["surface"]) if oled_solid else _qc(30, 33, 39)
+        t = {"mica": _alpha(solid, .84), "solid": solid, "layer": _qc(255, 255, 255, .045),
+             "layer2": _qc(255, 255, 255, .08), "hover": _qc(255, 255, 255, .09), "stroke": _qc(255, 255, 255, .07),
+             "stroke2": _qc(255, 255, 255, .12), "shadow1": _qc(0, 0, 0, .3), "shadow2": _qc(0, 0, 0, .35),
+             "text2": _alpha(text, .74), "text3": _alpha(text, .52)}
+    t["text"] = text
+    # the chosen segment: the solid material (dark); on the light one plain white, or it would vanish
+    t["chosen"] = QColor("#ffffff") if light else t["solid"]
+    t["accent"] = QColor(c["accent"])
+    t["accent_soft"] = _alpha(c["accent"], .16 if not light else .10)
+    t["focus"] = QColor(c["focus_ring"])
+    t["head"] = _alpha(t["solid"] if (glass or light) else QColor(c["bg"]), .92)
+    tint = glass_colours(c, not light)["tint"] if glass else c["bg"]
+    t["tint"] = _css_colour(tint)
+    return t
+
+
+def _css_colour(css: str) -> QColor:
+    if css.startswith("rgba("):
+        r, g, b, a = (float(x) for x in css[5:-1].split(","))
+        return QColor(int(r), int(g), int(b), int(a if a > 1 else a * 255))
+    return QColor(css)
+
+
+def _css(c: QColor) -> str:
+    return f"rgba({c.red()}, {c.green()}, {c.blue()}, {c.alpha()})"
+
+
 def _ui(w: QWidget) -> dict:
-    return getattr(w.window(), "_ui", None) or {"raised": "#1c1c1e", "ring": "rgba(255,255,255,0.12)",
-                                                  "hover": "#2c2c2e", "text": "#ffffff", "nav": "rgba(255,255,255,0.12)",
-                                                  "nav_text": "#ffffff"}
+    u = getattr(w.window(), "_ui", None)
+    if u is None:
+        from .theme import DARK
+
+        u = _tokens(DARK, False)
+    return u
 
 
-def _round(p: QPainter, r: QRectF, fill: str, ring: str | None = None, radius: float = 8) -> None:
+def _round(p: QPainter, r: QRectF, fill, ring=None, radius: float = 8) -> None:
     """A smooth rounded shape (Qt's style sheets draw these corners without anti-aliasing)."""
     p.setRenderHint(QPainter.Antialiasing)
     rad = min(radius, r.width() / 2, r.height() / 2)
-    if ring:
-        p.setPen(QPen(QColor(_rgba(ring)), 1))
+    if ring is not None and QColor(ring).alpha():
+        p.setPen(QPen(QColor(ring), 1))
         r = r.adjusted(0.5, 0.5, -0.5, -0.5)
     else:
         p.setPen(Qt.NoPen)
-    p.setBrush(QColor(_rgba(fill)))
+    p.setBrush(QColor(fill) if fill is not None else Qt.NoBrush)
     p.drawRoundedRect(r, rad, rad)
 
 
-def _rgba(css: str) -> QColor | str:
-    if css.startswith("rgba("):
-        r, g, b, a = (float(x) for x in css[5:-1].split(","))
-        return QColor(int(r), int(g), int(b), int(a * 255))
-    return css
+def _shadow(p: QPainter, r: QRectF, radius: float, blur: float, dy: float, colour: QColor) -> None:
+    """A soft drop shadow (CSS box-shadow 0 dy blur colour): rounded shapes stacked from wide and faint
+    to the shape itself, so the edge fades out smoothly."""
+    if not colour.alpha():
+        return
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    steps = max(3, int(blur / 2))
+    per = 1 - (1 - colour.alphaF()) ** (1 / steps)
+    c = QColor(colour)
+    c.setAlphaF(per)
+    p.setBrush(c)
+    for i in range(steps):
+        grow = blur * (steps - i) / steps * 0.75
+        rr = r.adjusted(-grow, -grow + dy, grow, grow + dy)
+        p.drawRoundedRect(rr, radius + grow, radius + grow)
+    p.restore()
+
+
+def _layer_button(p: QPainter, w: QWidget, r: QRectF, radius: float, checked: bool = False) -> None:
+    """The design's .btn: a light layer with a hairline and a 1 px shadow; a little lighter under the
+    pointer, accent-tinted when switched on."""
+    u = _ui(w)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    p.setBrush(u["shadow1"])
+    p.drawRoundedRect(r.translated(0, 1), radius, radius)
+    _round(p, r, u["layer2"], u["stroke2"], radius)
+    if checked:
+        _round(p, r, u["accent_soft"], _alpha(u["accent"], .55), radius)
+    if w.isEnabled() and (w.underMouse() or getattr(w, "isDown", lambda: False)()):
+        _round(p, r, u["hover"], None, radius)
+    if w.hasFocus() and getattr(w.window(), "keyboard_used", False):
+        p.setPen(QPen(u["focus"], 2))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(r.adjusted(1, 1, -1, -1), radius - 1, radius - 1)
+
+
+class _Shadow(QWidget):
+    """The soft shadow under a floating bar, drawn beside it (so the bar itself takes clicks only where
+    it is drawn): follows the bar wherever it moves, shows and hides with it."""
+
+    BLUR, DY = 24, 8
+
+    def __init__(self, target: QWidget, radius: float) -> None:
+        super().__init__(target.parentWidget())
+        self.target, self.radius = target, radius
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        target.installEventFilter(self)
+        self.hide()
+
+    def eventFilter(self, obj, e):  # noqa: N802
+        kind = e.type()
+        if kind in (QEvent.Move, QEvent.Resize, QEvent.Show, QEvent.Hide, QEvent.ZOrderChange):
+            self.follow()
+        return False
+
+    def follow(self) -> None:
+        t = self.target
+        b = self.BLUR
+        self.setGeometry(t.geometry().adjusted(-b, -b, b, b + self.DY))
+        self.setVisible(not t.isHidden())
+        self.stackUnder(t)
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        u = _ui(self)
+        p = QPainter(self)
+        inner = QRectF(self.rect()).adjusted(self.BLUR, self.BLUR, -self.BLUR, -self.BLUR - self.DY)
+        hole = QPainterPath()
+        hole.addRoundedRect(inner.adjusted(1, 1, -1, -1), self.radius, self.radius)
+        outside = QPainterPath()
+        outside.addRect(QRectF(self.rect()))
+        p.setClipPath(outside.subtracted(hole))  # (the see-through bar never darkens what is under it)
+        _shadow(p, inner, self.radius, self.BLUR, self.DY, u["shadow2"])
+        _shadow(p, inner, self.radius, 3, 1, _alpha(u["shadow1"], min(1.0, u["shadow1"].alphaF())))
 
 
 class _Pill(QWidget):
-    """The floating bars (Years / Months / All Photos, − +, the selection bar), drawn smooth."""
+    """The floating bars (Years / Months / All Photos, − +, the selection bar): see-through, a hairline
+    and a soft shadow (drawn by its _Shadow), as in the design."""
+
+    RADIUS = 10
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.shadow = _Shadow(self, self.RADIUS)
 
     def paintEvent(self, e) -> None:  # noqa: N802
         u = _ui(self)
         p = QPainter(self)
-        _round(p, QRectF(self.rect()), u["raised"], u["ring"])
+        _round(p, QRectF(self.rect()), u["mica"], u["stroke2"], self.RADIUS)
 
 
 class _PillButton(QPushButton):
-    """A button on a pill: a smooth highlight when hovered or chosen, red for Delete."""
+    """A button on a pill: 13 px semibold in the quieter text colour; the chosen one a neutral raised
+    layer (not blue), red for Delete."""
 
     def __init__(self, text: str, danger: bool = False) -> None:
         super().__init__(text)
         self.danger = danger
+        self.setObjectName("PhotoPillButton")
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_Hover)
         f = self.font()
+        f.setPixelSize(13)
         f.setWeight(QFont.DemiBold)
         self.setFont(f)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        fm = self.fontMetrics()
-        return QSize(fm.horizontalAdvance(self.text()) + 28, max(30, fm.height() + 12))
+        fm = QFontMetricsF(self.font())
+        return QSize(int(fm.horizontalAdvance(self.text()) + 26.5), 28)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return self.sizeHint()
@@ -136,18 +281,23 @@ class _PillButton(QPushButton):
     def paintEvent(self, e) -> None:  # noqa: N802
         u = _ui(self)
         p = QPainter(self)
-        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        r = QRectF(self.rect())
         if self.danger:
-            _round(p, r, "#d13438" if self.underMouse() else "#c42b1c", radius=6)
-        elif self.isChecked():  # the chosen view: a neutral raised layer, as in the design
-            _round(p, r, self.window().c["surface"], u["ring"], radius=6)
+            _round(p, r, QColor("#d13438" if self.underMouse() else "#c42b1c"), None, 7)
+        elif self.isChecked():  # the chosen view: the solid material, raised a little
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setPen(Qt.NoPen)
+            p.setBrush(u["shadow1"])
+            p.drawRoundedRect(r.adjusted(0, 1, 0, 1), 7, 7)
+            _round(p, r, u["chosen"], None, 7)
         elif self.underMouse() or self.isDown():
-            _round(p, r, u["hover"], radius=6)
+            _round(p, r, u["hover"], None, 7)
         if self.hasFocus() and getattr(self.window(), "keyboard_used", False):
-            p.setPen(QPen(QColor(self.window().c["focus_ring"]), 1.5))
+            p.setPen(QPen(u["focus"], 1.5))
             p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 6, 6)
-        p.setPen(QColor("#ffffff" if self.danger else _rgba(u["text"])))
+        p.setPen(QColor("#ffffff") if self.danger else u["text"] if self.isChecked() or self.underMouse()
+                 else u["text2"])
         p.setFont(self.font())
         p.drawText(self.rect(), Qt.AlignCenter, self.text())
 
@@ -156,26 +306,132 @@ class _Toast(QLabel):
     def paintEvent(self, e) -> None:  # noqa: N802
         u = _ui(self)
         p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(QColor(_rgba(u["ring"])), 1))
-        p.setBrush(QColor(_rgba(u["raised"])))
-        p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12, 12)
+        _round(p, QRectF(self.rect()), u["solid"], u["stroke2"], 12)
         p.end()
         super().paintEvent(e)
 
 
-class _NavButton(QToolButton):
-    """The viewer's round ‹ › buttons."""
+class _SoftButton(QPushButton):
+    """The design's small button (.btn.sm, ‹ Library): 30 px, corners 8, 12.5 px semibold, a light
+    layer with a hairline; an optional icon before the text."""
 
-    def paintEvent(self, e) -> None:  # noqa: N802
+    def __init__(self, text: str = "", height: int = 30, radius: float = 8) -> None:
+        super().__init__(text)
+        self.setObjectName("PhotoButton")
+        self.radius = radius
+        self.setFixedHeight(height)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_Hover)
+        f = self.font()
+        f.setPointSizeF(9.375)  # 12.5 px
+        f.setWeight(QFont.DemiBold)
+        self.setFont(f)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        fm = QFontMetricsF(self.font())
+        w = fm.horizontalAdvance(self.text()) + 24 + (20 if not self.icon().isNull() else 0)
+        return QSize(int(w + 0.5), self.height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return self.sizeHint()
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
         u = _ui(self)
         p = QPainter(self)
-        fill = u["nav_hover"] if self.underMouse() and "nav_hover" in u else u["nav"]
-        if self.isEnabled():
-            _round(p, QRectF(self.rect()).adjusted(1, 1, -1, -1), fill, u["ring"], radius=22)
+        r = QRectF(self.rect()).adjusted(0, 0, 0, -1)
+        _layer_button(p, self, r, self.radius)
+        p.setFont(self.font())
+        p.setPen(u["text"] if self.isEnabled() else u["text3"])
+        x = 12
+        if not self.icon().isNull():
+            box = QRect(x - 1, (self.height() - 1 - 14) // 2, 14, 14)
+            self.icon().paint(p, box, Qt.AlignCenter)
+            x += 19
+        p.drawText(QRectF(x, 0, self.width() - x - 12, r.height()), Qt.AlignVCenter | Qt.AlignLeft, self.text())
+
+
+class _SquareButton(QToolButton):
+    """The viewer's heart / info / delete / more: 34 × 34 squares, corners 8, a light layer."""
+
+    def __init__(self, tip: str) -> None:
+        super().__init__()
+        self.setObjectName("PhotoSquare")
+        self.setToolTip(tip)
+        self.setAccessibleName(tip)
+        self.setIconSize(QSize(16, 16))
+        self.setFixedSize(34, 34)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_Hover)
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        p = QPainter(self)
+        r = QRectF(self.rect()).adjusted(0, 0, 0, -1)
+        _layer_button(p, self, r, 8, self.isChecked())
+        box = QRect(QPoint(), self.iconSize())
+        box.moveCenter(r.center().toPoint())
+        self.icon().paint(p, box, Qt.AlignCenter, QIcon.Normal if self.isEnabled() else QIcon.Disabled)
+
+
+class _QuietButton(QToolButton):
+    """A quiet icon button (the sidebar switch before the title): no layer until the pointer is on it."""
+
+    def __init__(self, tip: str, size: int = 30) -> None:
+        super().__init__()
+        self.setObjectName("PhotoQuiet")
+        self.setToolTip(tip)
+        self.setAccessibleName(tip)
+        self.setIconSize(QSize(16, 16))
+        self.setFixedSize(size, size)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_Hover)
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        u = _ui(self)
+        p = QPainter(self)
+        r = QRectF(self.rect())
+        if self.underMouse() or self.isDown():
+            _round(p, r, u["hover"], None, 6)
+        if self.hasFocus() and getattr(self.window(), "keyboard_used", False):
+            p.setPen(QPen(u["focus"], 1.5))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 5, 5)
         box = QRect(QPoint(), self.iconSize())
         box.moveCenter(self.rect().center())
-        self.icon().paint(p, box, Qt.AlignCenter, QIcon.Normal if self.isEnabled() else QIcon.Disabled)
+        p.setOpacity(1.0 if self.underMouse() or self.hasFocus() else 0.55)  # (quiet: the text-3 colour)
+        self.icon().paint(p, box, Qt.AlignCenter)
+
+
+class _NavButton(QToolButton):
+    """The viewer's round ‹ › buttons: quiet, shown while the pointer is over the photo (or the button
+    has the keyboard); the arrow keys do the same."""
+
+    def paintEvent(self, e) -> None:  # noqa: N802
+        if not self.isEnabled():
+            return
+        host = self.parentWidget()
+        if not (host is not None and host.underMouse() or self.hasFocus()):
+            return
+        u = _ui(self)
+        p = QPainter(self)
+        r = QRectF(self.rect()).adjusted(2, 2, -2, -3)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(u["shadow1"])
+        p.drawEllipse(r.translated(0, 1))
+        p.setBrush(u["mica"])
+        p.setPen(QPen(u["stroke2"], 1))
+        p.drawEllipse(r.adjusted(0.5, 0.5, -0.5, -0.5))
+        if self.underMouse() or self.isDown():
+            p.setPen(Qt.NoPen)
+            p.setBrush(u["hover"])
+            p.drawEllipse(r)
+        if self.hasFocus():
+            p.setPen(QPen(u["focus"], 2))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(r.adjusted(1, 1, -1, -1))
+        box = QRect(QPoint(), self.iconSize())
+        box.moveCenter(r.center().toPoint())
+        self.icon().paint(p, box, Qt.AlignCenter)
 
 
 def _icon_button(tip: str, size: int = 34, kind=QToolButton) -> QToolButton:
@@ -186,6 +442,195 @@ def _icon_button(tip: str, size: int = 34, kind=QToolButton) -> QToolButton:
     b.setFixedSize(size, size)
     b.setCursor(Qt.PointingHandCursor)
     return b
+
+
+class _OverlayBar(QScrollBar):
+    """A scroll bar that floats over the photos instead of taking a column beside them (as in Windows
+    11's own apps): a thin line while you scroll or bring the pointer near, wider under the pointer,
+    gone after a moment. It mirrors the area's own (hidden) bar, so the wheel, the keys and the window
+    keep moving that one."""
+
+    WIDTH = 14
+
+    def __init__(self, area: QAbstractScrollArea, parent: QWidget) -> None:
+        super().__init__(Qt.Vertical, parent)
+        self.setObjectName("PhotoOverlayBar")
+        self.area = area
+        self.src = area.verticalScrollBar()
+        area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setFixedWidth(self.WIDTH)
+        self.setAttribute(Qt.WA_Hover)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.level = 0.0
+        self._fade = QVariantAnimation(self)
+        self._fade.setDuration(160)
+        self._fade.valueChanged.connect(self._faded)
+        self._idle = QTimer(self, singleShot=True, interval=1100)
+        self._idle.timeout.connect(self._maybe_hide)
+        self.src.rangeChanged.connect(self._sync)
+        self.src.valueChanged.connect(self._moved)
+        self.valueChanged.connect(self._push)
+        area.viewport().installEventFilter(self)
+        self._sync()
+
+    def _sync(self, *_a) -> None:
+        self.blockSignals(True)
+        self.setRange(self.src.minimum(), self.src.maximum())
+        self.setPageStep(self.src.pageStep())
+        self.setSingleStep(self.src.singleStep())
+        self.setValue(self.src.value())
+        self.blockSignals(False)
+        self.update()
+
+    def _moved(self, v: int) -> None:
+        self.blockSignals(True)
+        self.setValue(v)
+        self.blockSignals(False)
+        if self.area.isVisible() and self.src.maximum() > self.src.minimum():
+            self.poke()
+        self.update()
+
+    def _push(self, v: int) -> None:
+        if self.src.value() != v:
+            self.src.setValue(v)
+
+    def poke(self) -> None:
+        self._to(1.0)
+        self._idle.start()
+
+    def _maybe_hide(self) -> None:
+        if self.underMouse() or self.isSliderDown():
+            self._idle.start()
+            return
+        self._to(0.0)
+
+    def _to(self, level: float) -> None:
+        if self._fade.endValue() == level and self._fade.state() == QVariantAnimation.Running:
+            return
+        if not _animations_on():
+            self._faded(level)
+            return
+        self._fade.stop()
+        self._fade.setStartValue(float(self.level))
+        self._fade.setEndValue(float(level))
+        self._fade.start()
+
+    def _faded(self, v) -> None:
+        self.level = float(v)
+        self.update()
+
+    def eventFilter(self, obj, e):  # noqa: N802
+        if e.type() == QEvent.MouseMove and obj.width() - e.position().x() < 28 and self.src.maximum() > self.src.minimum():
+            self.poke()
+        return False
+
+    def enterEvent(self, e) -> None:  # noqa: N802
+        self.poke()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:  # noqa: N802
+        self._idle.start()
+        super().leaveEvent(e)
+
+    def wheelEvent(self, e) -> None:  # noqa: N802
+        QApplication.sendEvent(self.area.viewport(), e)  # (the area's own glide)
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        if self.level <= 0.01 or self.maximum() <= self.minimum():
+            return
+        u = _ui(self)
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        handle = QRectF(self.style().subControlRect(QStyle.CC_ScrollBar, opt, QStyle.SC_ScrollBarSlider, self))
+        wide = self.underMouse() or self.isSliderDown()
+        w = 7.0 if wide else 4.0
+        r = QRectF(self.width() - w - 3, handle.top() + 2, w, max(24.0, handle.height() - 4))
+        p = QPainter(self)
+        p.setOpacity(self.level)
+        _round(p, r, u["text2"] if wide else u["text3"], None, w / 2)
+
+
+class _Corners(QObject):
+    """The content pane's rounded corners over the photos that reach its edges: a child widget can't
+    be clipped to a rounded shape, so the four corners are drawn again on top, smooth, with the window's
+    own tint around them (cut out and put back, so the material still shows through)."""
+
+    def __init__(self, pane: "SoftCard") -> None:
+        super().__init__(pane)
+        self.pane = pane
+        self.parts = [_Corner(pane, k) for k in range(4)]
+        pane.installEventFilter(self)
+
+    def eventFilter(self, obj, e):  # noqa: N802
+        if e.type() in (QEvent.Resize, QEvent.Show):
+            self.place()
+        return False
+
+    def place(self) -> None:
+        w, h = self.pane.width(), self.pane.height()
+        s = _Corner.SIZE
+        for k, part in enumerate(self.parts):
+            part.setGeometry(0 if k in (0, 2) else w - s, 0 if k < 2 else h - s, s, s)
+            part.raise_()
+
+    def refresh(self) -> None:
+        for part in self.parts:
+            part.update()
+
+
+class _Corner(QWidget):
+    SIZE = 12
+
+    def __init__(self, pane, k: int) -> None:
+        super().__init__(pane)
+        self.k = k
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        pane = self.parentWidget()
+        u = _ui(self)
+        path = pane.card_path().translated(-self.x(), -self.y())
+        box = QPainterPath()
+        box.addRect(QRectF(self.rect()))
+        outside = box.subtracted(path)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        tint = u["tint"]
+        if tint.alpha() >= 255:
+            p.fillPath(outside, tint)
+        else:  # the photo out, the window's tint in (partly, along the smooth edge)
+            p.setCompositionMode(QPainter.CompositionMode_DestinationOut)
+            p.fillPath(outside, QColor(0, 0, 0, 255))
+            p.setCompositionMode(QPainter.CompositionMode_Plus)
+            p.fillPath(outside, tint)
+            p.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        stroke = pane.stroke
+        if stroke.alpha():
+            p.setPen(QPen(stroke, 1))
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(path)
+
+
+class _HeaderBand(QWidget):
+    """The title over the photos: the material fading out downwards, so the photos pass softly under it."""
+
+    def __init__(self, win: "PhotosWindow", parent: QWidget) -> None:
+        super().__init__(parent)
+        self.win = win
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        u = _ui(self)
+        p = QPainter(self)
+        g = QLinearGradient(0, 0, 0, self.height())
+        g.setColorAt(0, u["head"])
+        g.setColorAt(0.55, _alpha(u["head"], u["head"].alphaF() * 0.62))  # (eased: the title stays clear)
+        g.setColorAt(1, _alpha(u["head"], 0))
+        p.fillRect(self.rect(), g)
+
+    def wheelEvent(self, e) -> None:  # noqa: N802
+        inner = self.win.inner.currentWidget()
+        if isinstance(inner, QAbstractScrollArea):
+            QApplication.sendEvent(inner.viewport(), e)
 
 
 # --- the grid --------------------------------------------------------------------------------------
@@ -351,6 +796,12 @@ class TileDelegate(QStyledItemDelegate):
             return
         win, c = self.win, self.win.c
         r = QRectF(option.rect).adjusted(0, 0, -GAP, -GAP)
+        edge = win.grid.viewport().width()
+        if option.rect.right() + win.tile > edge:  # the last in its row: to the pane's edge (no strip left over)
+            r.setRight(edge)
+        cols = max(1, edge // max(1, win.tile))
+        if index.row() // cols == (index.model().rowCount() - 1) // cols:  # the last row: to the bottom edge
+            r.setBottom(option.rect.bottom() + 1)
         p.save()
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         dpr = win.devicePixelRatioF()
@@ -546,6 +997,22 @@ class Grid(QListView):
         self._wheel = 0
         self.smooth = SmoothScroll(self)
 
+    def updateGeometries(self) -> None:  # noqa: N802
+        """The photos start below the title band and scroll on under it: the scroll range begins
+        HEAD pixels before the first row (the band floats over the top of the view)."""
+        super().updateGeometries()
+        sb = self.verticalScrollBar()
+        content = self.contentsSize().height()
+        sb.setRange(-HEAD, max(-HEAD, content - self.viewport().height()))
+
+    def scrollTo(self, index, hint=QAbstractItemView.EnsureVisible) -> None:  # noqa: N802
+        super().scrollTo(index, hint)
+        if hint == QAbstractItemView.EnsureVisible and index.isValid():
+            top = self.visualRect(index).top()
+            if top < HEAD:  # (not under the title band)
+                sb = self.verticalScrollBar()
+                sb.setValue(sb.value() - (HEAD - top))
+
     def wheelEvent(self, e) -> None:  # noqa: N802
         if e.modifiers() & Qt.ControlModifier:
             self._wheel += e.angleDelta().y()
@@ -684,7 +1151,7 @@ class Card(QWidget):
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         r = QRectF(self.rect())
         clip = QPainterPath()
-        clip.addRoundedRect(r, 14, 14)
+        clip.addRoundedRect(r, 12, 12)
         p.setClipPath(clip)
         p.fillRect(r, QColor(c["tile"]))
         dpr = self.devicePixelRatioF()
@@ -700,25 +1167,27 @@ class Card(QWidget):
             pm = self.win.thumbs.get(it, max(rr.width(), rr.height()) * dpr)
             if pm is not None:
                 _cover(p, pm, rr)
-        g = QLinearGradient(0, r.height() * 0.45, 0, r.height())
+        g = QLinearGradient(0, max(0.0, r.height() - 96), 0, r.height())  # (the design: 30 px over the text)
         g.setColorAt(0, QColor(0, 0, 0, 0))
-        g.setColorAt(1, QColor(0, 0, 0, 160))
+        g.setColorAt(1, QColor(0, 0, 0, 153))
         p.fillRect(r, g)
         p.setPen(QColor("#ffffff"))
         f = QFont(self.font())
-        f.setPixelSize(34 if not self.mosaic else 22)
-        f.setBold(True)
+        f.setFamilies(["Segoe UI Variable Display", "Segoe UI"])
+        f.setPixelSize(28 if not self.mosaic else 20)
+        f.setWeight(QFont.DemiBold)
         p.setFont(f)
-        p.drawText(r.adjusted(16, 0, -16, -34), Qt.AlignLeft | Qt.AlignBottom, self.title)
-        f.setPixelSize(13)
-        f.setBold(False)
+        p.drawText(r.adjusted(16, 0, -16, -32), Qt.AlignLeft | Qt.AlignBottom, self.title)
+        f = QFont(self.font())
+        f.setPointSizeF(9.375)  # 12.5 px
         p.setFont(f)
-        p.drawText(r.adjusted(16, 0, -16, -14), Qt.AlignLeft | Qt.AlignBottom, self.caption)
+        p.setPen(QColor(255, 255, 255, 217))
+        p.drawText(r.adjusted(16, 0, -16, -12), Qt.AlignLeft | Qt.AlignBottom, self.caption)
         if self.hasFocus():
             p.setClipping(False)
             p.setPen(QPen(QColor(c["focus_ring"]), 3))
             p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(r.adjusted(1.5, 1.5, -1.5, -1.5), 13, 13)
+            p.drawRoundedRect(r.adjusted(1.5, 1.5, -1.5, -1.5), 11, 11)
 
 
 def _key_photos(items: list[lib.PhotoItem], n: int) -> list[lib.PhotoItem]:
@@ -758,19 +1227,27 @@ class Picture(QWidget):
             self.offset = QPointF(0, 0)
         self.update()
 
-    def _target(self) -> QRectF:
+    def _room(self) -> QRectF:
+        """Where the fitted photo may go: 60 px at the sides (the ‹ › buttons sit there), a little above
+        and below for its shadow; less when only the photo is shown."""
         r = QRectF(self.rect())
+        if not self.win.vtop.isVisible():
+            return r.adjusted(12, 12, -12, -12)
+        side = 60 if r.width() >= 480 else 16
+        return r.adjusted(side, 2, -side, -18)  # (room for its shadow above the strip)
+
+    def _target(self) -> QRectF:
         pm = self.pm
         if pm is None or pm.isNull():
-            return r
-        dpr = pm.devicePixelRatio() or 1
-        w, h = pm.width() / dpr, pm.height() / dpr
-        if self.zoom:
-            scale = 1.0 / self.devicePixelRatioF() * dpr * 1.0
-            tw, th = w * scale * self.devicePixelRatioF(), h * scale * self.devicePixelRatioF()
+            return QRectF(self.rect())
+        if self.zoom:  # 100 %: one pixel of the photo on one pixel of the screen
             tw, th = pm.width() / self.devicePixelRatioF(), pm.height() / self.devicePixelRatioF()
+            r = QRectF(self.rect())
         else:
-            scale = min(r.width() / w, r.height() / h)
+            r = self._room()
+            dpr = pm.devicePixelRatio() or 1
+            w, h = pm.width() / dpr, pm.height() / dpr
+            scale = min(r.width() / w, r.height() / h) if w and h else 1.0
             tw, th = w * scale, h * scale
         x = r.center().x() - tw / 2 + self.offset.x()
         y = r.center().y() - th / 2 + self.offset.y()
@@ -779,10 +1256,13 @@ class Picture(QWidget):
     def paintEvent(self, _e) -> None:  # noqa: N802
         p = QPainter(self)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
+        p.setRenderHint(QPainter.Antialiasing)
         if self.pm is not None and not self.pm.isNull():
             target = self._target()
-            if not self.zoom and self.win.vtop.isVisible():
-                p.setRenderHint(QPainter.Antialiasing)
+            if not self.zoom:  # rounded 6, on a soft shadow, as in the design
+                u = _ui(self)
+                _shadow(p, target, 6, 24, 8, u["shadow2"])
+                _shadow(p, target, 6, 3, 1, u["shadow1"])
                 frame = QPainterPath()
                 frame.addRoundedRect(target, 6, 6)
                 p.setClipPath(frame)
@@ -791,6 +1271,18 @@ class Picture(QWidget):
             p.setPen(QColor(self.win.viewer_fg()))
             p.drawText(QRectF(self.rect()).adjusted(40, 0, -40, 0), Qt.AlignCenter | Qt.TextWordWrap,
                        self.win.viewer_message)
+
+    def enterEvent(self, e) -> None:  # noqa: N802
+        super().enterEvent(e)
+        self._arrows()
+
+    def leaveEvent(self, e) -> None:  # noqa: N802
+        super().leaveEvent(e)
+        self._arrows()
+
+    def _arrows(self) -> None:
+        for b in (self.win.prev, self.win.next):  # (shown while the pointer is over the photo)
+            b.update()
 
     def mousePressEvent(self, e) -> None:  # noqa: N802
         if e.button() == Qt.LeftButton:
@@ -845,72 +1337,88 @@ class Picture(QWidget):
 
 
 class FilmStrip(QWidget):
+    """The photos around the one shown, centred under it: 30 x 30 (corners 4, 3 apart, a little faded),
+    the current one 40 wide at full strength. Only as many as fit, so none is ever cut at the edge."""
+
     picked = Signal(int)
+    THUMB, WIDE, GAP, AROUND = 30.0, 40.0, 3.0, 7
 
     def __init__(self, win: "PhotosWindow") -> None:
         super().__init__()
         self.win = win
-        self.setFixedHeight(52)
+        self.setFixedHeight(46)
         self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_Hover)
         self._hits: list[tuple[QRectF, int]] = []
+        self._hover: QPointF | None = None
+
+    def span(self) -> tuple[int, int]:
+        """The first and last photo shown: up to AROUND either side, fewer when the strip is narrow."""
+        items, cur = self.win.viewer_items, self.win.viewer_row
+        room = max(0.0, self.width() - 24 - self.WIDE)
+        around = min(self.AROUND, int(room / (self.THUMB + self.GAP) / 2))
+        return max(0, cur - around), min(len(items) - 1, cur + around)
 
     def paintEvent(self, _e) -> None:  # noqa: N802
         win = self.win
         items, cur = win.viewer_items, win.viewer_row
-        p = QPainter(self)
-        p.setRenderHint(QPainter.SmoothPixmapTransform)
         self._hits = []
         if not items:
             return
-        h = 32.0
-        thin, wide = 30.0, 44.0
-        y = (self.height() - h) / 2
-        cx = self.width() / 2
+        p = QPainter(self)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        p.setRenderHint(QPainter.Antialiasing)
+        lo, hi = self.span()
+        total = (hi - lo) * (self.THUMB + self.GAP) + self.WIDE
+        x = (self.width() - total) / 2
+        y = (self.height() - self.THUMB) / 2
         dpr = self.devicePixelRatioF()
-        n = int(self.width() / (thin + 2) / 2) + 1
-        for k in range(max(0, cur - n), min(len(items), cur + n + 1)):
-            if k == cur:
-                rr = QRectF(cx - wide / 2, y, wide, h)
-            elif k < cur:
-                rr = QRectF(cx - wide / 2 - 6 - (cur - k) * (thin + 2), y, thin, h)
-            else:
-                rr = QRectF(cx + wide / 2 + 6 + (k - cur - 1) * (thin + 2) + 2, y, thin, h)
-            if rr.right() < 0 or rr.left() > self.width():
-                continue
-            pm = win.thumbs.get(items[k], 160 if k != cur else wide * dpr)
+        for k in range(lo, hi + 1):
+            w = self.WIDE if k == cur else self.THUMB
+            rr = QRectF(x, y, w, self.THUMB)
+            x += w + self.GAP
+            pm = win.thumbs.get(items[k], 160 if k != cur else max(160.0, self.WIDE * dpr))
             path = QPainterPath()
             path.addRoundedRect(rr, 4, 4)
             p.save()
-            p.setRenderHint(QPainter.Antialiasing)
             p.setClipPath(path)
-            p.setOpacity(1.0 if k == cur else 0.6)
+            on = k == cur or self._hover is not None and rr.contains(self._hover)
+            p.setOpacity(1.0 if on else 0.6)
             if pm is None:
                 p.fillRect(rr, QColor(win.c["tile"]))
             else:
                 _cover(p, pm, rr)
             p.restore()
             self._hits.append((rr, k))
-        p.setOpacity(1.0)
+
+    def mouseMoveEvent(self, e) -> None:  # noqa: N802
+        self._hover = e.position()
+        self.update()
+
+    def leaveEvent(self, e) -> None:  # noqa: N802
+        self._hover = None
+        self.update()
 
     def mouseReleaseEvent(self, e) -> None:  # noqa: N802
         for rr, k in self._hits:
-            if rr.contains(e.position()):
+            if rr.adjusted(-1.5, -10, 1.5, 10).contains(e.position()):
                 self.picked.emit(k)
                 return
 
 
 class SideDelegate(NavDelegate):
-    """Sidebar rows: section titles, and collections with their count on the right."""
+    """Sidebar rows as in the design: 34 px, the icon and the name, the count in mono on the right; the
+    chosen one a lighter layer with a 3 px accent bar; section titles 600 12 px in the quiet colour."""
 
     def __init__(self, win: "PhotosWindow") -> None:
         super().__init__(win)
         self.win = win
 
     def sizeHint(self, option, index) -> QSize:  # noqa: N802
-        return QSize(200, 38 if index.data(Qt.UserRole) is None else 34)
+        return QSize(200, 32 if index.data(Qt.UserRole) is None else 34)
 
     def paint(self, p: QPainter, option, index) -> None:
-        c = self.win.c
+        u = _ui(self.win)
         r = QRectF(option.rect)
         key = index.data(Qt.UserRole)
         p.save()
@@ -920,35 +1428,38 @@ class SideDelegate(NavDelegate):
             f.setWeight(QFont.DemiBold)
             f.setPixelSize(12)
             p.setFont(f)
-            p.setPen(QColor(c["muted2"]))
-            p.drawText(r.adjusted(10, 12, -8, 0), Qt.AlignLeft | Qt.AlignVCenter, index.data(Qt.DisplayRole))
+            p.setPen(u["text3"])
+            p.drawText(r.adjusted(10, 0, -8, -6), Qt.AlignLeft | Qt.AlignBottom, index.data(Qt.DisplayRole))
             p.restore()
             return
         sel = option.state & QStyle.State_Selected
         hover = option.state & QStyle.State_MouseOver
-        box = r.adjusted(0, 1, 0, -1)
         if sel or hover:
+            _round(p, r, u["layer2"] if sel else u["hover"], None, 6)
+        if sel:
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(c["surface"] if sel else c["hover"]))
-            p.drawRoundedRect(box, 6, 6)
+            p.setBrush(u["accent"])
+            p.drawRoundedRect(QRectF(r.left(), r.top() + 9, 3, r.height() - 18), 1.5, 1.5)
+        icon = index.data(Qt.DecorationRole)
+        if isinstance(icon, QIcon):
+            box = QRect(int(r.left()) + 10, int(r.center().y() - 9 + 0.5), 18, 18)
+            icon.paint(p, box, Qt.AlignCenter)
         count = index.data(Qt.UserRole + 1) or ""
-        p.setFont(count_font(f))
-        cw = p.fontMetrics().horizontalAdvance(count) + 12
-        p.setPen(QColor(c["muted2"]))
-        p.drawText(box.adjusted(0, 0, -8, 0), Qt.AlignRight | Qt.AlignVCenter, count)
-        p.restore()
-
-        # Reserve the trailing count, then use the Settings delegate for the icon, label and marker.
-        opt = QStyleOptionViewItem(option)
-        opt.rect.adjust(0, 0, -cw, 0)
-        super().paint(p, opt, index)
+        cf = count_font(f)
+        p.setFont(cf)
+        cw = QFontMetricsF(cf).horizontalAdvance(count)
+        p.setPen(u["text3"])
+        p.drawText(r.adjusted(0, 0, -10, 0), Qt.AlignRight | Qt.AlignVCenter, count)
+        p.setFont(f)
+        p.setPen(u["text"])
+        text_box = r.adjusted(38, 0, -(cw + 18), 0)
+        label = QFontMetricsF(f).elidedText(index.data(Qt.DisplayRole) or "", Qt.ElideRight, text_box.width())
+        p.drawText(text_box, Qt.AlignLeft | Qt.AlignVCenter, label)
         if option.state & QStyle.State_HasFocus and self.win.side.hasFocus() and self.win.keyboard_used:
-            p.save()
-            p.setRenderHint(QPainter.Antialiasing)
-            p.setPen(QPen(QColor(c["focus_ring"]), 2))
+            p.setPen(QPen(u["focus"], 2))
             p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(box.adjusted(1, 1, -1, -1), 6, 6)
-            p.restore()
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 6, 6)
+        p.restore()
 
 
 # --- pictures kept a while after the window closes -----------------------------------------------
@@ -1082,16 +1593,17 @@ class PhotosWindow(LibraryDialog):
         self.side.itemClicked.connect(self._side_clicked)
         self.side.currentItemChanged.connect(lambda cur, _old: cur and self._side_clicked(cur))
         root.addWidget(self.side)
+        self.side.installEventFilter(self)
 
         self.pages = QStackedWidget()
-        pane = SoftCard()
+        pane = self.pane = SoftCard()
         pane.setObjectName("LibraryPane")
         layer = QVBoxLayout(pane)
-        layer.setContentsMargins(3, 3, 3, 4)
+        layer.setContentsMargins(1, 1, 1, 2)  # the photos reach the pane's hairline (the corners: _Corners)
         layer.addWidget(self.pages)
         root.addWidget(pane, 1)
 
-        # browse page: grid or cards, with the header and the switch floating over them
+        # browse page: grid or cards, with the title band and the switch floating over them
         self.browse = QWidget()
         self.pages.addWidget(self.browse)
         self.inner = QStackedWidget(self.browse)
@@ -1114,39 +1626,36 @@ class PhotosWindow(LibraryDialog):
         self.empty.setAlignment(Qt.AlignCenter)
         self.empty.setWordWrap(True)
         self.inner.addWidget(self.empty)
+        self.grid_bar = _OverlayBar(self.grid, self.browse)
+        self.cards_bar = _OverlayBar(self.cards_area, self.browse)
+        self.inner.currentChanged.connect(lambda *_: self._place_overlays())
 
-        self.header = QWidget(self.browse)
-        hl = QHBoxLayout(self.header)
-        hl.setContentsMargins(12, 8, 12, 8)
-        self.fold = _icon_button(t("Show or hide the sidebar") + " (Ctrl+B)")
+        self.header = _HeaderBand(self, self.browse)
+        self.fold = _QuietButton(t("Show or hide the sidebar") + " (Ctrl+B)")
+        self.fold.setParent(self.header)
         self.fold.clicked.connect(self.toggle_sidebar)
-        hl.addWidget(self.fold, 0, Qt.AlignTop)
-        tl = QVBoxLayout()
-        tl.setSpacing(0)
-        self.title = QLabel(t("Library"))
-        self.subtitle = QLabel()
-        tl.addWidget(self.title)
-        tl.addWidget(self.subtitle)
-        hl.addLayout(tl, 1)
+        self.title = QLabel(t("Library"), self.header)
+        self.subtitle = QLabel(self.header)
+        self.title.setObjectName("PhotosTitle")
+        self.subtitle.setObjectName("PhotosSubtitle")
         self.search = QLineEdit()
         self.search.setPlaceholderText(t("Search"))
         self.search.setClearButtonEnabled(True)
         self.search_field = SearchField(self.search, self.c)
+        self.search_field.setParent(self.header)
         self.search.setAccessibleName(t("Search photos"))
         self.search.textChanged.connect(self._search_changed)
         self._search_timer = QTimer(self, singleShot=True, interval=220)
         self._search_timer.timeout.connect(self._apply_search)
         self.search.returnPressed.connect(lambda: (self._search_timer.stop(), self._apply_search()))
-        hl.addWidget(self.search_field, 0, Qt.AlignTop)
-        self.select_btn = QPushButton(t("Select"))
-        self.select_btn.setCursor(Qt.PointingHandCursor)
+        self.select_btn = _SoftButton(t("Select"), height=34, radius=6)
+        self.select_btn.setParent(self.header)
         self.select_btn.clicked.connect(lambda: self.set_selecting(not self.selecting))
-        hl.addWidget(self.select_btn, 0, Qt.AlignTop)
 
         self.pill = _Pill(self.browse)
         pl = QHBoxLayout(self.pill)
         pl.setContentsMargins(4, 4, 4, 4)
-        pl.setSpacing(2)
+        pl.setSpacing(0)
         self.view_buttons = {}
         for key, label in (("years", t("Years")), ("months", t("Months")), ("all", t("All Photos"))):
             b = _PillButton(label)
@@ -1157,7 +1666,7 @@ class PhotosWindow(LibraryDialog):
         self.zoom_pill = _Pill(self.browse)
         zl = QHBoxLayout(self.zoom_pill)
         zl.setContentsMargins(4, 4, 4, 4)
-        zl.setSpacing(2)
+        zl.setSpacing(0)
         self.zoom_out = _PillButton("−")
         self.zoom_out.setToolTip(t("Smaller") + " (Ctrl −)")
         self.zoom_out.setAccessibleName(t("Smaller"))
@@ -1167,16 +1676,17 @@ class PhotosWindow(LibraryDialog):
         self.zoom_in.setAccessibleName(t("Larger"))
         self.zoom_in.clicked.connect(lambda: self.set_zoom(PhotosWindow.zoom_level - 1))
         for b in (self.zoom_out, self.zoom_in):
-            b.setFixedWidth(36)
-            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedWidth(30)
             zl.addWidget(b)
 
         self.selbar = _Pill(self.browse)
         sl = QHBoxLayout(self.selbar)
         sl.setContentsMargins(14, 4, 4, 4)
-        sl.setSpacing(4)
+        sl.setSpacing(2)
         self.sel_count = QLabel()
+        self.sel_count.setObjectName("PhotosSelCount")
         sl.addWidget(self.sel_count)
+        sl.addSpacing(6)
         self._sel_extra = []
         for label, fn in ((t("Select all"), self.select_all), (t("Show in Explorer"), self.show_selected),
                           (t("Copy"), self.copy_selected), (t("Favourite"), self.favorite_selected)):
@@ -1201,7 +1711,7 @@ class PhotosWindow(LibraryDialog):
         self._toast_timer = QTimer(self, singleShot=True, interval=4500)
         self._toast_timer.timeout.connect(self.toast.hide)
 
-        # viewer page
+        # viewer page: on the same see-through material as the rest (every theme), the photo on top
         self.viewer = QWidget()
         self.viewer.setObjectName("PhotosViewer")
         self.pages.addWidget(self.viewer)
@@ -1209,52 +1719,51 @@ class PhotosWindow(LibraryDialog):
         vl.setContentsMargins(0, 0, 0, 0)
         vl.setSpacing(0)
         self.vtop = QWidget()
+        self.vtop.setObjectName("PhotosViewerBar")
         tb = QGridLayout(self.vtop)
-        tb.setContentsMargins(12, 8, 12, 8)
-        tb.setHorizontalSpacing(8)
+        tb.setContentsMargins(12, 10, 12, 6)
+        tb.setHorizontalSpacing(10)
         for column, stretch in enumerate((1, 2, 1)):
             tb.setColumnStretch(column, stretch)
-        self.back = QPushButton()
-        self.back.setCursor(Qt.PointingHandCursor)
+        self.back = _SoftButton()
         self.back.clicked.connect(self.close_viewer)
-        tb.addWidget(self.back, 0, 0, Qt.AlignLeft)
+        tb.addWidget(self.back, 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
         wl = QVBoxLayout()
-        wl.setSpacing(0)
+        wl.setSpacing(1)
         self.v_date = QLabel()
         self.v_time = QLabel()
+        self.v_date.setObjectName("PhotosDate")
+        self.v_time.setObjectName("PhotosDateSub")
         for label in (self.v_date, self.v_time):
             label.setAlignment(Qt.AlignCenter)
             label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         wl.addWidget(self.v_date)
         wl.addWidget(self.v_time)
         tb.addLayout(wl, 0, 1)
-        self.v_play = QPushButton(t("Play"))
-        self.v_play.setCursor(Qt.PointingHandCursor)
+        self.v_play = _SoftButton(t("Play"), height=34)
         self.v_play.clicked.connect(self.play_current)
-        self.v_fav = _icon_button(t("Favourite") + " (F)")
+        self.v_fav = _SquareButton(t("Favourite") + " (F)")
         self.v_fav.clicked.connect(self.toggle_favorite_current)
-        self.v_info = _icon_button(t("Info") + " (I)")
+        self.v_info = _SquareButton(t("Info") + " (I)")
         self.v_info.setCheckable(True)
         self.v_info.toggled.connect(self._show_info)
-        self.v_del = _icon_button(t("Delete") + " (Del)")
+        self.v_del = _SquareButton(t("Delete") + " (Del)")
         self.v_del.clicked.connect(lambda: self.delete_items([self.viewer_items[self.viewer_row]]))
-        self.v_show = QPushButton(t("Show in folder"))
-        self.v_show.setCursor(Qt.PointingHandCursor)
+        self.v_show = _SoftButton(t("Show in folder"), height=34)
         self.v_show.clicked.connect(lambda: self.show_in_explorer([self.viewer_items[self.viewer_row]]))
-        self.v_open = QPushButton(t("Open"))
-        self.v_open.setCursor(Qt.PointingHandCursor)
+        self.v_open = _SoftButton(t("Open"), height=34)
         self.v_open.clicked.connect(lambda: self.open_file(self.viewer_items[self.viewer_row].path))
-        self.v_more = _icon_button(t("More"))
+        self.v_more = _SquareButton(t("More"))
         self.v_more.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(self.v_more)
         menu.addAction(self.v_open.text(), self.v_open.click)
         menu.addAction(self.v_show.text(), self.v_show.click)
         self.v_more.setMenu(menu)
         commands = QHBoxLayout()
-        commands.setSpacing(4)
-        for w in (self.v_play, self.v_fav, self.v_info, self.v_del, self.v_open, self.v_show, self.v_more):
+        commands.setSpacing(6)
+        for w in (self.v_play, self.v_open, self.v_show, self.v_fav, self.v_info, self.v_del, self.v_more):
             commands.addWidget(w)
-        tb.addLayout(commands, 0, 2, Qt.AlignRight)
+        tb.addLayout(commands, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
         vl.addWidget(self.vtop)
         mid = QHBoxLayout()
         mid.setSpacing(0)
@@ -1270,8 +1779,8 @@ class PhotosWindow(LibraryDialog):
         self.info.hide()
         mid.addWidget(self.info)
         vl.addLayout(mid, 1)
-        self.prev = _icon_button(t("Previous") + " (←)", 44, _NavButton)
-        self.next = _icon_button(t("Next") + " (→)", 44, _NavButton)
+        self.prev = _icon_button(t("Previous") + " (←)", 40, _NavButton)
+        self.next = _icon_button(t("Next") + " (→)", 40, _NavButton)
         for b in (self.prev, self.next):
             b.setParent(self.picture)
             b.setObjectName("PhotosNav")
@@ -1280,6 +1789,7 @@ class PhotosWindow(LibraryDialog):
         self.strip = FilmStrip(self)
         self.strip.picked.connect(self.show_row)
         vl.addWidget(self.strip)
+        self.corners = _Corners(pane)  # (last: over everything in the pane)
 
         # keys
         def key(seq, fn):
@@ -1307,39 +1817,48 @@ class PhotosWindow(LibraryDialog):
     # --- look ----------------------------------------------------------------------------------
     def apply_palette(self, palette: dict[str, str]) -> None:
         c = self.c = palette
-        raised = c["surface"]
-        if self.glass:  # the floating controls: see-through over the material (every theme)
-            tinted = QColor(c["surface"])
-            tinted.setAlphaF(0.86)
-            raised = tinted.name(QColor.HexArgb)
-        vbg = c["bg"]
-        self._ui = {"raised": raised, "ring": c["border"], "hover": c["hover"], "text": c["text"],
-                    "nav": raised, "nav_hover": c["hover"]}
+        u = self._ui = _tokens(c, self.glass)
+        mono = "font-family:'Cascadia Mono','Consolas',monospace"
         self.setStyleSheet(self.frame_style() +
             f"QListWidget#PhotoSide {{background:transparent;border:none;padding:4px 8px;outline:0}}"
             f"#PhotoSide::item, #PhotoSide::item:selected, #PhotoSide::item:hover "
-            f"{{border:none;background:transparent;color:{c['text']};padding-left:10px}}"
+            f"{{border:none;background:transparent;color:{c['text']};padding:0}}"
             f"QListView, QScrollArea, QScrollArea > QWidget > QWidget {{background:transparent;border:none}}"
+            # the search over the photos: the material, as the floating bars
+            f"SoftCard#LibrarySearch {{qproperty-fill:{_css(u['mica'])};qproperty-stroke:{_css(u['stroke2'])}}}"
+            f"QPushButton#PhotoButton, QPushButton#PhotoPillButton {{background:transparent;border:none;"
+            f"padding:0;min-height:0;font-weight:600}}"
+            f"QPushButton#PhotoButton {{font-size:9.375pt}}"  # (12.5 px; the app's buttons are 12 px)
+            f"QPushButton#PhotoPillButton {{font-size:13px}}"
+            f"QToolButton#PhotoSquare, QToolButton#PhotoQuiet, QToolButton#PhotosNav {{background:transparent;"
+            f"border:none;padding:0}}"
+            # (a style sheet's sizes win over the widget's own: these keep theirs)
+            f"QToolButton#PhotoSquare {{min-width:34px;max-width:34px;min-height:34px;max-height:34px}}"
+            f"QToolButton#PhotoQuiet {{min-width:30px;max-width:30px;min-height:30px;max-height:30px}}"
+            f"QToolButton#PhotosNav {{min-width:40px;max-width:40px;min-height:40px;max-height:40px}}"
+            f"QToolButton#PhotoSquare::menu-indicator {{image:none;width:0}}"
             f"#PhotosToast{{background:transparent;border:none;padding:10px 16px;color:{c['text']}}}"
-            f"#PhotosViewer{{background:{vbg}}}"
+            f"#PhotosViewer, #PhotosViewerBar {{background:transparent}}"
             f"#PhotosViewer QLabel{{color:{c['text']};background:transparent}}"
-            f"#PhotosViewer QToolButton{{background:transparent;border:0;padding:0}}"
-            f"#PhotosViewer QToolButton:hover, #PhotosViewer QToolButton:checked{{background:{c['hover']}}}"
-            f"#PhotosViewer QToolButton:focus{{border:1px solid {c['focus_ring']}}}"
-            f"#PhotosViewer QToolButton::menu-indicator{{image:none}}"
-            f"QLabel#PhotosInfo{{background:{raised};border-left:1px solid {c['border']};padding:16px}}")
-        self.title.setStyleSheet(f"color:{c['text']};background:transparent;font-size:24px;font-weight:600")
-        self.subtitle.setStyleSheet(f"color:{c['muted']};background:transparent;font-size:12px")
-        self.empty.setStyleSheet(f"color:{c['muted']};font-size:15px")
-        self.v_date.setStyleSheet("font-weight:600;font-size:14px")
-        self.v_time.setStyleSheet(f"color:{c['muted']};font-family:'Cascadia Mono','Consolas';font-size:12px")
+            f"QLabel#PhotosTitle {{color:{c['text']};background:transparent;font-family:'Segoe UI Variable Display',"
+            f"'Segoe UI';font-size:24px;font-weight:600}}"
+            f"QLabel#PhotosSubtitle {{color:{_css(u['text2'])};background:transparent;font-size:9.375pt}}"
+            f"QLabel#PhotosSelCount {{color:{_css(u['text2'])};background:transparent;font-size:13px;font-weight:600}}"
+            f"QLabel#PhotosDate {{font-family:'Segoe UI Variable Display','Segoe UI';font-size:14px;font-weight:600}}"
+            f"QLabel#PhotosDateSub {{{mono};font-size:12px;color:{_css(u['text3'])}}}"
+            f"QLabel#PhotosInfo{{background:{_css(u['layer'])};border:none;border-left:1px solid {_css(u['stroke'])};"
+            f"padding:16px}}"
+            f"QScrollBar#PhotoOverlayBar {{background:transparent;width:14px;margin:2px 0}}"
+            f"QScrollBar#PhotoOverlayBar::handle:vertical {{background:transparent;min-height:30px}}")
+        self.empty.setStyleSheet(f"color:{_css(u['text2'])};font-size:15px;background:transparent")
         self.search_field.apply_palette(c)
-        self.hearts = (glyph("heart", c["text"], 18), _favorite_icon(service_color(c, "photo")))
-        for button, name in ((self.fold, "layout"), (self.back, "back"), (self.v_info, "info"),
-                             (self.v_del, "trash"), (self.v_more, "more")):
-            button.setIcon(glyph(name, c["text"], 18))
+        self.hearts = (glyph("heart", c["text"], 16), _favorite_icon(service_color(c, "photo")))
+        for button, name, colour, size in ((self.fold, "layout", u["text"], 16), (self.back, "back", u["text"], 14),
+                                           (self.v_info, "info", u["text"], 16), (self.v_del, "trash", u["text"], 16),
+                                           (self.v_more, "more", u["text"], 16)):
+            button.setIcon(glyph(name, colour.name(), size))
         for button, name in ((self.prev, "back"), (self.next, "chevron")):
-            button.setIcon(glyph(name, c["text"], 22))
+            button.setIcon(glyph(name, c["text"], 18))
         if self.viewer_items:
             self._update_viewer_bar()
             self._fill_info(self.viewer_items[self.viewer_row])
@@ -1348,6 +1867,7 @@ class PhotosWindow(LibraryDialog):
         self._fill_side()
         if hasattr(self, "_cards_built"):
             self._show_set(keep=True)
+        self.corners.refresh()
         self.update()
 
     def viewer_fg(self) -> str:
@@ -1357,6 +1877,9 @@ class PhotosWindow(LibraryDialog):
         super().paintEvent(e)
 
     def eventFilter(self, obj, e):  # noqa: N802
+        if obj is getattr(self, "side", None) and e.type() in (QEvent.Show, QEvent.Hide):
+            # without the sidebar the pane keeps the same 8 px of material on its left as on its right
+            self.layout().setContentsMargins(0 if not self.side.isHidden() else 8, 4, 8, 8)
         return super().eventFilter(obj, e)
 
     NARROW = 820  # below this the sidebar steps aside by itself (the ☰ button still opens it)
@@ -1379,39 +1902,65 @@ class PhotosWindow(LibraryDialog):
 
     def _place_overlays(self) -> None:
         b = self.browse
-        self.inner.setGeometry(0, 68, b.width(), max(0, b.height() - 68))
-        self.header.setGeometry(0, 0, b.width(), 68)
+        W, H = b.width(), b.height()
+        self.inner.setGeometry(0, 0, W, H)  # (the title band and the bars float over the photos)
+        self.header.setGeometry(0, 0, W, HEAD)
+        # the title band: the sidebar switch, the title and its line, then Select and the search
+        self.fold.move(10, 15)
+        right = W - 18
+        sw = max(120, min(220, W - 360))
+        self.search_field.setFixedWidth(sw)
+        self.search_field.setGeometry(right - sw, 14, sw, 34)
+        right -= sw + 8
+        if not self.select_btn.isHidden():
+            bw = self.select_btn.sizeHint().width()
+            self.select_btn.setGeometry(right - bw, 14, bw, 34)
+            right -= bw + 8
+        x0 = 46
+        self.title.setGeometry(x0, 9, max(40, right - x0), 32)
+        self.subtitle.setGeometry(x0, 36, max(40, right - x0), 20)
         self.header.raise_()
-        roomy = b.width() >= 700
+        for bar, area in ((self.grid_bar, self.grid), (self.cards_bar, self.cards_area)):
+            bar.setGeometry(W - bar.WIDTH, HEAD - 6, bar.WIDTH, max(0, H - HEAD + 2))
+            bar.setVisible(self.inner.currentWidget() is area)
+            bar.raise_()
+        roomy = W >= 700
         for btn in self._sel_extra:  # Show in Explorer and Copy stay in the right-click menu
             btn.setVisible(roomy)
-        self.search_field.setFixedWidth(max(120, min(220, b.width() - 360)))
         self.sel_count.setVisible(True)
         for w in (self.pill, self.zoom_pill, self.selbar):
             w.layout().invalidate()  # (buttons just shown or hidden count at once)
             w.layout().activate()
             w.adjustSize()
-        if self.selbar.width() > b.width() - 24:  # still too wide: the count goes, the buttons stay
+        if self.selbar.width() > W - 24:  # still too wide: the count goes, the buttons stay
             self.sel_count.setVisible(False)
             self.selbar.layout().invalidate()
             self.selbar.layout().activate()
             self.selbar.adjustSize()
-        y = b.height() - self.pill.height() - 18
-        gap = 10 if self.zoom_pill.isVisible() else 0
-        total = self.pill.width() + (self.zoom_pill.width() + gap if self.zoom_pill.isVisible() else 0)
-        x = (b.width() - total) // 2
-        self.pill.move(x, y)
-        self.zoom_pill.move(x + self.pill.width() + gap, y)
-        self.selbar.move((b.width() - self.selbar.width()) // 2, b.height() - self.selbar.height() - 18)
+        y = H - self.pill.height() - 14
+        if not self.pill.isHidden():
+            x = (W - self.pill.width()) // 2  # the switch in the middle, − + beside it
+            self.pill.move(x, y)
+            zx = x + self.pill.width() + 8
+            if zx + self.zoom_pill.width() > W - 8:
+                zx = max(8, W - 8 - self.zoom_pill.width())
+            self.zoom_pill.move(zx, y)
+        else:
+            self.zoom_pill.move((W - self.zoom_pill.width()) // 2, y)
+        self.selbar.move((W - self.selbar.width()) // 2, H - self.selbar.height() - 14)
         for w in (self.pill, self.zoom_pill, self.selbar):
+            w.shadow.follow()
             w.raise_()
         wide_viewer = self.pages.width() >= 1000
         self.v_show.setVisible(wide_viewer)
         self.v_open.setVisible(wide_viewer)
         self.v_more.setVisible(not wide_viewer)
         pr = self.picture.rect()
-        self.prev.move(16, pr.height() // 2 - 22)
-        self.next.move(pr.width() - 60, pr.height() // 2 - 22)
+        room = self.picture._room() if self.vtop.isVisible() else QRectF(pr)
+        cy = int(room.center().y()) - self.prev.height() // 2
+        self.prev.move(max(4, int(room.left()) - self.prev.width() - 8), cy)
+        self.next.move(min(pr.width() - self.next.width() - 4, int(room.right()) + 8), cy)
+        self.corners.place()
         if self.toast.isVisible():
             self._place_toast()
 
@@ -1562,7 +2111,6 @@ class PhotosWindow(LibraryDialog):
             if key == keep:
                 side.setCurrentItem(it)
 
-        header(t("Photos"))
         row("library", t("Library"), counts["library"])
         row("recent", t("Recently added"), counts["recent"])
         row("fav", t("Favourites"), counts["fav"])
@@ -1604,7 +2152,8 @@ class PhotosWindow(LibraryDialog):
         self.current = got
         library = self.set_key == "library" and not self.query
         view = self.view if library else "all"
-        self.title.setText(t("Search results") if self.query else self._set_name())
+        self.title.setText(t("Search results") if self.query else self._set_name() if view == "all" else
+                           t("Years") if view == "years" else t("Months"))
         for k, b in self.view_buttons.items():
             b.setChecked(k == self.view)
         self.pill.setVisible(library)
@@ -1663,12 +2212,10 @@ class PhotosWindow(LibraryDialog):
 
     def _layout_grid(self) -> None:
         g = self.grid
-        # The width Qt lays the photos out in: the whole area less room for a scroll bar (Qt keeps
-        # that room even when the bar is there). Sizing the tiles from the plain viewport width left
-        # one column's worth of empty space on the right at many window sizes.
+        # The width Qt lays the photos out in: all of it (the scroll bar floats over the photos, see
+        # _OverlayBar, so no column is kept for it). The last photo of each row reaches the edge.
         try:
-            w = g.maximumViewportSize().width() - g.style().pixelMetric(QStyle.PM_ScrollBarExtent, None,
-                                                                         g.verticalScrollBar())
+            w = g.maximumViewportSize().width()
         except (AttributeError, RuntimeError):
             w = g.viewport().width()
         if w <= 0:
@@ -1682,7 +2229,7 @@ class PhotosWindow(LibraryDialog):
 
     def _anchor(self):
         """The photo at the top of the grid and how far it sits from the top (to keep the place)."""
-        idx = self.grid.indexAt(QPoint(4, 84))
+        idx = self.grid.indexAt(QPoint(4, HEAD + 6))
         if not idx.isValid():
             return None
         return idx.data(ITEM).asset_id, self.grid.visualRect(idx).top()
@@ -1727,7 +2274,7 @@ class PhotosWindow(LibraryDialog):
             return
         if self.inner.currentWidget() is self.grid:
             vp = self.grid.viewport()
-            a = self.grid.indexAt(QPoint(4, 84))
+            a = self.grid.indexAt(QPoint(4, HEAD + 6))
             b = self.grid.indexAt(QPoint(vp.width() - 6, vp.height() - 6))
             if not a.isValid():
                 a = self.model.index(0)
@@ -1739,9 +2286,11 @@ class PhotosWindow(LibraryDialog):
             else:
                 if d1 > d2:
                     d1, d2 = d2, d1
-                text = self._range(d1, d2, PhotosWindow.zoom_level <= 1)
+                text = self._range(d1, d2, PhotosWindow.zoom_level < 1)  # (days only at the largest size)
             if self.query:
-                text = t("{n} results", n=len(self.current)) + " · " + text
+                text = t("{n} results", n=_num(len(self.current))) + " · " + text
+            else:
+                text += " · " + t("{n} items", n=_num(len(self.current)))
             self.subtitle.setText(text)
             self._repaint.start()
         else:
@@ -1775,9 +2324,9 @@ class PhotosWindow(LibraryDialog):
                      keep_scroll: int | None = None, keep_share: float | None = None) -> None:
         holder = QWidget()
         grid = QGridLayout(holder)
-        grid.setContentsMargins(16, 8, 16, 80)
-        grid.setHorizontalSpacing(16)
-        grid.setVerticalSpacing(16)
+        grid.setContentsMargins(18, HEAD + 6, 18, 80)  # (from under the title band, as in the design)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(14)
         cols = self._card_cols(view)
         self._cards_for = (view, cols, focus_year)
         row = 0
@@ -1806,7 +2355,8 @@ class PhotosWindow(LibraryDialog):
                     col = 0
                     year = y
                     lbl = QLabel(str(y))
-                    lbl.setStyleSheet(f"color:{self.c['text']};font-size:22px;font-weight:700;padding-top:8px")
+                    lbl.setStyleSheet(f"color:{self.c['text']};background:transparent;font-family:'Segoe UI Variable Display',"
+                                      f"'Segoe UI';font-size:20px;font-weight:600;padding-top:6px")
                     grid.addWidget(lbl, row, 0, 1, cols)
                     if focus_year == y:
                         target = lbl
@@ -1829,7 +2379,7 @@ class PhotosWindow(LibraryDialog):
         def scroll() -> None:
             sb = self.cards_area.verticalScrollBar()
             if target is not None:
-                sb.setValue(target.y() - 84)
+                sb.setValue(target.y() - HEAD - 10)
             elif keep_scroll is not None:
                 sb.setValue(keep_scroll)  # (new photos arrived: the place stays)
             elif keep_share is not None:
@@ -2326,11 +2876,11 @@ class PhotosWindow(LibraryDialog):
         self._set_bare(self.vtop.isVisible())
 
     def _set_bare(self, bare: bool) -> None:
-        """Only the photo, on black (as tapping a photo on the iPad)."""
+        """Only the photo (as tapping a photo on the iPad), still on the window's see-through material."""
         self.vtop.setVisible(not bare)
         self.strip.setVisible(not bare)
         self.info.setVisible(not bare and self.v_info.isChecked())
-        self.viewer.setStyleSheet("#PhotosViewer{background:#000000}" if bare else "")
+        self.picture.update()
         QTimer.singleShot(0, self._place_overlays)
 
     def close_viewer(self, scroll: bool = True) -> None:
