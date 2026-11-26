@@ -105,9 +105,11 @@ def glass_colours(c: dict[str, str], dark: bool) -> dict[str, str]:
     hover and control fills, all partly see-through (rgba)."""
     if dark:
         return {"tint": "rgba(30, 33, 39, 150)", "card": "rgba(255, 255, 255, 13)", "stroke": "rgba(255, 255, 255, 20)",
+                "shade": "rgba(0, 0, 0, 70)",
                 "stroke2": "rgba(255, 255, 255, 30)", "foot": "rgba(0, 0, 0, 34)", "hover": "rgba(255, 255, 255, 20)",
                 "control": "rgba(255, 255, 255, 18)"}
     return {"tint": "rgba(243, 244, 247, 150)", "card": "rgba(255, 255, 255, 170)", "stroke": "rgba(0, 0, 0, 15)",
+            "shade": "rgba(0, 0, 0, 22)",
             "stroke2": "rgba(0, 0, 0, 26)", "foot": "rgba(255, 255, 255, 70)", "hover": "rgba(0, 0, 0, 10)",
             "control": "rgba(255, 255, 255, 200)"}
 

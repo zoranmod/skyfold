@@ -5,9 +5,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import Property, QEvent, QObject, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QLabel, QScrollArea, QSizePolicy, QToolButton, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QScrollArea, QSizePolicy, QToolButton, QWidget
 
 from .icons import draw_logo, glyph
 
@@ -305,3 +305,89 @@ class RowScroll(QScrollArea):
         self._anim.setEndValue(target)
         self._anim.start()
         e.accept()
+
+
+class SoftCard(QFrame):
+    """A rounded card drawn with smooth (antialiased) edges and a faint shadow under it. Qt's style
+    sheets draw rounded backgrounds with jagged corners, so the colours come from the style sheet
+    (qproperty-fill / -stroke / -shade on SoftCard) and the card paints itself."""
+
+    def __init__(self, radius: float = 8.0) -> None:
+        super().__init__()
+        self.radius = radius
+        self._fill = QColor(0, 0, 0, 0)
+        self._stroke = QColor(0, 0, 0, 0)
+        self._shade = QColor(0, 0, 0, 0)
+
+    def _get_fill(self) -> QColor:
+        return self._fill
+
+    def _set_fill(self, c) -> None:
+        self._fill = QColor(c)
+        self.update()
+
+    def _get_stroke(self) -> QColor:
+        return self._stroke
+
+    def _set_stroke(self, c) -> None:
+        self._stroke = QColor(c)
+        self.update()
+
+    def _get_shade(self) -> QColor:
+        return self._shade
+
+    def _set_shade(self, c) -> None:
+        self._shade = QColor(c)
+        self.update()
+
+    fill = Property(QColor, _get_fill, _set_fill)
+    stroke = Property(QColor, _get_stroke, _set_stroke)
+    shade = Property(QColor, _get_shade, _set_shade)
+
+    def event(self, e) -> bool:
+        done = super().event(e)
+        if e.type() == QEvent.Polish:
+            self.setAttribute(Qt.WA_StyledBackground, False)  # the style sheet never paints it (jagged)
+        return done
+
+    def card_path(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -1.5), self.radius, self.radius)
+        return path
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        path = self.card_path()
+        if self._shade.alpha():  # a faint shadow along the bottom edge, outside the card only
+            below = QPainterPath()
+            below.addRoundedRect(path.boundingRect().translated(0, 1), self.radius, self.radius)
+            p.fillPath(below.subtracted(path), self._shade)
+        p.fillPath(path, self._fill)
+        if self._stroke.alpha():
+            p.setPen(QPen(self._stroke, 1))
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(path)
+
+
+class TintTile(QFrame):
+    """A small rounded tile in a tint of a colour (the activity rows' icons), drawn smoothly."""
+
+    def __init__(self, size: int = 32, radius: float = 9.0) -> None:
+        super().__init__()
+        self.setFixedSize(size, size)
+        self.radius = radius
+        self.colour: QColor | None = None
+
+    def set_fill(self, colour: QColor | None) -> None:
+        self.colour = colour
+        self.update()
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        if self.colour is None:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(self.colour)
+        p.drawRoundedRect(QRectF(self.rect()), self.radius, self.radius)

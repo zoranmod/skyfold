@@ -27,7 +27,8 @@ from ..config import APP_NAME
 from ..i18n import t
 from ..worker import fmt_time
 from .icons import STATE_COLORS, glyph
-from .panel_parts import CenteredButton, LogoTile, RowScroll, StateBadge, Thumbs, TwoLineLabel, rounded, tint
+from .panel_parts import (CenteredButton, LogoTile, RowScroll, SoftCard, StateBadge, Thumbs, TintTile, TwoLineLabel,
+                          rounded, tint)
 from .glow import GlowTile, animations_on
 from .theme import OLED, service_color, state_color
 
@@ -448,9 +449,8 @@ class ActivityRow(QFrame):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(4, 5, 4, 5)
         lay.setSpacing(12)
-        self.tile = QFrame()
+        self.tile = TintTile(32, 9)  # drawn smoothly (a style sheet's rounded corners are jagged)
         self.tile.setObjectName("FileTile")
-        self.tile.setFixedSize(32, 32)
         self.thumbed = False
         tl = QVBoxLayout(self.tile)
         tl.setContentsMargins(0, 0, 0, 0)
@@ -483,6 +483,11 @@ class ActivityRow(QFrame):
         self._set_title()
         self.apply_palette(palette)
         self.refresh()
+        # every row the same height, with or without its second line: the list is a whole number
+        # of rows tall and the wheel moves one row at a time
+        self.text.ensurePolished()
+        self.detail.ensurePolished()
+        self.setFixedHeight(max(42, self.text.fontMetrics().height() + self.detail.fontMetrics().height() + 10))
 
     def _set_title(self) -> None:
         from PySide6.QtGui import QFontMetrics
@@ -510,8 +515,7 @@ class ActivityRow(QFrame):
             if color == service_color(palette, "note") and self.kind not in ("trash", "error"):
                 name = "note"  # a note changed: the note glyph, not an arrow
         alpha = 34 if QColor(palette["bg"]).lightness() > 128 else 44
-        self.tile.setStyleSheet(f"QFrame#FileTile {{ background: {tint(color, alpha).name(QColor.HexArgb)}; "
-                                f"border-radius: 9px; }}")
+        self.tile.set_fill(tint(color, alpha))
         self.icon.setPixmap(glyph(name, color, 17).pixmap(QSize(17, 17)))
 
     def _service_colour(self, palette: dict[str, str]) -> str:
@@ -534,7 +538,7 @@ class ActivityRow(QFrame):
         if img.isNull():
             return
         self.thumbed = True
-        self.tile.setStyleSheet("QFrame#FileTile { background: transparent; }")
+        self.tile.set_fill(None)
         self.icon.setPixmap(rounded(img, 32, 8, max(1.0, self.devicePixelRatioF())))
 
     def refresh(self) -> None:
@@ -698,7 +702,7 @@ class Flyout(QWidget):
         # status card (when it says "Sign-in required", clicking it signs in)
         flyout = self
 
-        class _Card(QFrame):
+        class _Card(SoftCard):
             def mouseReleaseEvent(self, e) -> None:  # noqa: N802 - Qt naming
                 if flyout.state == "auth" and e.button() == Qt.LeftButton:
                     flyout.login.emit()
@@ -772,11 +776,11 @@ class Flyout(QWidget):
         root.addWidget(self.update_banner)
 
         # services
-        services = QFrame()
+        services = SoftCard()
         services.setObjectName("Card")
         self.services_card = services
         sl = QVBoxLayout(services)
-        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setContentsMargins(0, 0, 0, 2)  # (room for the card's edge and its shadow)
         sl.setSpacing(0)
         self.row_photos = ServiceRow("photo", t("Photos"), palette)
         self.row_drive = ServiceRow("folder", t("iCloud Drive"), palette)
@@ -872,7 +876,7 @@ class Flyout(QWidget):
         self.sync_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.sync_btn.setIconSize(QSize(16, 16))
         self.sync_btn.setFixedSize(132, 34)  # Stop takes Sync now's place: the same size, the same spot
-        self.open_btn = bar_button(t("Open folder"), self._open_folder_menu)
+        self.open_btn = bar_button(t("Open folder"), self._open_folder_menu)  # (iCloud Drive's, when it syncs)
         self.folder_btn = bar_button(t("Find My"), self.findMy, t("Find My devices…"))  # (name kept: other code refers to it)
         self.more_btn = bar_button(t("More"), self._more_menu)
         # Kept as objects (other code and the tests use them); their actions live in the "More" menu now.
@@ -897,16 +901,29 @@ class Flyout(QWidget):
         self.setStyleSheet(
             f"QWidget#Root {{ background: transparent; }}"
             f"QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; }}"
-            f"QFrame#Card {{ background: {g['card']}; border: 1px solid {g['stroke']}; }}"
+            f"SoftCard {{ qproperty-fill: {g['card']}; qproperty-stroke: {g['stroke']}; qproperty-shade: {g['shade']}; }}"
+            f"SoftCard[hot=\"true\"] {{ qproperty-fill: {g['hover']}; }}"
             f"QFrame#BottomBar {{ background: {g['foot']}; border-top: 1px solid {g['stroke']}; }}"
             f"QFrame#Row:hover, QFrame#ActRow[link=\"true\"]:hover {{ background: {g['hover']}; }}"
             f"QToolButton#Bar {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
             f"QToolButton#Bar[wide=\"true\"] {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
-            f"QToolButton#Bar[primary=\"true\"] {{ background: {self.c['btn']}; border-color: {self.c['btn']}; }}"
+            f"QToolButton#Bar[primary=\"true\"] {{ background: {self._see_through(self.c['btn'], 0.80)};"
+            f" border-color: {self._see_through(self.c['btn'], 0.90)}; }}"
+            f"QToolButton#Bar[primary=\"true\"]:hover {{ background: {self._see_through(self.c['btn_hover'], 0.90)}; }}"
             f"QFrame#Sep {{ background: {g['stroke']}; }}")
 
+    @staticmethod
+    def _see_through(colour: str, alpha: float) -> str:
+        c = QColor(colour)
+        return f"rgba({c.red()}, {c.green()}, {c.blue()}, {int(alpha * 255)})"
+
     def paintEvent(self, e) -> None:  # noqa: N802
-        if self.glass:  # Windows draws the blur and its tint behind: nothing to paint here
+        if self.glass:
+            # Windows draws the blur and its tint behind. A see-through window lets the mouse fall
+            # through wherever it is fully transparent (the wheel scrolled the browser behind the
+            # panel): an all but invisible fill keeps every pixel the panel's own.
+            p = QPainter(self)
+            p.fillRect(self.rect(), QColor(0, 0, 0, 1))
             return
         super().paintEvent(e)
 
@@ -928,22 +945,10 @@ class Flyout(QWidget):
         self.more_btn.setIcon(glyph("more", self.c["muted"]))
 
     def _open_folder_menu(self) -> None:
-        """One folder per synced service: open it straight away, or choose when there are several."""
-        from PySide6.QtWidgets import QMenu
-
+        """Opens the iCloud Drive folder straight away (the photos folder while Drive isn't synced):
+        Photos and Notes have their own windows from their rows."""
         s = getattr(self, "_stats", {}) or {}
-        choices = [("photos", t("Photos"))]
-        if s.get("drive_enabled"):
-            choices.append(("drive", t("iCloud Drive")))
-        if s.get("notes_enabled"):
-            choices.append(("notes", t("Notes")))
-        if len(choices) == 1:
-            self.folderClicked.emit("photos")
-            return
-        menu = QMenu(self)
-        for key, label in choices:
-            menu.addAction(label, lambda k=key: self.folderClicked.emit(k))
-        menu.exec(self.open_btn.mapToGlobal(self.open_btn.rect().topLeft()) - QPoint(0, menu.sizeHint().height()))
+        self.folderClicked.emit("drive" if s.get("drive_enabled") else "photos")
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         """Called when Windows switches light/dark: re-tint the hand-drawn icons."""

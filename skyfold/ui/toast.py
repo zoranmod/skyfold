@@ -348,6 +348,8 @@ class ToastCard(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         r = self.card_rect()
+        if self.glass:  # (the mouse would fall through fully transparent pixels to the window behind)
+            p.fillRect(self.rect(), QColor(0, 0, 0, 1))
 
         # soft shadow: rounded rings that fade out, a little lower than the card (Windows draws it
         # itself around a card over its blur)

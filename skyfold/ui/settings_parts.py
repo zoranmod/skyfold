@@ -6,7 +6,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPalette
-from PySide6.QtWidgets import QFrame, QLabel, QSizePolicy, QStyle, QStyledItemDelegate, QWidget
+from PySide6.QtWidgets import QLabel, QSizePolicy, QStyle, QStyledItemDelegate, QWidget
+
+from .panel_parts import SoftCard
 
 
 class IconLabel(QWidget):
@@ -122,7 +124,7 @@ class ElidedLabel(QLabel):
         p.drawText(r, Qt.AlignLeft | Qt.AlignVCenter, self.fontMetrics().elidedText(self.text(), self.mode, r.width()))
 
 
-class ClickCard(QFrame):
+class ClickCard(SoftCard):
     """A setting card that does something when clicked (or with Enter/Space): opens a page, a file or
     a question. Lights up under the pointer like Windows' own."""
 

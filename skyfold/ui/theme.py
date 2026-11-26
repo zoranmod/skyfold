@@ -182,6 +182,10 @@ QDialog QFrame#Card {{ background: {c['group']}; border: 1px solid {c['border']}
 QDialog QLabel#Section {{ font-size: 7.5pt; letter-spacing: 1.2px; }}
 QFrame#Card, QFrame#Tile {{ background: {c['group']}; border: 1px solid {c['border']}; border-radius: 8px; }}
 QFrame#Card[hot="true"] {{ background: {c['hover']}; }}
+SoftCard {{ qproperty-fill: {c['group']}; qproperty-stroke: {c['border']};
+  qproperty-shade: {'rgba(0, 0, 0, 16)' if QColor(c['bg']).lightness() > 128 else 'rgba(0, 0, 0, 70)'}; }}
+SoftCard[hot="true"] {{ qproperty-fill: {c['hover']}; }}
+SoftCard#SetCard[hot="true"] {{ qproperty-fill: {c['surface2'] if c['bg'] != c['group'] else c['hover']}; }}
 QFrame#Row {{ background: transparent; border: none; border-radius: 6px; }}
 QFrame#Row:hover {{ background: {c['hover']}; }}
 QFrame#Row:focus {{ border: 2px solid {c['focus_ring']}; }}
@@ -328,6 +332,7 @@ QMenu::separator {{ height: 1px; background: {c['border']}; margin: 4px 8px; }}
 QToolTip {{ background: {c['surface']}; color: {c['text']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 5px 9px; }}
 """ + (f"""
 QDialog QFrame#Card {{ border-color: transparent; background: {c['group']}; }}
+SoftCard {{ qproperty-stroke: transparent; }}
 QFrame#BottomBar {{ background: {c['bg']}; }}
 QLabel#DotOn {{ background: {c['accent_text']}; }}
 """ if c is OLED else "")

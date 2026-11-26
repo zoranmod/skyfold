@@ -44,6 +44,7 @@ from ..config import APP_IN_CLOUD, APP_NAME, FOLDER_STRUCTURES, PRIVATE_DIR, VER
 from ..i18n import LANGUAGES, language, t
 from ..safelog import brief, describe
 from .icons import app_icon, draw_logo, glyph
+from .panel_parts import SoftCard
 
 log = logging.getLogger(__name__)
 
@@ -262,8 +263,9 @@ class _Dialog(QDialog):
             "QDialog#Root, QWidget#Root, QWidget#NavPane, QStackedWidget, QScrollArea, QScrollArea > QWidget,"
             " QScrollArea > QWidget > QWidget { background: transparent; }"
             f"QWidget#Footer {{ background: {g['foot']}; border-top: 1px solid {g['stroke']}; }}"
-            f"QFrame#SetCard, QFrame#Card {{ background: {g['card']}; border: 1px solid {g['stroke']}; }}"
-            f"QFrame#SetCard[hot=\"true\"] {{ background: {hot}; }}"
+            f"QFrame#Card {{ background: {g['card']}; border: 1px solid {g['stroke']}; }}"
+            f"SoftCard {{ qproperty-fill: {g['card']}; qproperty-stroke: {g['stroke']}; qproperty-shade: {g['shade']}; }}"
+            f"SoftCard[hot=\"true\"] {{ qproperty-fill: {hot}; }}"
             "QListWidget#Nav { background: transparent; }"
             f"QListWidget#Nav::item:hover {{ background: {g['hover']}; }}"
             f"QListWidget#Nav::item:selected {{ background: {sel}; }}"
@@ -888,7 +890,7 @@ class SettingsDialog(_Dialog):
         the right. icon: an icon name or a widget; title/sub: text or a label."""
         from .settings_parts import IconLabel
 
-        card = QFrame()
+        card = SoftCard()
         card.setObjectName("SetCard")
         card.setMinimumHeight(60 if sub else 52)  # (one line: a lower card, as in Windows' Settings)
         row = QHBoxLayout(card)
@@ -926,7 +928,7 @@ class SettingsDialog(_Dialog):
         """A card of things worth knowing: an icon and a few short lines."""
         from .settings_parts import IconLabel
 
-        card = QFrame()
+        card = SoftCard()
         card.setObjectName("SetCard")
         row = QHBoxLayout(card)
         row.setContentsMargins(16, 13, 16, 13)
@@ -1016,7 +1018,7 @@ class SettingsDialog(_Dialog):
         if self.storage.get("total"):  # the same storage bar as in the panel
             from .flyout import StorageBar
 
-            card = QFrame()
+            card = SoftCard()
             card.setObjectName("SetCard")
             v = QVBoxLayout(card)
             v.setContentsMargins(18, 14, 18, 16)
@@ -1355,7 +1357,7 @@ class SettingsDialog(_Dialog):
 
     def _build_about(self) -> None:
         lay = self._page(t("About"), "info")
-        head = QFrame()
+        head = SoftCard()
         head.setObjectName("SetCard")
         row = QHBoxLayout(head)
         row.setContentsMargins(16, 14, 16, 14)
@@ -1399,7 +1401,7 @@ class SettingsDialog(_Dialog):
         from .settings_parts import IconLabel
 
         group = self._group(lay, t("Connection diagnostics"))
-        card = QFrame()
+        card = SoftCard()
         card.setObjectName("SetCard")
         outer = QVBoxLayout(card)
         outer.setContentsMargins(16, 13, 16, 13)
