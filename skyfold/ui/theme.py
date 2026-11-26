@@ -163,6 +163,25 @@ def qpalette(c: dict[str, str]) -> QPalette:
     return pal
 
 
+def _rgba(c: QColor, alpha: float) -> str:
+    return f"rgba({c.red()}, {c.green()}, {c.blue()}, {max(0, min(255, int(alpha * 255)))})"
+
+
+def accent_fill(colour: str, alpha: float = 1.0) -> str:
+    """The main buttons' fill: the accent with a little light at the top, as on Windows 11's accent
+    buttons (alpha < 1: see-through over Windows' blur)."""
+    base = QColor(colour)
+    return (f"qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {_rgba(base.lighter(112), alpha)}, "
+            f"stop:1 {_rgba(base, alpha)})")
+
+
+def accent_edges(colour: str, alpha: float = 1.0) -> str:
+    """Their edge: lighter along the top, darker along the bottom (a button that stands up a little)."""
+    base = QColor(colour)
+    return (f"border: 1px solid {_rgba(base, alpha)}; border-top-color: {_rgba(base.lighter(135), min(1.0, alpha + 0.1))}; "
+            f"border-bottom-color: {_rgba(base.darker(122), min(1.0, alpha + 0.1))};")
+
+
 def stylesheet(c: dict[str, str]) -> str:
     chev = chevron_file(c["muted"])
     tick, dash = mark_file(c["accent_text"], "check"), mark_file(c["accent_text"], "part")
@@ -204,9 +223,9 @@ QToolButton#Bar:focus {{ border: 2px solid {c['focus_ring']}; }}
 QToolButton#Bar::menu-indicator {{ image: none; width: 0; }}
 QToolButton#Bar[primary="true"], QToolButton#Bar[wide="true"] {{ font-size: 9.75pt; font-weight: 600;
     padding: 0 12px; min-width: 106px; max-width: 106px; }}
-QToolButton#Bar[primary="true"] {{ background: {c['btn']}; color: {c['accent_text']}; border-color: {c['btn']}; }}
+QToolButton#Bar[primary="true"] {{ background: {accent_fill(c['btn'])}; color: {c['accent_text']}; {accent_edges(c['btn'])} }}
 QToolButton#Bar[wide="true"] {{ color: {c['text']}; border-color: {c['border_strong']}; }}
-QToolButton#Bar[primary="true"]:hover {{ background: {c['btn_hover']}; border-color: {c['btn_hover']}; color: {c['accent_text']}; }}
+QToolButton#Bar[primary="true"]:hover {{ background: {accent_fill(c['btn_hover'])}; {accent_edges(c['btn_hover'])} color: {c['accent_text']}; }}
 QToolButton#Bar[primary="true"]:pressed {{ background: {c['btn_pressed']}; color: {c['accent_text']}; }}
 QToolButton#Bar[primary="true"]:focus {{ border: 2px solid {c['text']}; }}
 QToolButton#Bar[primary="true"]:disabled {{ background: {c['track']}; border-color: {c['track']}; color: {c['disabled']}; }}
@@ -261,8 +280,8 @@ QPushButton:hover {{ background: {c['hover']}; }}
 QPushButton:pressed {{ background: {c['surface2']}; color: {c['muted']}; }}
 QPushButton:focus {{ border: 2px solid {c['focus_ring']}; }}
 QPushButton:disabled {{ color: {c['disabled']}; background: {c['surface2']}; border-color: {c['border']}; }}
-QPushButton#Primary {{ background: {c['btn']}; color: {c['accent_text']}; border: 1px solid {c['btn']}; font-weight: 600; }}
-QPushButton#Primary:hover {{ background: {c['btn_hover']}; border-color: {c['btn_hover']}; }}
+QPushButton#Primary {{ background: {accent_fill(c['btn'])}; color: {c['accent_text']}; {accent_edges(c['btn'])} font-weight: 600; }}
+QPushButton#Primary:hover {{ background: {accent_fill(c['btn_hover'])}; {accent_edges(c['btn_hover'])} }}
 QPushButton#Primary:pressed {{ background: {c['btn_pressed']}; border-color: {c['btn_pressed']}; color: {c['accent_text']}; }}
 QPushButton#Primary:focus {{ border: 2px solid {c['text']}; }}
 QPushButton#Primary:disabled {{ background: {c['track']}; border-color: {c['track']}; color: {c['disabled']}; }}

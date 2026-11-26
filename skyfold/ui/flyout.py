@@ -896,6 +896,7 @@ class Flyout(QWidget):
             self.setStyleSheet("")
             return
         from .backdrop import glass_colours
+        from .theme import accent_edges, accent_fill
 
         g = glass_colours(self.c, QColor(self.c["bg"]).lightness() < 128)
         self.setStyleSheet(
@@ -907,15 +908,12 @@ class Flyout(QWidget):
             f"QFrame#Row:hover, QFrame#ActRow[link=\"true\"]:hover {{ background: {g['hover']}; }}"
             f"QToolButton#Bar {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
             f"QToolButton#Bar[wide=\"true\"] {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
-            f"QToolButton#Bar[primary=\"true\"] {{ background: {self._see_through(self.c['btn'], 0.80)};"
-            f" border-color: {self._see_through(self.c['btn'], 0.90)}; }}"
-            f"QToolButton#Bar[primary=\"true\"]:hover {{ background: {self._see_through(self.c['btn_hover'], 0.90)}; }}"
+            # the main button: the accent, see-through enough for the blur to show in it
+            f"QToolButton#Bar[primary=\"true\"] {{ background: {accent_fill(self.c['btn'], 0.68)};"
+            f" {accent_edges(self.c['btn'], 0.75)} }}"
+            f"QToolButton#Bar[primary=\"true\"]:hover {{ background: {accent_fill(self.c['btn_hover'], 0.82)};"
+            f" {accent_edges(self.c['btn_hover'], 0.85)} }}"
             f"QFrame#Sep {{ background: {g['stroke']}; }}")
-
-    @staticmethod
-    def _see_through(colour: str, alpha: float) -> str:
-        c = QColor(colour)
-        return f"rgba({c.red()}, {c.green()}, {c.blue()}, {int(alpha * 255)})"
 
     def paintEvent(self, e) -> None:  # noqa: N802
         if self.glass:

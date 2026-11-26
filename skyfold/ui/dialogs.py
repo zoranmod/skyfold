@@ -254,6 +254,7 @@ class _Dialog(QDialog):
         if not self.glass:
             return
         from .backdrop import glass_colours
+        from .theme import accent_edges, accent_fill
 
         dark = self._dark()
         g = glass_colours(self.c, dark)
@@ -272,8 +273,9 @@ class _Dialog(QDialog):
             # controls as light layers too (the main button keeps its colour)
             f"QPushButton, QComboBox, QLineEdit {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
             f"QPushButton:hover, QComboBox:hover {{ background: {g['hover']}; }}"
-            f"QPushButton#Primary {{ background: {self.c['btn']}; border-color: {self.c['btn']}; }}"
-            f"QPushButton#Primary:hover {{ background: {self.c.get('btn_hover', self.c['btn'])}; }}")
+            f"QPushButton#Primary {{ background: {accent_fill(self.c['btn'], 0.80)}; {accent_edges(self.c['btn'], 0.85)} }}"
+            f"QPushButton#Primary:hover {{ background: {accent_fill(self.c['btn_hover'], 0.92)};"
+            f" {accent_edges(self.c['btn_hover'], 0.95)} }}")
         if sheet != self.styleSheet():  # (setting it again would announce another change: a loop)
             self.setStyleSheet(sheet)
 
