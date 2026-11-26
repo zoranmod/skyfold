@@ -27,5 +27,6 @@ def test_storage_bar_shows_the_plan_size(qapp):
     bar = flyout.StorageBar(theme.palette("dark"))
     used = int(94.2e9)  # what was shown as "94.2 GB of 214.7 GB" before
     bar.set(used, 200 * GIB, [("Photos", int(7.5e9), "photos"), ("Drive", int(68.6e9), "docs")])
-    assert bar.amount.text() == "87.7 GB of 200 GB"
+    assert bar.amount.text() == "87.7 / 200 GB"  # (1.1: as the design writes it; the unit once)
+    assert "87.7 GB of 200 GB" in bar.accessibleName()  # (read out in words)
     assert "214" not in bar.accessibleName()

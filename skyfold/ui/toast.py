@@ -201,7 +201,8 @@ class ToastCard(QWidget):
     expired = Signal()  # its time is up
 
     def __init__(self, title: str, text: str, palette: dict[str, str], icon: str = "cloud",
-                 tone: str | None = None, actions: Sequence[Action] = (), timeout: int = TIMEOUT_MS) -> None:
+                 tone: str | None = None, actions: Sequence[Action] = (), timeout: int = TIMEOUT_MS,
+                 images: Sequence[str] = ()) -> None:
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
                          | Qt.WindowDoesNotAcceptFocus | Qt.NoDropShadowWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -227,32 +228,29 @@ class ToastCard(QWidget):
         self._hover_close = False
 
         m = self.SHADOW
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(m + self.PAD, m + 10, m + self.PAD - 4, m + self.PAD)
-        outer.setSpacing(4)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(m + self.PAD, m + 14, m + 8, m + self.PAD + 2)
+        outer.setSpacing(12)
+        self._tile = QWidget()  # the service tile is painted in its place
+        self._tile.setFixedSize(self.TILE, self.TILE)
+        outer.addWidget(self._tile, 0, Qt.AlignTop)
+        words = QVBoxLayout()
+        words.setContentsMargins(0, 0, 0, 0)
+        words.setSpacing(2)
+        outer.addLayout(words, 1)
 
         head = QHBoxLayout()
-        head.setContentsMargins(0, 0, 0, 0)
-        head.setSpacing(7)
+        head.setContentsMargins(0, 0, 0, 2)
+        head.setSpacing(6)
         self._logo = QWidget()  # the mark is painted in its place
-        self._logo.setFixedSize(16, 16)
-        self._app = QLabel(APP_NAME)
+        self._logo.setFixedSize(14, 14)
+        self._app = QLabel(APP_NAME + " · " + self._context(icon, tone) + " · " + t("now"))
         self.close_button = _CardButton(self, t("Close"), "close")
         self.close_button.clicked.connect(self.closeRequested)
         head.addWidget(self._logo, 0, Qt.AlignVCenter)
         head.addWidget(self._app, 1, Qt.AlignVCenter)
         head.addWidget(self.close_button, 0, Qt.AlignVCenter)
-        outer.addLayout(head)
-
-        body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 4, 0)
-        body.setSpacing(12)
-        self._tile = QWidget()  # the service tile is painted in its place
-        self._tile.setFixedSize(self.TILE, self.TILE)
-        body.addWidget(self._tile, 0, Qt.AlignTop)
-        words = QVBoxLayout()
-        words.setContentsMargins(0, 0, 0, 0)
-        words.setSpacing(2)
+        words.addLayout(head)
         self._title = QLabel(title)
         self._text = QLabel(_short(text))
         for lbl in (self._app, self._title, self._text):
@@ -262,13 +260,34 @@ class ToastCard(QWidget):
         self._text.setWordWrap(True)
         words.addWidget(self._title)
         words.addWidget(self._text)
-        body.addLayout(words, 1)
-        outer.addLayout(body)
+
+        # the new photos themselves, small, under the text (the design's photo strip)
+        self._shots: list[QLabel] = []
+        if images:
+            from .panel_parts import Thumbs
+
+            strip = QHBoxLayout()
+            strip.setContentsMargins(0, 8, 0, 0)
+            strip.setSpacing(4)
+            for _ in images[:3]:
+                shot = QLabel()
+                shot.setFixedSize(44, 44)
+                shot.setAttribute(Qt.WA_TransparentForMouseEvents)
+                shot.hide()  # shown once its picture is read
+                strip.addWidget(shot)
+                self._shots.append(shot)
+            strip.addStretch(1)
+            words.addLayout(strip)
+            self._thumbs = Thumbs(self)
+            self._wanted = list(images[:3])
+            self._thumbs.ready.connect(self._shot_ready)
+            for path in self._wanted:
+                self._thumbs.request(path)
 
         self.buttons: list[_CardButton] = []
         if actions:
             row = QHBoxLayout()
-            row.setContentsMargins(self.TILE + 12, 4, 4, 0)
+            row.setContentsMargins(0, 8, 4, 0)
             row.setSpacing(8)
             for i, (label, fn) in enumerate(actions):
                 b = _CardButton(self, label, "primary" if i == 0 else "secondary")
@@ -276,7 +295,7 @@ class ToastCard(QWidget):
                 self.buttons.append(b)
                 row.addWidget(b)
             row.addStretch(1)
-            outer.addLayout(row)
+            words.addLayout(row)
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -284,6 +303,26 @@ class ToastCard(QWidget):
         self._anim: QVariantAnimation | None = None
         self._move: QVariantAnimation | None = None
         self.set_palette(palette)
+
+    @staticmethod
+    def _context(icon: str, tone: str | None) -> str:
+        """What the card is about, after Skyfold's name: "Skyfold · Photos · now"."""
+        if tone == "warn":
+            return t("Needs your OK")
+        if tone == "err":
+            return t("Needs attention")
+        return {"photo": t("Photos"), "folder": t("iCloud Drive"), "note": t("Notes"), "bookmark": t("Bookmarks"),
+                "download": t("New version")}.get(icon, t("Sync"))
+
+    def _shot_ready(self, path: str, img: QImage) -> None:
+        if path not in self._wanted or img.isNull():
+            return
+        from .panel_parts import rounded
+
+        shot = self._shots[self._wanted.index(path)]
+        shot.setPixmap(rounded(img, 44, 6, max(1.0, self.devicePixelRatioF())))
+        shot.show()
+        self.adjustSize()
 
     # look -----------------------------------------------------------------------------------------
     def _colors(self) -> dict[str, QColor]:
@@ -309,8 +348,7 @@ class ToastCard(QWidget):
             "muted": QColor(c.get("muted2", c["muted"])),
             "hover": QColor(255, 255, 255, 26) if self.glass and not light else
             QColor(0, 0, 0, 14) if self.glass else QColor(c["hover"]),
-            "button": QColor(255, 255, 255, 20) if self.glass and not light else
-            QColor(255, 255, 255, 200) if self.glass else QColor(c["surface2"]),
+            "button": QColor(255, 255, 255, 20) if not light else QColor(255, 255, 255, 200),
             "btn": QColor(c["btn"]),
             "btn_text": QColor(c["accent_text"]),
         }
@@ -320,7 +358,7 @@ class ToastCard(QWidget):
         col = self._colors()
         self._glyph = glyph(self.icon, col["accent"].name(), 17)
         base = QFont(self.font())
-        for lbl, pt, weight, color in ((self._app, 8.5, QFont.Normal, col["muted"]),
+        for lbl, pt, weight, color in ((self._app, 9, QFont.Normal, col["muted"]),
                                        (self._title, 10.5, QFont.DemiBold, col["text"]),
                                        (self._text, 9.75, QFont.Normal, col["muted"])):
             f = QFont(base)
@@ -551,7 +589,7 @@ class Toasts:
 
     def show(self, title: str, text: str, *, icon: str = "cloud", tone: str | None = None,
              actions: Sequence[Action] = (), on_click: Callable[[], None] | None = None,
-             timeout: int = TIMEOUT_MS) -> ToastCard | None:
+             timeout: int = TIMEOUT_MS, images: Sequence[str] = ()) -> ToastCard | None:
         """A new card, or None when Windows asks for quiet now."""
         why = self._quiet()
         if why:
@@ -570,7 +608,8 @@ class Toasts:
                         log.exception("Notification action failed")
             return go
 
-        card = ToastCard(title, text, self.c, icon, tone, [(label, run(fn)) for label, fn in actions], timeout)
+        card = ToastCard(title, text, self.c, icon, tone, [(label, run(fn)) for label, fn in actions], timeout,
+                         images)
         made.append(card)
         card.clicked.connect(run(on_click))
         card.closeRequested.connect(lambda: self.dismiss(card))

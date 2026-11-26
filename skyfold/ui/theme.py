@@ -37,8 +37,8 @@ LIGHT = {
     "err_bg": "#fdeeee", "err_border": "#f3c9cc", "err_text": "#b0283a",
     "ok_bg": "#e9f6ee", "ok_text": "#1f7341",
     "ok": "#1f7341", "warn": "#7a5000", "err": "#b0283a", "offline": "#566070",
-    "track": "#dde1e7",
-    "c_photos": "#e0466c", "c_drive": "#1a73e0", "c_other": "#e2b23a",  # iCloud storage bar
+    "track": "#e4e7ec",
+    "c_photos": "#cc2f58", "c_drive": "#1767c8", "c_other": "#9a6700",  # iCloud storage bar (the service colours)
 }
 
 DARK = {
@@ -224,7 +224,8 @@ QToolButton#Bar::menu-indicator {{ image: none; width: 0; }}
 QToolButton#Bar[primary="true"], QToolButton#Bar[wide="true"] {{ font-size: 9.75pt; font-weight: 600;
     padding: 0 12px; min-width: 106px; max-width: 106px; }}
 QToolButton#Bar[primary="true"] {{ background: {accent_fill(c['btn'])}; color: {c['accent_text']}; {accent_edges(c['btn'])} }}
-QToolButton#Bar[wide="true"] {{ color: {c['text']}; border-color: {c['border_strong']}; }}
+QToolButton#Bar[wide="true"] {{ color: {c['text']}; background: {c['surface']}; border: 1px solid {c['border']};
+    border-bottom-color: {c['border_strong']}; }}
 QToolButton#Bar[primary="true"]:hover {{ background: {accent_fill(c['btn_hover'])}; {accent_edges(c['btn_hover'])} color: {c['accent_text']}; }}
 QToolButton#Bar[primary="true"]:pressed {{ background: {c['btn_pressed']}; color: {c['accent_text']}; }}
 QToolButton#Bar[primary="true"]:focus {{ border: 2px solid {c['text']}; }}
@@ -232,15 +233,22 @@ QToolButton#Bar[primary="true"]:disabled {{ background: {c['track']}; border-col
 QFrame#FileTile {{ background: transparent; border: none; }}
 QLabel#RowTitle {{ font-size: 9.75pt; font-weight: 600; }}
 QLabel#ActTitle {{ font-size: 10.5pt; font-weight: 500; }}
-QLabel#ActWhen {{ font-size: 9pt; color: {c.get('muted2', c['muted'])}; }}
+QLabel#ActWhen {{ font-family: "Cascadia Mono","Cascadia Code","Consolas"; font-size: 8.75pt; color: {c.get('muted2', c['muted'])}; }}
 QLabel#ListHead {{ font-size: 9pt; font-weight: 600; color: {c.get('muted2', c['muted'])}; }}
 QPushButton#ListLink {{ background: transparent; border: none; color: {c['accent_fg']}; font-size: 9.5pt; font-weight: 600;
     padding: 0; min-height: 0; }}
 QPushButton#ListLink:hover {{ text-decoration: underline; }}
 QLabel#PanelTitle {{ font-family: "Segoe UI Variable Display","Segoe UI"; font-size: 12pt; font-weight: 600; }}
 QLabel#HeroTitle {{ font-family: "Segoe UI Variable Display","Segoe UI"; font-size: 10.5pt; font-weight: 600; }}
-QLabel#Amount {{ font-size: 9.5pt; color: {c['muted']}; }}
-QLabel#StatusLine {{ font-size: 8.25pt; color: {c['muted']}; }}
+QLabel#Amount {{ font-family: "Cascadia Mono","Cascadia Code","Consolas"; font-size: 9.25pt; font-weight: 600; color: {c['muted']}; }}
+QLabel#StatusLine {{ font-size: 9pt; color: {c['muted']}; }}
+QLabel#HeroText {{ font-size: 9.25pt; color: {c['muted']}; }}
+QLabel#Lead {{ font-size: 10.5pt; color: {c['muted']}; }}
+QLabel#HeroBig {{ font-family: "Segoe UI Variable Display","Segoe UI"; font-size: 18pt; font-weight: 600; }}
+QLabel#OptionTitle {{ font-size: 9.75pt; font-weight: 600; }}
+QLineEdit#PathField {{ font-family: "Cascadia Mono","Consolas"; font-size: 9.25pt; min-height: 34px;
+    border-bottom: 2px solid {c['accent']}; }}
+QLabel#Mono {{ font-family: "Cascadia Mono","Cascadia Code","Consolas"; font-size: 9pt; color: {c.get('muted2', c['muted'])}; }}
 QFrame#Sep {{ background: {c['border']}; border: none; max-height: 1px; min-height: 1px; }}
 QFrame#Warn {{ background: {c['warn_bg']}; border: 1px solid {c['warn_border']}; border-radius: 8px; }}
 QFrame#Err  {{ background: {c['err_bg']};  border: 1px solid {c['err_border']};  border-radius: 8px; }}
@@ -259,16 +267,16 @@ QLabel#H2 {{ font-family: "Segoe UI Variable Display","Segoe UI"; font-size: 11p
 QLabel#Big {{ font-family: "Segoe UI Variable Display","Segoe UI"; font-size: 15pt; font-weight: 600; }}
 QLabel#Section {{ font-size: 7.75pt; font-weight: 600; color: {c['muted']}; }}
 QLabel#Small {{ font-size: 9pt; }}
-QLabel#Legend {{ font-size: 8pt; color: {c['muted']}; }}
+QLabel#Legend {{ font-size: 9pt; color: {c['muted']}; }}
 QFrame#ActRow {{ background: transparent; border: none; border-radius: 6px; }}
 QFrame#ActRow[link="true"]:hover {{ background: {c['hover']}; }}
 QFrame#ActRow:focus {{ border: 2px solid {c['focus_ring']}; }}
-QLabel#Muted, QLabel#Hint {{ font-size: 8.5pt; color: {c.get('muted2', c['muted'])}; }}
+QLabel#Muted, QLabel#Hint {{ font-size: 9.25pt; color: {c.get('muted2', c['muted'])}; }}
 QLabel#ErrorText {{ color: {c['err_text']}; }}
 QLabel#WarnText {{ color: {c['warn_text']}; }}
 QFrame#Option {{ background: {c['group']}; border: 1px solid {c['border']}; border-radius: 8px; }}
 QFrame#Option:hover {{ background: {c['hover']}; }}
-QFrame#Option[selected="true"] {{ border: 1px solid {c['accent']}; background: {c['accent_soft']}; }}
+QFrame#Option[selected="true"] {{ border: 2px solid {c['accent']}; background: {c['accent_soft']}; }}
 QFrame#Option:focus {{ border: 2px solid {c['focus_ring']}; }}
 QFrame#Device {{ background: transparent; border: none; border-radius: 8px; }}
 QLabel#DotOff {{ border: 2px solid {c['border_strong']}; border-radius: 9px; background: transparent; }}
@@ -337,7 +345,7 @@ QLabel#SetTitle:disabled, QLabel#SetHead:disabled, QLabel#GroupLabel:disabled, Q
 QLabel#InfoLine:disabled {{ color: {c['disabled']}; }}
 QListWidget#Nav::item {{ border: none; border-radius: 6px; padding: 0 12px; margin: 1px 0; color: {c['text']}; }}
 QListWidget#Nav::item:hover {{ background: {c['hover']}; }}
-QListWidget#Nav::item:selected {{ background: {c['surface'] if c['bg'] != c['surface'] else c['tile']}; color: {c['text']}; }}
+QListWidget#Nav::item:selected {{ background: {c['surface'] if QColor(c['bg']).lightness() > 128 else c['tile']}; color: {c['text']}; }}
 QScrollArea {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{ background: {c['border_strong']}; border-radius: 3px; min-height: 30px; margin: 0 2px; }}

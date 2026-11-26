@@ -80,7 +80,7 @@ class StateBadge(QWidget):
             w = 4.0
             r = QRectF(w / 2 + 1, w / 2 + 1, s - w - 2, s - w - 2)
             p.setPen(QPen(QColor(self.c["track"]), w))
-            p.setBrush(Qt.NoBrush)
+            p.setBrush(QColor(self.c["bg"]))
             p.drawEllipse(r)
             p.setPen(QPen(QColor(self.c["accent"]), w, Qt.SolidLine, Qt.RoundCap))
             if self.fraction is None:  # amount not known yet: a quarter arc that turns
@@ -89,6 +89,7 @@ class StateBadge(QWidget):
             else:
                 p.drawArc(r, 90 * 16, -int(360 * 16 * max(0.0, min(1.0, self.fraction))))
                 f = QFont(p.font())
+                f.setFamilies(["Cascadia Mono", "Cascadia Code", "Consolas"])
                 f.setPixelSize(11)
                 f.setWeight(QFont.DemiBold)
                 p.setFont(f)

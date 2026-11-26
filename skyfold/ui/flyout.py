@@ -148,6 +148,24 @@ def round_corners(widget: QWidget) -> None:
 BADGE = 32  # header badges (status, iCloud storage): small round buttons beside the gear
 
 
+def _status_dot(color: str, dpr: float) -> QPixmap:
+    """A 7 px dot in the state's colour inside a soft halo of the same colour (13 px in all)."""
+    pm = QPixmap(round(13 * dpr), round(13 * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    halo = QColor(color)
+    halo.setAlphaF(0.22)
+    p.setBrush(halo)
+    p.drawEllipse(QRectF(1.5, 1.5, 10, 10))
+    p.setBrush(QColor(color))
+    p.drawEllipse(QRectF(3, 3, 7, 7))
+    p.end()
+    return pm
+
+
 class StatusDot(QWidget):
     """Filled circle in the state's colour with a white glyph: the whole sync status at a glance.
     Hover for the full text."""
@@ -271,8 +289,11 @@ class StorageBar(QFrame):
     def _render(self) -> None:
         size = storage_text
 
-        self.amount.setText(t("{used} of {total}", used=size(self.used), total=size(self.total)))
-        heard = self.amount.text()
+        heard = t("{used} of {total}", used=size(self.used), total=size(self.total))
+        used, total = size(self.used), size(self.total)
+        if used.rpartition(" ")[2] == total.rpartition(" ")[2]:  # "74 / 200 GB": the unit once
+            used = used.rpartition(" ")[0]
+        self.amount.setText(f"{used} / {total}")
         if self.large:
             self.title.setText(f'<span style="font-size:15pt;font-weight:600">{size(self.used)}</span>&nbsp; '
                                + t("of {total} used", total=size(self.total)))
@@ -739,7 +760,7 @@ class Flyout(QWidget):
         self.status_title = QLabel(STATE_TITLES["idle"])
         self.status_title.setObjectName("HeroTitle")
         self.status_text = TwoLineLabel("")  # two lines at most; the whole text in its tooltip
-        self.status_text.setObjectName("Muted")
+        self.status_text.setObjectName("HeroText")
         txt.addWidget(self.status_title)
         txt.addWidget(self.status_text)
         txt.addStretch(1)
@@ -794,8 +815,8 @@ class Flyout(QWidget):
             if i:
                 sep = QFrame()
                 sep.setObjectName("Sep")
-                inset = QHBoxLayout()  # the line starts after the icon tile, like a grouped list
-                inset.setContentsMargins(56, 0, 0, 0)
+                inset = QHBoxLayout()  # the line runs the card's full width (1.1 design)
+                inset.setContentsMargins(0, 0, 0, 0)
                 inset.addWidget(sep)
                 sl.addLayout(inset)
             sl.addWidget(row)
@@ -937,10 +958,10 @@ class Flyout(QWidget):
                   - QPoint(menu.sizeHint().width(), menu.sizeHint().height() + 4))
 
     def _bar_icons(self) -> None:
-        self.open_btn.setIcon(glyph("folder", self.c["muted"]))
-        self.web_btn.setIcon(glyph("globe", self.c["muted"]))
-        self.folder_btn.setIcon(glyph("pin", self.c["muted"]))
-        self.more_btn.setIcon(glyph("more", self.c["muted"]))
+        self.open_btn.setIcon(glyph("folder", self.c["text"]))
+        self.web_btn.setIcon(glyph("globe", self.c["text"]))
+        self.folder_btn.setIcon(glyph("pin", self.c["text"]))
+        self.more_btn.setIcon(glyph("more", self.c["text"]))
 
     def _open_folder_menu(self) -> None:
         """Opens the iCloud Drive folder straight away (the photos folder while Drive isn't synced):
@@ -1004,7 +1025,13 @@ class Flyout(QWidget):
         return "attention" if self.state == "idle" and getattr(self, "_pending_text", "") else self.state
 
     def set_state(self, state: str, text: str) -> None:
+        if state == "syncing" and self.state != "syncing":
+            from datetime import datetime as _dt
+
+            self._started = _dt.now().strftime("%H:%M")  # "Started at 09:42" in the footer
         self.state = state
+        if hasattr(self, "checked_label"):
+            self._footer_time()
         self.dot.set_state(self._dot_state())
         self.status_title.setText(STATE_TITLES.get(state, state))
         self.status_text.setText("" if text.rstrip(".…") == STATE_TITLES.get(state, "").rstrip(".…")
@@ -1054,7 +1081,14 @@ class Flyout(QWidget):
             self.status_text.show()
         elif self.state == "idle":
             self.status_title.setText(t("Up to date"))  # (the line under the name says "in sync")
-            self.status_text.setText(t("Everything matches iCloud."))
+            s = getattr(self, "_stats", {}) or {}
+            names = [t("Photos")] + ([t("iCloud Drive")] if s.get("drive_enabled") else []) + \
+                ([t("Notes")] if s.get("notes_enabled") else [])
+            if len(names) == 1:
+                self.status_text.setText(t("Your photos are in step with iCloud."))
+            else:
+                self.status_text.setText(t("{names} and {last} are in step with iCloud.",
+                                           names=", ".join(names[:-1]), last=names[-1]))
             self.status_text.show()
 
     def _status_line(self) -> None:
@@ -1065,9 +1099,9 @@ class Flyout(QWidget):
         icon = {"idle": "check", "syncing": "sync", "paused": "pause", "error": "error", "auth": "error",
                 "offline": "cloud", "setup": "folder", "attention": "error"}.get(state, "check")
         color = state_color(self.c, state)
-        pix = glyph(icon, color, 13).pixmap(QSize(13, 13), max(1.0, self.devicePixelRatioF()))
+        pix = _status_dot(color, max(1.0, self.devicePixelRatioF()))
         self.status_icon.setPixmap(pix)
-        if icon == "sync" and animations_on():
+        if False:  # (the dot doesn't spin; the badge in the status card shows the progress)
             self._spin_base = pix
             if not self._spin.isActive():
                 self._spin.start()
@@ -1186,10 +1220,19 @@ class Flyout(QWidget):
         else:
             self.row_notes.set(t("Off · click to turn on"), None)
 
+    def _footer_time(self) -> None:
+        """Beside the main button: when Skyfold last checked, or, while syncing, when this pass began."""
+        ts = getattr(self, "_last_sync_ts", None)
+        started = getattr(self, "_started", None)
+        if self.state == "syncing" and started:
+            self.checked_label.setText(t("Started") + "\n" + t("at {time}", time=started))
+        else:
+            self.checked_label.setText(t("Last checked") + "\n" + fmt_time(ts) if ts else "")
+
     def refresh_times(self) -> None:
         ts = getattr(self, "_last_sync_ts", None)
         self.last_sync.setText(t("Last check: {when}", when=fmt_time(ts)) if ts else "")
-        self.checked_label.setText(t("Last checked") + "\n" + fmt_time(ts) if ts else "")
+        self._footer_time()
         self.checked_label.setToolTip(self.last_sync.text())
         if self.state == "idle":
             self._render_hero()

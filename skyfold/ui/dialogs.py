@@ -343,7 +343,7 @@ class Toggle(QCheckBox):
         track = QRectF(x + 0.5, y + 0.5, w - 1, h - 1)
         if on:
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(c["accent_hover"] if hover else c["accent"]))
+            p.setBrush(QColor(c.get("btn_hover", c["accent_hover"]) if hover else c.get("btn", c["accent"])))
         else:
             p.setPen(QPen(QColor(c["text"] if hover else c["border_strong"]), 1.2))
             p.setBrush(Qt.NoBrush)
@@ -457,7 +457,7 @@ class LoginDialog(_Dialog):
 
     def __init__(self, apple_id: str = "") -> None:
         super().__init__(t("Sign in – {app}", app=APP_NAME))
-        self.setFixedWidth(_fit_screen(420, 0)[0])
+        self.setFixedWidth(_fit_screen(480, 0)[0])
         self.api: Any = None
         self._task: Any = None
         self._cancelled = False
@@ -477,12 +477,20 @@ class LoginDialog(_Dialog):
         self._scroll.setWidget(self._login_body)
         frame.addWidget(self._scroll)
         outer = QVBoxLayout(self._login_body)
-        outer.setContentsMargins(28, 26, 28, 22)
+        outer.setContentsMargins(0, 0, 0, 22)
         outer.setSpacing(14)
-        outer.addWidget(_logo(48))
-        title = _label(t("Sign in to iCloud"), "Title")
-        title.setAlignment(Qt.AlignCenter)
-        outer.addWidget(title)
+        from .theme import palette as _palette
+
+        # the top of first run's last step: the mark, the title, the promise about the password, the steps
+        self.hero = Hero(_palette("system"), 2)
+        self.hero.set_text(t("Sign in to iCloud"),
+                           t("Your password is only used to sign in, with Apple's two-factor code. It is never stored."), 2)
+        outer.addWidget(self.hero)
+        inner = QVBoxLayout()
+        inner.setContentsMargins(36, 0, 36, 0)
+        inner.setSpacing(14)
+        outer.addLayout(inner)
+        outer = inner
 
         self.pages = QStackedWidget()
         outer.addWidget(self.pages)
@@ -492,16 +500,14 @@ class LoginDialog(_Dialog):
         l1 = QVBoxLayout(p1)
         l1.setContentsMargins(0, 0, 0, 0)
         l1.setSpacing(8)
-        sub = _label(t("Use the Apple ID you use on your iPhone and iPad."), "Muted", True)
-        sub.setAlignment(Qt.AlignCenter)
-        l1.addWidget(sub)
-        l1.addSpacing(6)
         self.email = _field(QLineEdit(apple_id))
         self.email.setPlaceholderText(t("Apple ID (email)"))
         self.password = _field(QLineEdit())
         self.password.setPlaceholderText(t("Password"))
         self.password.setEchoMode(QLineEdit.Password)
         self.password.returnPressed.connect(self._submit_credentials)
+        for f in (self.email, self.password):
+            f.setMinimumHeight(36)  # (the design's field height)
         l1.addWidget(self.email)
         l1.addWidget(self.password)
         note = _label(
@@ -544,6 +550,8 @@ class LoginDialog(_Dialog):
 
         btns = QHBoxLayout()
         self.cancel = QPushButton(t("Cancel"))
+        self.cancel.setObjectName("Link")  # quiet, on the left, as Back in the design
+        self.cancel.setCursor(Qt.PointingHandCursor)
         self.cancel.clicked.connect(self._cancel_sign_in)
         # Enter must never reach Cancel: when the field with the focus is locked while Apple answers,
         # Qt moves the focus to the next button and an "auto default" button takes over Enter.
@@ -732,7 +740,7 @@ class SettingsDialog(_Dialog):
     restoreExcluded = Signal()
     checkUpdates = Signal()
 
-    PAGES = ("general", "sync", "photos", "drive", "notes", "bookmarks", "about")
+    PAGES = ("general", "photos", "drive", "notes", "bookmarks", "about")
 
     def __init__(self, settings: Settings, palette: dict[str, str], storage: dict | None = None,
                  get_api=None) -> None:
@@ -779,7 +787,6 @@ class SettingsDialog(_Dialog):
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
 
         self._build_general()
-        self._build_sync()
         self._build_photos()
         self._build_drive()
         self._build_notes()
@@ -802,7 +809,22 @@ class SettingsDialog(_Dialog):
         btns.addWidget(cancel)
         btns.addWidget(save)
         outer.addWidget(footer)
+        for b in self.findChildren(QPushButton):  # Enter in a field never presses a button by itself
+            b.setAutoDefault(False)
+            b.setDefault(False)
         self._fit_to_pages(nav_pane, footer)
+
+    def keyPressEvent(self, e) -> None:  # noqa: N802
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter):
+            from PySide6.QtWidgets import QApplication
+
+            w = QApplication.focusWidget()
+            if isinstance(w, QPushButton) and w.window() is self:
+                w.click()  # a button with the keyboard focus: Enter presses it
+            # anywhere else Enter does nothing: saving can move folders or ask about deletions, and
+            # Sign out sits on the same page as the fields (it must never answer an Enter)
+            return
+        super().keyPressEvent(e)
 
     def show_page(self, page: int | str) -> None:
         """Open on a page, by its number or its name in PAGES ("drive", "notes"…)."""
@@ -856,7 +878,7 @@ class SettingsDialog(_Dialog):
         if self.storage.get("total"):
             from .flyout import storage_text
 
-            sub = t("iCloud · {size}", size=storage_text(self.storage["total"]))  # (as the storage bar says it)
+            sub = t("iCloud · {size} plan", size=storage_text(self.storage["total"]))  # (as the storage bar says it)
         col.addWidget(_label(sub, "WhoSub"))
         row.addLayout(col, 1)
         return box
@@ -871,8 +893,8 @@ class SettingsDialog(_Dialog):
         body = QWidget()
         body.setObjectName("Root")
         lay = QVBoxLayout(body)
-        lay.setContentsMargins(16, 6, 28, 18)
-        lay.setSpacing(16)
+        lay.setContentsMargins(16, 6, 28, 12)
+        lay.setSpacing(12)
         lay.addWidget(_label(name, "PageTitle"))  # a large page title, as in Windows' Settings
         scroll.setWidget(body)
         self.stack.addWidget(scroll)
@@ -885,10 +907,10 @@ class SettingsDialog(_Dialog):
         box = QWidget()
         lay = QVBoxLayout(box)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
+        lay.setSpacing(3)
         if title:
             lbl = _label(title, "GroupLabel")
-            lbl.setContentsMargins(2, 0, 0, 4)
+            lbl.setContentsMargins(2, 0, 0, 2)
             lay.addWidget(lbl)
         parent.addWidget(box)
         return lay
@@ -900,7 +922,7 @@ class SettingsDialog(_Dialog):
 
         card = SoftCard()
         card.setObjectName("SetCard")
-        card.setMinimumHeight(60 if sub else 52)  # (one line: a lower card, as in Windows' Settings)
+        card.setMinimumHeight(62)  # (about the design's 64, so the Photos page still fits without scrolling)
         row = QHBoxLayout(card)
         row.setContentsMargins(16, 9, 16, 9)
         row.setSpacing(16)
@@ -929,7 +951,10 @@ class SettingsDialog(_Dialog):
 
     @staticmethod
     def _wide(w: QWidget) -> QWidget:
-        w.setFixedWidth(230)  # (room for "Automatic (recommended)" and its Bosnian text)
+        if isinstance(w, QComboBox):
+            w.setSizeAdjustPolicy(QComboBox.AdjustToContents)  # as wide as its longest choice
+        w.setMinimumWidth(180)
+        w.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         return w
 
     def _info(self, group: QVBoxLayout, lines, icon: str = "info") -> QFrame:
@@ -1035,6 +1060,35 @@ class SettingsDialog(_Dialog):
             v.addWidget(bar)
             lay.addWidget(card)
 
+        sync = self._group(lay, t("Syncing"))
+        self.poll = Combo()
+        for m in POLL_PRESETS:
+            self.poll.addItem(t("{n} min", n=m), m)
+        idx = min(range(len(POLL_PRESETS)), key=lambda i: abs(POLL_PRESETS[i] - self.s.poll_minutes))
+        self.poll.setCurrentIndex(idx)
+        self._setting(sync, "clock", t("Check iCloud every"),
+                      t("Apple doesn't notify apps about changes, so iCloud is checked at intervals. Each check only "
+                        "reads what changed; the whole library is compared once a day."), self._wide(self.poll))
+        self.limit = Combo()
+        for mb in (0, 1, 2, 5, 10, 20, 50):
+            self.limit.addItem(t("No limit") if not mb else t("{n} MB/s", n=mb), mb)
+        self.limit.setCurrentIndex(max(0, self.limit.findData(self.s.speed_limit_mb)))
+        self._setting(sync, "speed", t("Download speed limit"),
+                      t("Keeps some of your connection free while Skyfold downloads, for example during "
+                        "video calls."), self._wide(self.limit))
+        self.threshold = Spin(1, 10000, self.s.delete_threshold)
+        self.threshold.setFixedWidth(110)
+        self._setting(sync, "shield", t("Ask before deleting more than"), t("Larger deletions wait for your OK."),
+                      self.threshold)
+        self.instant = self._switch(self.s.instant_local_deletes)
+        self._setting(sync, "trash", t("Send deletions on this PC right away (watch the folder)"),
+                      t("Otherwise they are sent with the next check."), self.instant)
+        self.upbuf = Combo()
+        self.upbuf.addItem(t("Automatic (recommended)"), 0)
+        self.upbuf.addItem(t("Fixed 8 MB"), 8)
+        self.upbuf.setCurrentIndex(max(0, self.upbuf.findData(self.s.upload_buffer_mb)))
+        self._setting(sync, "upload", t("Upload send buffer"), None, self._wide(self.upbuf))
+
         win = self._group(lay, t("Windows"))
         self.autostart = self._switch(starts_with_windows(self.s.start_with_windows))
         self._setting(win, "power", t("Start with Windows"), t("Skyfold waits quietly in the system tray."),
@@ -1073,39 +1127,6 @@ class SettingsDialog(_Dialog):
                       t("Forgets this PC's sign-in to iCloud. Your files stay where they are."), out)
         lay.addStretch(1)
 
-    def _build_sync(self) -> None:
-        lay = self._page(t("Syncing"), "sync")
-        chk = self._group(lay, t("Checking and speed"))
-        self.poll = Combo()
-        for m in POLL_PRESETS:
-            self.poll.addItem(t("{n} min", n=m), m)
-        idx = min(range(len(POLL_PRESETS)), key=lambda i: abs(POLL_PRESETS[i] - self.s.poll_minutes))
-        self.poll.setCurrentIndex(idx)
-        self._setting(chk, "clock", t("Check iCloud every"),
-                      t("Apple doesn't notify apps about changes, so iCloud is checked at intervals. Each check only "
-                        "reads what changed; the whole library is compared once a day."), self._wide(self.poll))
-        self.limit = Combo()
-        for mb in (0, 1, 2, 5, 10, 20, 50):
-            self.limit.addItem(t("No limit") if not mb else t("{n} MB/s", n=mb), mb)
-        self.limit.setCurrentIndex(max(0, self.limit.findData(self.s.speed_limit_mb)))
-        self._setting(chk, "speed", t("Download speed limit"),
-                      t("Keeps some of your connection free while Skyfold downloads, for example during "
-                        "video calls."), self._wide(self.limit))
-        self.upbuf = Combo()
-        self.upbuf.addItem(t("Automatic (recommended)"), 0)
-        self.upbuf.addItem(t("Fixed 8 MB"), 8)
-        self.upbuf.setCurrentIndex(max(0, self.upbuf.findData(self.s.upload_buffer_mb)))
-        self._setting(chk, "upload", t("Upload send buffer"), None, self._wide(self.upbuf))
-
-        dele = self._group(lay, t("Deleting"))
-        self.threshold = Spin(1, 10000, self.s.delete_threshold)
-        self.threshold.setFixedWidth(110)
-        self._setting(dele, "shield", t("Ask before deleting more than"), t("Larger deletions wait for your OK."),
-                      self.threshold)
-        self.instant = self._switch(self.s.instant_local_deletes)
-        self._setting(dele, "trash", t("Send deletions on this PC right away (watch the folder)"),
-                      t("Otherwise they are sent with the next check."), self.instant)
-        lay.addStretch(1)
 
     def _build_photos(self) -> None:
         lay = self._page(t("Photos"), "photo")
@@ -1766,25 +1787,32 @@ class DriveFoldersDialog(_Dialog):
 
 # pending deletions ------------------------------------------------------------------
 class PendingDialog(_Dialog):
-    decided = Signal(str, list)  # "approve"|"reject", ids
+    """The deletion question, compact as in the 1.1 design: what was deleted where (as a title), a
+    short explanation, the photos themselves in a small strip (or the first names), the whole list
+    on request, and the two answers. Keeping is the highlighted answer: the safe one."""
 
-    def __init__(self, pending, palette: dict[str, str]) -> None:
+    decided = Signal(str, list)  # "approve"|"reject", ids
+    STRIP = 5
+
+    def __init__(self, pending, palette: dict[str, str], root: Path | None = None, limit: int | None = None) -> None:
         super().__init__(t("Confirm deletion – {app}", app=APP_NAME))
-        self.setMinimumSize(*_fit_screen(480, 360))
-        self.resize(*_fit_screen(560, 520))
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(22, 20, 22, 18)
-        lay.setSpacing(10)
-        head = QHBoxLayout()
-        ic = QLabel()
-        ic.setPixmap(glyph("trash", palette["warn_text"], 28).pixmap(QSize(28, 28)))
-        self._icon = ic
-        head.addWidget(ic)
-        head.addWidget(_label(t("A large deletion is waiting for your OK"), "Title"), 1)
-        lay.addLayout(head)
-        lay.addWidget(_label(
-            t("For safety, when more items than allowed in Settings are deleted at once, Skyfold asks first. "
-            "Nothing is deleted permanently."), "Muted", True))
+        self.c, self.root, self.limit = palette, root, limit
+        self.setMinimumWidth(460)
+        self.resize(*_fit_screen(480, 260))
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(24, 22, 24, 18)
+        lay.setSpacing(8)
+        outer.addWidget(body, 1)
+        self._icon = QLabel()  # (kept for apply_palette; the title says it all)
+        self._thumbs = None
+        self._strips: dict[str, QLabel] = {}
+        self._one = bool(pending.to_pc) != bool(pending.to_cloud)  # one question: answers in the footer
+        self._answers = QHBoxLayout()
+        self._answers.setSpacing(8)
 
         drive = getattr(pending, "service", "photos") == "drive"
         if pending.to_pc:
@@ -1792,59 +1820,132 @@ class PendingDialog(_Dialog):
                           t("{n} files or folders were deleted in iCloud Drive",
                             n=getattr(pending, "files_to_pc", 0) or len(pending.to_pc)) if drive
                           else t("{n} photos were deleted in iCloud", n=len(pending.to_pc)),
-                          t("Delete on this PC too"), t("Keep on this PC"))
+                          t("Delete them on this PC too? They go to the Recycle Bin, where they can be restored."),
+                          t("Delete on this PC too"), t("Keep on this PC"), pictures=not drive)
         if pending.to_cloud:
             self._section(lay, pending, pending.to_cloud,
                           t("{n} files or folders were deleted on this PC",
                             n=getattr(pending, "files_to_cloud", 0) or len(pending.to_cloud)) if drive
                           else t("{n} photos were deleted on this PC", n=len(pending.to_cloud)),
-                          t("Delete in iCloud too"), t("Bring them back to this PC"))
+                          t("Delete them in iCloud too? They go to Recently Deleted, where they stay for 30 days."),
+                          t("Delete in iCloud too"), t("Bring them back to this PC"), pictures=False)
 
+        # the footer band, as in the design: "Decide later" quietly on the left
+        foot = QWidget()
+        foot.setObjectName("Footer")
+        foot.setAttribute(Qt.WA_StyledBackground, True)
+        fl = QHBoxLayout(foot)
+        fl.setContentsMargins(24, 12, 24, 12)
+        later = QPushButton(t("Decide later"))
+        later.setObjectName("Link")
+        later.setCursor(Qt.PointingHandCursor)
+        later.clicked.connect(self.reject)
+        fl.addWidget(later)
+        fl.addStretch(1)
+        fl.addLayout(self._answers)
+        outer.addWidget(foot)
+        self.adjustSize()
 
     def apply_palette(self, palette: dict[str, str]) -> None:
-        self._icon.setPixmap(glyph("trash", palette["warn_text"], 28).pixmap(QSize(28, 28)))
+        self.c = palette
 
-    def _section(self, lay, pending, ids, title, yes, no) -> None:
-        if getattr(self, "_sections", 0):  # a second list: set it clearly apart from the first
+    def _section(self, lay, pending, ids, title, question, yes, no, pictures: bool) -> None:
+        if getattr(self, "_sections", 0):  # a second question: set it clearly apart from the first
             lay.addSpacing(10)
             sep = QFrame()
             sep.setObjectName("Sep")
             lay.addWidget(sep)
-            lay.addSpacing(4)
+            lay.addSpacing(8)
         self._sections = getattr(self, "_sections", 0) + 1
-        lay.addWidget(_label(title, "H2"))
+        lay.addWidget(_label(title, "Title", True))
+        why = t("More than your limit ({n}) at once, so Skyfold asks first.", n=self.limit) if self.limit else \
+            t("More than your limit at once, so Skyfold asks first.")
+        lay.addWidget(_label(why + " " + question, "Lead", True))
+
+        names = [pending.names.get(i, i) for i in ids]
+        shown = False
+        if pictures and self.root is not None:
+            from .panel_parts import Thumbs
+
+            strip = QHBoxLayout()
+            strip.setContentsMargins(0, 6, 0, 2)
+            strip.setSpacing(4)
+            if self._thumbs is None:
+                self._thumbs = Thumbs(self)
+                self._thumbs.ready.connect(self._shot_ready)
+            for name in names[:self.STRIP]:
+                path = str(Path(self.root) / name)
+                if not Thumbs.wanted(path):
+                    continue
+                shot = QLabel()
+                shot.setFixedSize(56, 56)
+                shot.setToolTip(name)
+                shot.hide()  # shown once its picture is read
+                strip.addWidget(shot)
+                self._strips[path] = shot
+                self._thumbs.request(path)
+                shown = True
+            if len(names) > self.STRIP:
+                more = _label("+" + str(len(names) - self.STRIP), "Mono")
+                strip.addWidget(more, 0, Qt.AlignVCenter)
+            strip.addStretch(1)
+            if shown:
+                lay.addLayout(strip)
+        if not shown:  # files, or photos that are no longer on this PC: the first few names
+            first = names[:3]
+            text = "\n".join(first) + ("\n" + t("… and {n} more", n=len(names) - 3) if len(names) > 3 else "")
+            lay.addWidget(_label(text, "Mono", True))
+
+        # the whole list, on request
         lst = QListWidget()
-        for i in ids[:500]:
-            lst.addItem(pending.names.get(i, i))
+        for name in names[:500]:
+            lst.addItem(name)
         if len(ids) > 500:
             lst.addItem(t("… and {n} more", n=len(ids) - 500))
         lst.setTextElideMode(Qt.ElideMiddle)
         lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        lst.setMinimumHeight(80)
+        lst.setMinimumHeight(120)
         for k in range(lst.count()):
             lst.item(k).setToolTip(lst.item(k).text())
-        group = QFrame()  # the list sits in a rounded group, like the lists in Settings
-        group.setObjectName("Card")
-        inner = QVBoxLayout(group)
-        inner.setContentsMargins(10, 4, 10, 4)
-        inner.addWidget(lst)
-        lay.addWidget(group, 1)
-        row = QHBoxLayout()
-        if self._sections == 1:  # one "Decide later" for the whole window, in the first row
-            later = QPushButton(t("Decide later"))
-            later.clicked.connect(self.reject)
-            row.addWidget(later)
+        lst.hide()
+        toggle = QPushButton(t("Show the list"))
+        toggle.setObjectName("Link")
+        toggle.setCursor(Qt.PointingHandCursor)
+
+        def flip() -> None:
+            lst.setVisible(not lst.isVisible())
+            toggle.setText(t("Hide the list") if lst.isVisible() else t("Show the list"))
+            self.adjustSize()
+
+        toggle.clicked.connect(flip)
+        lay.addWidget(toggle, 0, Qt.AlignLeft)
+        lay.addWidget(lst, 1)
+
+        row = self._answers if self._one else QHBoxLayout()
+        if not self._one:
+            row.setContentsMargins(0, 6, 0, 0)
         b_no = QPushButton(no)
         b_yes = QPushButton(yes)
         b_yes.setObjectName("Danger")
-        b_no.setObjectName("Primary")
+        b_no.setObjectName("Primary")  # keeping: the safe answer is the highlighted one
         self._open_sections = getattr(self, "_open_sections", 0) + 1
         b_no.clicked.connect(lambda: self._decide("reject", ids, (b_no, b_yes)))
         b_yes.clicked.connect(lambda: self._decide("approve", ids, (b_no, b_yes)))
-        row.addStretch(1)
-        row.addWidget(b_no)
+        if not self._one:
+            row.addStretch(1)
         row.addWidget(b_yes)
-        lay.addLayout(row)
+        row.addWidget(b_no)
+        if not self._one:
+            lay.addLayout(row)
+
+    def _shot_ready(self, path: str, img) -> None:
+        shot = self._strips.get(path)
+        if shot is None or img.isNull():
+            return
+        from .panel_parts import rounded
+
+        shot.setPixmap(rounded(img, 56, 6, max(1.0, self.devicePixelRatioF())))
+        shot.show()
 
     def _decide(self, decision: str, ids: list, buttons: tuple = ()) -> None:
         self.decided.emit(decision, list(ids))
@@ -1858,29 +1959,73 @@ class PendingDialog(_Dialog):
 
 
 # first run: where should the gallery live? -------------------------------------------
+class LayoutPicture(QWidget):
+    """A tiny drawing of how the photos folder will look: grey lines for photos, accent lines for
+    folders, indented as in File Explorer."""
+
+    LINES = {"flat": [("", 0, 0.78), ("", 0, 0.62), ("", 0, 0.70)],
+             "year": [("f", 0, 0.32), ("", 10, 0.62), ("", 10, 0.70)],
+             "year_month": [("f", 0, 0.32), ("f2", 10, 0.30), ("", 20, 0.66)]}
+
+    def __init__(self, key: str, palette: dict[str, str]) -> None:
+        super().__init__()
+        self.key, self.c = key, palette
+        self.setFixedHeight(46)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(self.c["tile"]))
+        p.drawRoundedRect(r, 6, 6)
+        y = 10.0
+        for kind, indent, frac in self.LINES.get(self.key, self.LINES["flat"]):
+            if kind:
+                col = QColor(self.c["accent"])
+                if kind == "f2":
+                    col.setAlphaF(0.55)
+            else:
+                col = QColor(self.c["muted2"] if "muted2" in self.c else self.c["muted"])
+                col.setAlphaF(0.55)
+            p.setBrush(col)
+            x = 12 + indent
+            p.drawRoundedRect(QRectF(x, y, (r.width() - 24) * frac, 5), 2.5, 2.5)
+            y += 10
+
+
 class LayoutOption(QFrame):
-    """A selectable card: radio dot, title and an example path."""
+    """A selectable card: a little picture of the folder layout, its name and an example path."""
 
     clicked = Signal()
 
-    def __init__(self, title: str, example: str) -> None:
+    def __init__(self, title: str, example: str, key: str = "flat", palette: dict[str, str] | None = None) -> None:
         super().__init__()
         self.setObjectName("Option")
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)  # Tab reaches it; Space or Enter chooses it
         self.setAccessibleName(f"{title}: {example}")
-        row = QHBoxLayout(self)
-        row.setContentsMargins(12, 9, 12, 9)
-        row.setSpacing(12)
-        self.dot = QLabel()
-        self.dot.setFixedSize(18, 18)
-        text = QVBoxLayout()
-        text.setSpacing(0)
-        text.addWidget(_label(title))
-        text.addWidget(_label(example, "Hint"))
-        row.addWidget(self.dot)
-        row.addLayout(text, 1)
+        col = QVBoxLayout(self)
+        col.setContentsMargins(12, 12, 12, 12)
+        col.setSpacing(4)
+        from .theme import palette as _palette
+
+        self.picture = LayoutPicture(key, palette or _palette("system"))
+        col.addWidget(self.picture)
+        col.addSpacing(6)
+        name = _label(title, "OptionTitle", True)
+        col.addWidget(name)
+        ex = _label(example, "Mono")
+        ex.setToolTip(example)
+        col.addWidget(ex)
+        self.dot = QLabel()  # (kept for older callers; the card's border shows the choice)
+        self.dot.hide()
         self.set_selected(False)
+
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.picture.c = palette
+        self.picture.update()
 
     def set_selected(self, on: bool) -> None:
         self.setProperty("selected", on)
@@ -1900,98 +2045,232 @@ class LayoutOption(QFrame):
         super().keyPressEvent(e)
 
 
+class StepDots(QWidget):
+    """Where you are in first run: three short bars, the steps done and the current one in the accent."""
+
+    def __init__(self, palette: dict[str, str], steps: int = 3, current: int = 0) -> None:
+        super().__init__()
+        self.c, self.steps, self.current = palette, steps, current
+        self.setFixedSize(steps * 22 + (steps - 1) * 6, 4)
+        self.setAccessibleName(t("Step {n} of {total}", n=current + 1, total=steps))
+
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
+        self.update()
+
+    def set_current(self, n: int) -> None:
+        self.current = n
+        self.setAccessibleName(t("Step {n} of {total}", n=n + 1, total=self.steps))
+        self.update()
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        for i in range(self.steps):
+            p.setBrush(QColor(self.c["accent"] if i <= self.current else self.c["track"]))
+            p.drawRoundedRect(QRectF(i * 28, 0, 22, 4), 2, 2)
+
+
+class Hero(QWidget):
+    """The top of first run and signing in: the app's mark, a large title, one line about it and the
+    step bars, over a soft glow of the accent."""
+
+    def __init__(self, palette: dict[str, str], step: int) -> None:
+        super().__init__()
+        self.c = palette
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(36, 30, 36, 14)
+        lay.setSpacing(0)
+        logo = _logo(50)
+        logo.setFixedSize(60, 60)
+        logo.setAlignment(Qt.AlignCenter)
+        logo.setObjectName("HeroLogo")
+        lay.addWidget(logo, 0, Qt.AlignHCenter)
+        lay.addSpacing(16)
+        self.title = _label("", "HeroBig", True)
+        self.title.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self.title)
+        lay.addSpacing(6)
+        self.text = _label("", "Lead", True)
+        self.text.setAlignment(Qt.AlignCenter)
+        self.text.setContentsMargins(24, 0, 24, 0)
+        lay.addWidget(self.text)
+        lay.addSpacing(16)
+        self.dots = StepDots(palette, 3, step)
+        lay.addWidget(self.dots, 0, Qt.AlignHCenter)
+
+    def set_text(self, title: str, text: str, step: int) -> None:
+        self.title.setText(title)
+        self.text.setText(text)
+        self.dots.set_current(step)
+
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
+        self.update()
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        from PySide6.QtGui import QRadialGradient
+
+        p = QPainter(self)
+        g = QRadialGradient(self.width() / 2, 0, max(self.width() * 0.6, 1))
+        glow = QColor(self.c["accent"])
+        glow.setAlphaF(0.16)
+        g.setColorAt(0, glow)
+        glow.setAlphaF(0.0)
+        g.setColorAt(0.7, glow)
+        p.fillRect(self.rect(), g)
+
+
 class FolderSetupDialog(_Dialog):
+    """First run, as in the 1.1 design: step 1 where the photos go (the folder and its layout as three
+    pictures), step 2 the plain-language agreement; signing in is step 3, in its own window."""
+
     def __init__(self, current: str, palette: dict[str, str]) -> None:
         super().__init__(t("Welcome – {app}", app=APP_NAME))
         self.c = palette
-        self.setFixedWidth(_fit_screen(500, 0)[0])
-        # Scrollable body with the buttons always visible: fits a 1366x768 screen at any scale.
+        self.setFixedWidth(_fit_screen(540, 0)[0])
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+        self.hero = Hero(palette, 0)
+        outer.addWidget(self.hero)
+        # the steps scroll when the screen is small; the buttons always stay visible
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.steps = QStackedWidget()
         body = QWidget()
         body.setObjectName("Root")
-        lay = QVBoxLayout(body)
-        lay.setContentsMargins(28, 22, 28, 8)
-        lay.setSpacing(10)
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(36, 6, 36, 20)
+        bl.addWidget(self.steps)
         scroll.setWidget(body)
         outer.addWidget(scroll, 1)
         self._body = body
-        lay.addWidget(_logo(40))
-        title = _label(t("Where should your photos go?"), "Title")
-        title.setAlignment(Qt.AlignCenter)
-        lay.addWidget(title)
-        sub = _label(
-            t("Choose the folder your iPhone and iPad gallery will sync to. It's separate from the program; "
-            "pick a drive with enough space."),
-            "Muted", True)
-        sub.setAlignment(Qt.AlignCenter)
-        lay.addWidget(sub)
-        lay.addSpacing(4)
 
+        # step 1: the folder and its layout
+        one = QWidget()
+        lay = QVBoxLayout(one)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
         row = QHBoxLayout()
+        row.setSpacing(8)
         self.path = QLineEdit(current or default_photos_dir())
+        self.path.setObjectName("PathField")
+        from .theme import service_color
+
+        self.path.addAction(glyph("folder", service_color(palette, "photo") or palette["accent"], 16),
+                            QLineEdit.LeadingPosition)
         self.path.textChanged.connect(self._validate)
-        browse = QPushButton(t("Choose…"))
+        browse = QPushButton(t("Browse…"))
         browse.setCursor(Qt.PointingHandCursor)
         browse.clicked.connect(self._browse)
         row.addWidget(self.path, 1)
         row.addWidget(browse)
         lay.addLayout(row)
-
         self.msg = _label("", None, True)
         self.msg.hide()
         lay.addWidget(self.msg)
-
-        lay.addSpacing(6)
-        lay.addWidget(_label(t("HOW SHOULD PHOTOS BE ORGANISED?"), "Section"))
+        lay.addSpacing(8)
+        lay.addWidget(_label(t("Layout"), "ListHead"))
         self.layout_choice = "flat"
         self.options: dict[str, LayoutOption] = {}
         examples = {
-            "flat": (t("All in one folder"), "IMG_4411.HEIC, IMG_4412.HEIC …"),
+            "flat": (t("One folder"), "IMG_4411.HEIC"),
             "year": (t("By year"), "2025\\IMG_4411.HEIC"),
             "year_month": (t("By year and month"), "2025\\11\\IMG_4411.HEIC"),
         }
+        cards = QHBoxLayout()
+        cards.setSpacing(8)
         for key, (title, example) in examples.items():
-            opt = LayoutOption(title, example)
+            opt = LayoutOption(title, example, key, palette)
             opt.clicked.connect(lambda k=key: self._pick_layout(k))
             self.options[key] = opt
-            lay.addWidget(opt)
+            cards.addWidget(opt, 1)
+        lay.addLayout(cards)
         self._pick_layout("flat")
+        lay.addWidget(_label(t("An empty folder works best. Folder and layout can be changed later in Settings."),
+                             "Hint", True))
+        lay.addStretch(1)
+        self.steps.addWidget(one)
 
-        lay.addWidget(_label(
-            t("An empty folder works best. Folder and layout can be changed later in Settings."),
-            "Hint", True))
+        # step 2: before you start
+        two = QWidget()
+        lay2 = QVBoxLayout(two)
+        lay2.setContentsMargins(0, 0, 0, 0)
+        lay2.setSpacing(8)
+        warn = SoftCard()
+        warn.setObjectName("SetCard")
+        wl = QHBoxLayout(warn)
+        wl.setContentsMargins(16, 14, 16, 16)
+        wl.setSpacing(14)
+        from .glow import GlowTile
 
-        lay.addSpacing(6)
-        lay.addWidget(_label(t("BEFORE YOU START"), "Section"))
-        lay.addWidget(_label(
-            t("Skyfold syncs in both directions, deletions included. It is free software provided "
-              "without any warranty (GNU GPL v3): you use it at your own risk, and its authors are not "
-              "liable for lost or changed files. Keep your own backup of anything important."),
-            "Muted", True))
+        wl.addWidget(GlowTile("shield", palette, palette["warn"], size=32, icon=17, radius=9), 0, Qt.AlignTop)
+        wl.addWidget(_label(
+            t("Skyfold is free software without any warranty (GNU GPL v3). You use it at your own risk, and its "
+              "authors are not liable for lost or changed files. Keep your own backup of anything important."),
+            "Lead", True), 1)
+        lay2.addWidget(warn)
+        agree_card = SoftCard()
+        agree_card.setObjectName("SetCard")
+        al = QHBoxLayout(agree_card)
+        al.setContentsMargins(12, 8, 16, 8)
         self.agree = Toggle(t("I understand and accept this"), palette)
+        self.agree.setCursor(Qt.PointingHandCursor)
         self.agree.toggled.connect(lambda _on: self._validate())
-        lay.addWidget(self.agree)
+        al.addWidget(self.agree)
+        lay2.addWidget(agree_card)
+        lay2.addStretch(1)
+        self.steps.addWidget(two)
 
-        btns = QHBoxLayout()
-        quit_btn = QPushButton(t("Later"))
-        quit_btn.clicked.connect(self.reject)
+        # the footer band: a quiet Later / Back on the left, Continue on the right
+        foot = QWidget()
+        foot.setObjectName("Footer")
+        foot.setAttribute(Qt.WA_StyledBackground, True)
+        btns = QHBoxLayout(foot)
+        btns.setContentsMargins(36, 14, 36, 14)
+        self.back = QPushButton(t("Later"))
+        self.back.setObjectName("Link")
+        self.back.setCursor(Qt.PointingHandCursor)
+        self.back.clicked.connect(self._back)
         self.ok = QPushButton(t("Continue"))
         self.ok.setObjectName("Primary")
         self.ok.setDefault(True)
-        self.ok.clicked.connect(self._accept)
-        btns.addWidget(quit_btn)
+        self.ok.clicked.connect(self._next)
+        btns.addWidget(self.back)
         btns.addStretch(1)
         btns.addWidget(self.ok)
-        btns.setContentsMargins(28, 10, 28, 18)
-        outer.addLayout(btns)
-        self._validate()
+        outer.addWidget(foot)
+        self._show_step(0)
         self._fit_height()
+
+    def _show_step(self, n: int) -> None:
+        self.steps.setCurrentIndex(n)
+        if n == 0:
+            self.hero.set_text(t("Where should your photos go?"),
+                               t("Choose a folder on a drive with enough space. Skyfold keeps it in step with iCloud."), 0)
+            self.back.setText(t("Later"))
+        else:
+            self.hero.set_text(t("Before you start"), t("Skyfold syncs both ways, deletions included."), 1)
+            self.back.setText(t("Back"))
+        self._validate()
+
+    def _back(self) -> None:
+        if self.steps.currentIndex() == 0:
+            self.reject()
+        else:
+            self._show_step(0)
+
+    def _next(self) -> None:
+        if self.steps.currentIndex() == 0:
+            error, _warning = check_photos_dir(self.path.text())
+            if error is None:
+                self._show_step(1)
+            return
+        self._accept()
 
     def _fit_height(self) -> None:
         from PySide6.QtGui import QGuiApplication
@@ -1999,7 +2278,9 @@ class FolderSetupDialog(_Dialog):
         screen = QGuiApplication.primaryScreen()
         room = int(screen.availableGeometry().height() * 0.9) if screen else 800
         self._body.adjustSize()
-        self.setFixedHeight(min(self._body.sizeHint().height() + 70, room))
+        want = self.hero.sizeHint().height() + max(self.steps.widget(i).sizeHint().height()
+                                                    for i in range(self.steps.count())) + 26 + 62
+        self.setFixedHeight(min(want, room))
 
     def chosen_path(self) -> str:
         return str(Path(self.path.text().strip()).expanduser())
@@ -2031,7 +2312,8 @@ class FolderSetupDialog(_Dialog):
         self.msg.setStyleSheet(f"color: {self.c[self._msg_key]};")
         self.msg.setText(text)
         self.msg.setVisible(bool(text))
-        self.ok.setEnabled(error is None and self.agree.isChecked())
+        on_agreement = getattr(self, "steps", None) is not None and self.steps.currentIndex() == 1
+        self.ok.setEnabled(error is None and (self.agree.isChecked() or not on_agreement))
         if hasattr(self, "_body") and bool(text) != getattr(self, "_had_msg", False):
             self._had_msg = bool(text)
             self._fit_height()

@@ -431,7 +431,7 @@ BS: dict[str, str] = {
     "of {total} used": "od {total} zauzeto",
     "{free} free": "{free} slobodno",
     "{free} free on this drive": "{free} slobodno na ovom disku",
-    "iCloud · {size}": "iCloud · {size}",
+    "iCloud · {size} plan": "iCloud · paket {size}",
     "Skyfold waits quietly in the system tray.": "Skyfold tiho čeka u system trayu.",
     "Follows Windows, or always light, dark or OLED.": "Prati Windows, ili je uvijek svijetla, tamna ili OLED.",
     "Forgets this PC's sign-in to iCloud. Your files stay where they are.":
@@ -919,6 +919,36 @@ BS: dict[str, str] = {
     "Deletion needs your OK": "Brisanje čeka tvoju potvrdu",
     "Up to date": "Sve je ažurno",
     "Everything matches iCloud.": "Sve je usklađeno sa iCloudom.",
+    "Your photos are in step with iCloud.": "Tvoje slike su usklađene sa iCloudom.",
+    "Started": "Počelo",
+    "now": "sada",
+    "Delete them on this PC too? They go to the Recycle Bin, where they can be restored.":
+        "Obrisati ih i na ovom PC-u? Idu u Recycle Bin, odakle se mogu vratiti.",
+    "Delete them in iCloud too? They go to Recently Deleted, where they stay for 30 days.":
+        "Obrisati ih i u iCloudu? Idu u Nedavno obrisano, gdje ostaju 30 dana.",
+    "More than your limit ({n}) at once, so Skyfold asks first.":
+        "Više od tvoje granice ({n}) odjednom, pa Skyfold prvo pita.",
+    "More than your limit at once, so Skyfold asks first.": "Više od tvoje granice odjednom, pa Skyfold prvo pita.",
+    "Show the list": "Prikaži listu",
+    "Step {n} of {total}": "Korak {n} od {total}",
+    "Your password is only used to sign in, with Apple's two-factor code. It is never stored.":
+        "Lozinka se koristi samo za prijavu, uz Appleov kod za potvrdu. Nikad se ne čuva.",
+    "Browse…": "Pretraži…",
+    "One folder": "Jedan folder",
+    "Before you start": "Prije nego što počneš",
+    "Choose a folder on a drive with enough space. Skyfold keeps it in step with iCloud.":
+        "Izaberi folder na disku s dovoljno prostora. Skyfold ga drži usklađenim sa iCloudom.",
+    "Skyfold syncs both ways, deletions included.": "Skyfold sinhronizuje u oba smjera, uključujući brisanja.",
+    "Skyfold is free software without any warranty (GNU GPL v3). You use it at your own risk, and its authors are "
+    "not liable for lost or changed files. Keep your own backup of anything important.":
+        "Skyfold je besplatan program bez ikakve garancije (GNU GPL v3). Koristiš ga na vlastitu odgovornost, a "
+        "njegovi autori ne odgovaraju za izgubljene ili izmijenjene fajlove. Čuvaj vlastitu kopiju svega važnog.",
+    "Hide the list": "Sakrij listu",
+    "Needs your OK": "Čeka tvoju potvrdu",
+    "Needs attention": "Treba pažnju",
+    "New version": "Nova verzija",
+    "at {time}": "u {time}",
+    "{names} and {last} are in step with iCloud.": "{names} i {last} su usklađeni sa iCloudom.",
 }
 
 _CATALOGS = {"bs": BS}

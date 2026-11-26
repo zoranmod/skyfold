@@ -108,14 +108,30 @@ def _row_colors(c: dict[str, str]) -> dict:
             "hover": QColor(c["hover"]), "on": None, "focus": QColor(c["focus_ring"])}
 
 
+def _long_when(iso: str) -> str:
+    """'24 November 2026, 07:15' in the app's language (the note's meta line, as in the design)."""
+    from PySide6.QtCore import QDateTime
+
+    from ..i18n import language
+
+    stamp = QDateTime.fromString(iso, Qt.ISODate)
+    if not stamp.isValid():
+        return local_datetime(iso)
+    if language() == "bs":
+        loc = QLocale(QLocale.Bosnian, QLocale.BosniaAndHerzegowina)
+    else:
+        loc = QLocale(QLocale.English, QLocale.UnitedKingdom)
+    return loc.toString(stamp.toLocalTime(), "d MMMM yyyy, HH:mm")
+
+
 def _key(r: nv.Row) -> tuple:
     return (r.rel, r.modified)
 
 
 
 BOX_SCHEME = "sfbox"
-CHECK_ON_IMG = f'<img src="{BOX_SCHEME}:on" width="18" height="18" align="middle"> '
-CHECK_OFF_IMG = f'<img src="{BOX_SCHEME}:off" width="18" height="18" align="middle"> '
+CHECK_ON_IMG = f'<img src="{BOX_SCHEME}:on" width="18" height="18" align="middle">&nbsp; '
+CHECK_OFF_IMG = f'<img src="{BOX_SCHEME}:off" width="18" height="18" align="middle">&nbsp; '
 
 
 def _check_box(c: dict, on: bool, dpr: float):
@@ -1028,9 +1044,9 @@ class NotesWindow(LibraryDialog):
         if not same_note:
             self.shown_pages = {}
         self.current, self.current_key = row.id, key
-        when = local_datetime(row.modified) if row.modified else ""
+        when = _long_when(row.modified) if row.modified else ""
         folder = row.folder.replace("/", " \u203a ")
-        self.meta.setText("  \u00b7  ".join(x for x in (folder, when) if x))
+        self.meta.setText(" \u00b7 ".join(x for x in (folder, when) if x))  # "Home \u00b7 24 November 2026, 07:15"
         self.meta.setToolTip(self.meta.text())
         self._note_failed = 0.0
         if row.locked:
@@ -1197,11 +1213,12 @@ class NotesWindow(LibraryDialog):
         hl = "".join(f".hl{i + 1}{{background-color:{_blend(c['bg'], col, 0.35)}}}"
                      for i, col in enumerate(HIGHLIGHTS))
         return (f"body{{color:{c['text']}}} a{{color:{c['accent_fg']}}}"
-                f"h1{{font-size:x-large;font-weight:600}} h2{{font-size:large;font-weight:600}}"
+                f"h1{{font-size:19pt;font-weight:600}} h2{{font-size:large;font-weight:600}}"
                 f"h3{{font-size:medium;font-weight:600}}"
                 f"pre,code{{background-color:{c['group']}}}"
-                f"th{{background-color:{c['surface2']};font-weight:600}}"
-                f"table{{border-collapse:collapse}} td,th{{padding:5px 10px;border:1px solid {c['border']}}}"
+                f"th{{background-color:{c['tile']};font-weight:600;text-align:left}}"
+                f"table{{border-collapse:collapse;border:1px solid {c['border']}}}"
+                f"td,th{{padding:7px 14px;border:none;border-bottom:1px solid {c['border']};text-align:left}}"
                 f"blockquote{{color:{c['muted']}}} .sf-file{{color:{c['muted']}}}"
                 f".sf-box{{font-family:'Segoe UI Symbol';font-size:large;color:{c['muted']}}}"
                 f".sf-done{{background-color:{c['btn']};color:{c['accent_text']}}}" + hl)

@@ -482,8 +482,13 @@ class Controller(QObject):
             self.tray.showMessage(title, text, app_icon(), timeout)
             return
         buttons = [(found[0], found[1]) for found in map(self._notice_action, actions) if found]
+        images: list[str] = []
+        if icon == "photo":  # the newest photos in the panel's activity, small, on the card
+            from .ui.panel_parts import Thumbs
+
+            images = [r.target for r in self.flyout._activity_rows() if r.target and Thumbs.wanted(r.target)][:3]
         self.toasts.show(title, text, icon=icon, tone=tone, actions=buttons,
-                         on_click=on_click or self._on_message_clicked, timeout=timeout)
+                         on_click=on_click or self._on_message_clicked, timeout=timeout, images=images)
 
     # updates ------------------------------------------------------------------
     def check_updates(self, manual: bool = False) -> None:
@@ -874,7 +879,9 @@ class Controller(QObject):
         if not self._pending:
             return
         shown = self._pending
-        dlg = PendingDialog(shown, self.c)
+        s = getattr(self, "settings", None)  # (the photos, small, from the photos folder; the limit asked about)
+        extra = {} if s is None else {"root": Path(s.photos_dir), "limit": s.delete_threshold}
+        dlg = PendingDialog(shown, self.c, **extra)
 
         def decided(d: str, ids: list) -> None:
             # which part of the question shown was answered: an answer only counts for that side

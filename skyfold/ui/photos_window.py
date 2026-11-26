@@ -139,8 +139,8 @@ class _PillButton(QPushButton):
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         if self.danger:
             _round(p, r, "#d13438" if self.underMouse() else "#c42b1c", radius=6)
-        elif self.isChecked():
-            _round(p, r, self.window().c["accent_soft"], u["ring"], radius=6)
+        elif self.isChecked():  # the chosen view: a neutral raised layer, as in the design
+            _round(p, r, self.window().c["surface"], u["ring"], radius=6)
         elif self.underMouse() or self.isDown():
             _round(p, r, u["hover"], radius=6)
         if self.hasFocus() and getattr(self.window(), "keyboard_used", False):
@@ -1002,7 +1002,7 @@ class PhotosWindow(LibraryDialog):
     RELOAD_GAP = 10.0  # seconds at least between two reads of the library while the sync adds photos
 
     # kept while Skyfold runs
-    zoom_level = 2
+    zoom_level = 1  # (five columns: the design's photo size)
     sidebar_open = True
 
     def __init__(self, palette: dict[str, str], source, settings) -> None:

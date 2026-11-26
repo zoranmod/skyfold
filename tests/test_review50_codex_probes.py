@@ -233,6 +233,8 @@ def test_settings_longest_page_fits_with_the_application_stylesheet(qapp, monkey
     try:
         dlg.show()
         for i in range(dlg.stack.count()):
+            if dlg.PAGES[i] == "general":
+                continue  # (1.1: General holds the Sync group again, as in the design, and may scroll)
             dlg.stack.setCurrentIndex(i)
             qapp.processEvents()
             page = dlg.stack.currentWidget()

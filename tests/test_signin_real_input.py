@@ -271,7 +271,7 @@ def test_settings_field_enter_starts_nothing(ui, tmp_path):
     d.show(); d.activateWindow(); app.processEvents()
     # Select Syncing with a real mouse click, then Enter in its unchanged number field (1.1: folders
     # are shown on cards and changed with Change…, so the fields left are numbers like this one).
-    rect=d.nav.visualItemRect(d.nav.item(d.PAGES.index("sync")))
+    rect=d.nav.visualItemRect(d.nav.item(d.PAGES.index("general")))
     QTest.mouseClick(d.nav.viewport(), Qt.LeftButton, pos=rect.center())
     QTest.mouseClick(d.threshold, Qt.LeftButton)
     assert app.focusWidget() is d.threshold
