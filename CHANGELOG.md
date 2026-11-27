@@ -2,6 +2,11 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-11-27
+
+### Fixed
+- **The tray menu is in the new look too.** The right-click menu of Skyfold's tray icon is see-through like the tray panel and the notification cards: the desktop shows through it, blurred, in your theme's tint (light, dark, or the nearly black OLED glass), with Windows' own rounded edge and shadow. With Windows' *Transparency effects* off it stays a plain menu in the theme's colours.
+
 ## [1.1.0] - 2026-11-27
 
 ### Added
