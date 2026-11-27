@@ -65,9 +65,12 @@ LOG_FILE = PRIVATE_DIR / "skyfold.log"
 def _data_dir() -> Path:
     """Settings next to the app (portable), unless that folder can't be written (Program Files…)."""
     here = APP_DIR / "data"
+    # pytest and its child interpreters must not probe or read a developer's portable data.
+    test_data = os.environ.get("_SKYFOLD_TEST_DATA_DIR")
+    if test_data and not getattr(sys, "frozen", False):
+        here = Path(test_data)
     try:
         here.mkdir(parents=True, exist_ok=True)
-        import os
         import tempfile
 
         fd, probe = tempfile.mkstemp(prefix=".write-test-", dir=here)  # a new file of its own, never an existing one
