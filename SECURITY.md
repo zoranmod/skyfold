@@ -24,11 +24,14 @@ You can expect a first reply within 7 days. Once a fix is released, you'll be cr
 | Sync database | `%LOCALAPPDATA%\Skyfold\state.sqlite3` (plus `-wal`/`-shm`) | file paths, iCloud item IDs, the recent activity list, a fingerprint (hash) of the Apple ID |
 | iCloud Drive listing | `%LOCALAPPDATA%\Skyfold\drive_cache.json` | names of all files and folders in iCloud Drive |
 | Log | `%LOCALAPPDATA%\Skyfold\skyfold.log` (and `.log.1`, `.log.2`) | file and folder names, errors; the Apple ID, cookies, tokens and people's names are filtered out; no password |
-| Settings (incl. Apple ID email) | `data\settings.json` next to `Skyfold.exe` | |
+| Crash log | `%LOCALAPPDATA%\Skyfold\crash.log` | only if Skyfold ever crashes: the parts of the program that were running (function names); no note text, file contents or password |
+| Account picture | `%LOCALAPPDATA%\Skyfold\account-….png` | the photo on your own card in Contacts, small; deleted by **Sign out** |
+| Safari bookmarks (when turned on) | `%LOCALAPPDATA%\Skyfold\safari-bookmarks.json` | titles and addresses, for the browser extension; deleted by **Sign out** |
+| Settings (incl. Apple ID email) | `data\settings.json` next to `Skyfold.exe` (or `%LOCALAPPDATA%\Skyfold\data` when that folder can't be written; *Settings → About* shows which) | |
 
-**Sign out** removes the session. The sync database, the Drive listing, the log and the Apple ID in `settings.json` stay, so a later sign-in with the same Apple ID continues where it stopped. To remove everything, quit Skyfold and delete `%LOCALAPPDATA%\Skyfold` and the `data` folder next to `Skyfold.exe`.
+**Sign out** removes the session, the account picture and the bookmarks file. The sync database, the Drive listing, the log and the Apple ID in `settings.json` stay, so a later sign-in with the same Apple ID continues where it stopped. To remove everything, quit Skyfold and delete `%LOCALAPPDATA%\Skyfold` and the `data` folder next to `Skyfold.exe`.
 
-Skyfold connects to Apple's iCloud services (through [pyicloud](https://github.com/timlaing/pyicloud)) and, once a day unless turned off, to GitHub's public API to look for a newer Skyfold release. It has no server, telemetry or analytics. An update is only installed when you click *Update now*: the release zip from this repository is checked against its published SHA-256 before anything is replaced.
+Skyfold connects to Apple's iCloud services (through [pyicloud](https://github.com/timlaing/pyicloud)) and, once a day unless turned off, to GitHub's public API to look for a newer Skyfold release. It has no server, telemetry or analytics. An update is only installed when you click *Update now*: the release zip from this repository is checked against its published SHA-256, and GitHub's build attestation must name this repository's release workflow and tag, before anything is replaced.
 
 ## In scope
 
