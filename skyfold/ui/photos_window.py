@@ -33,7 +33,7 @@ from ..i18n import language, t
 from .icons import glyph
 from .library_frame import LibraryDialog, SearchField, count_font
 from .panel_parts import SoftCard
-from .settings_parts import NavDelegate
+from .settings_parts import NavDelegate, pressable
 from .theme import service_color
 from .photo_images import ImageLoader, fit_short_side
 
@@ -1117,6 +1117,7 @@ class Grid(QListView):
 
 
 # --- Years and Months --------------------------------------------------------------------------------
+@pressable  # (a screen reader gets a button to press; Enter/Space open it too)
 class Card(QWidget):
     clicked = Signal()
 

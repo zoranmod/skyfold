@@ -5,8 +5,8 @@ shorten long folder paths in the middle, and setting cards you can click."""
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPalette
-from PySide6.QtWidgets import QLabel, QSizePolicy, QStyle, QStyledItemDelegate, QWidget
+from PySide6.QtGui import QAccessible, QColor, QFont, QLinearGradient, QPainter, QPalette
+from PySide6.QtWidgets import QAccessibleWidget, QLabel, QSizePolicy, QStyle, QStyledItemDelegate, QWidget
 
 from .panel_parts import SoftCard
 
@@ -148,6 +148,55 @@ class ElidedLabel(QLabel):
         p.drawText(r, Qt.AlignLeft | Qt.AlignVCenter, self.fontMetrics().elidedText(self.text(), self.mode, r.width()))
 
 
+# --- cards a screen reader can press ----------------------------------------------------------------------
+_PRESSABLE: list[type] = []
+
+
+class _PressableAccessible(QAccessibleWidget):
+    """What a screen reader sees of a card that is clicked: a button with a name and a Press action,
+    which does what a click (or Enter/Space) does. Nothing about how the card looks changes."""
+
+    def __init__(self, w: QWidget) -> None:
+        super().__init__(w, QAccessible.Role.Button)
+
+    def text(self, kind):
+        name = super().text(kind)
+        if kind == QAccessible.Text.Name and not name:  # no name given: what the card says
+            w = self.widget()
+            name = ", ".join(x.text() for x in w.findChildren(QLabel) if x.text() and not x.isHidden())
+        return name
+
+    def actionNames(self) -> list[str]:  # noqa: N802
+        return [self.pressAction(), *super().actionNames()]
+
+    def keyBindingsForAction(self, name: str) -> list[str]:  # noqa: N802
+        return ["Enter", "Space"] if name == self.pressAction() else super().keyBindingsForAction(name)
+
+    def doAction(self, name: str) -> None:  # noqa: N802
+        w = self.widget()
+        if name == self.pressAction():
+            if w.isEnabled() and w.isVisible():
+                w.clicked.emit()
+            return
+        super().doAction(name)
+
+
+def _pressable_factory(_key: str, obj):
+    if _PRESSABLE and isinstance(obj, tuple(_PRESSABLE)) and isinstance(obj, QWidget):
+        return _PressableAccessible(obj)
+    return None
+
+
+def pressable(cls: type) -> type:
+    """Class decorator for a QWidget with a `clicked` signal that acts like a button: screen readers
+    get a button they can press, with the widget's accessible name (or else its labels' text)."""
+    if not _PRESSABLE:
+        QAccessible.installFactory(_pressable_factory)
+    _PRESSABLE.append(cls)
+    return cls
+
+
+@pressable
 class ClickCard(SoftCard):
     """A setting card that does something when clicked (or with Enter/Space): opens a page, a file or
     a question. Lights up under the pointer like Windows' own."""
@@ -198,4 +247,4 @@ class ClickCard(SoftCard):
             p.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 7, 7)
 
 
-__all__ = ["Avatar", "ClickCard", "ElidedLabel", "IconLabel", "NavDelegate"]
+__all__ = ["Avatar", "ClickCard", "ElidedLabel", "IconLabel", "NavDelegate", "pressable"]

@@ -50,6 +50,52 @@ def test_without_saved_bookmarks_it_says_so(cache):
     assert unframe(out.getvalue()) == [{"ok": False, "error": "no-bookmarks"}]
 
 
+def test_an_unknown_sign_out_state_hands_out_no_bookmarks(cache, monkeypatch):
+    from skyfold import auth
+
+    cache.write_text(json.dumps({"updated": "x", "tree": [{"t": "Private", "u": "https://p.example/"}]}))
+
+    def broken():
+        raise RuntimeError("cannot tell")
+
+    monkeypatch.setattr(auth, "signed_out", broken)
+    assert nh.answer({"cmd": "bookmarks"}) == {"ok": False, "error": "no-bookmarks"}
+    assert nh.answer({"cmd": "ping"}) == {"ok": True}  # (the check only guards private content)
+
+
+class Trickle(io.RawIOBase):
+    """A pipe that hands back at most the given number of bytes per read, like a short Windows read."""
+
+    def __init__(self, data, sizes):
+        self.data, self.sizes = bytearray(data), list(sizes)
+
+    def readable(self):
+        return True
+
+    def read(self, n=-1):
+        step = self.sizes.pop(0) if self.sizes else len(self.data)
+        n = len(self.data) if n is None or n < 0 else n
+        out = bytes(self.data[:min(n, step)])
+        del self.data[:len(out)]
+        return out
+
+
+@pytest.mark.parametrize("sizes", [[2], [4, 2], [1, 1, 1, 1, 3, 5], [3, 7]])
+def test_a_frame_split_across_reads_is_read_whole(cache, sizes):
+    out = io.BytesIO()
+    assert nh.serve(Trickle(frame({"cmd": "ping"}) + frame({"cmd": "ping"}), sizes), out) == 0
+    assert unframe(out.getvalue()) == [{"ok": True}, {"ok": True}]
+
+
+def test_oversized_or_cut_off_frames_are_still_refused(cache):
+    big = struct.pack("<I", nh.MAX_MESSAGE + 1) + b"{}"
+    assert nh.read_message(Trickle(big, [2, 2])) is None
+    whole = frame({"cmd": "ping"})
+    assert nh.read_message(Trickle(whole[:2], [1])) is None  # pipe closed inside the length
+    assert nh.read_message(Trickle(whole[:-3], [2, 4])) is None  # pipe closed inside the body
+    assert nh.read_message(Trickle(b"", [])) is None
+
+
 def test_only_our_extensions_count_as_a_browser_call():
     assert nh.is_native_call(["Skyfold.exe", f"chrome-extension://{nh.CHROME_ID}/", "--parent-window=0"])
     assert nh.is_native_call(["Skyfold.exe", "chrome-extension://ggcdepiimncfgfelhikkbjpdfikmfhdj/"])
