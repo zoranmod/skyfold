@@ -71,9 +71,6 @@
   <img src="docs/screenshots/settings-bookmarks.png" width="430" alt="Settings: Safari bookmarks for Firefox, Chrome and Edge">
   <img src="docs/screenshots/update.png" width="430" alt="A new version: what's new, and Update now">
 </p>
-<p>
-  <img src="docs/screenshots/notes-index.png" width="880" alt="Notes.html: your Apple Notes as a searchable library in your browser">
-</p>
 
 ## Safari bookmarks in Firefox or Chrome
 
