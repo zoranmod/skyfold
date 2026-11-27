@@ -160,6 +160,31 @@ def test_taskbar_at_the_top_stacks_downward(qapp, still, monkeypatch):
         flush(qapp)
 
 
+
+@pytest.mark.parametrize("animated", [False, True])
+def test_a_card_that_grows_with_its_photos_stays_above_the_taskbar(qapp, monkeypatch, animated):
+    """The photos are read after the card is placed; the taller card moves up instead of reaching
+    down over the taskbar (where its time line can't be seen), and the older card makes room."""
+    from PySide6.QtGui import QColor, QImage
+
+    monkeypatch.setattr(toast, "animations_on", lambda: animated)
+    toasts = Toasts(theme.DARK, quiet=loud)
+    try:
+        older = toasts.show("Drive synced", "Downloaded: 2", timeout=60_000)
+        card = toasts.show("Photos synced", "Downloaded: 2", timeout=60_000, images=["a.jpg", "b.jpg"])
+        short = card.height()
+        img = QImage(60, 60, QImage.Format_ARGB32)
+        img.fill(QColor("#3366cc"))
+        card._shot_ready("a.jpg", img)  # (as Windows' preview arrives)
+        assert card.height() > short
+        avail = QApplication.primaryScreen().availableGeometry()
+        bottom = avail.bottom() + 1 - toast.EDGE
+        assert pump(lambda: card.y() + card.height() - card.SHADOW == bottom and card.windowOpacity() > 0.99)
+        assert pump(lambda: older.y() + older.height() - older.SHADOW + toast.GAP == card.y() + card.SHADOW)
+    finally:
+        toasts.close_all()
+        flush(qapp)
+
 # timing and hover --------------------------------------------------------------------------------
 def test_card_goes_after_its_time(qapp, still):
     toasts = Toasts(theme.DARK, quiet=loud)

@@ -199,6 +199,7 @@ class ToastCard(QWidget):
     clicked = Signal()  # the card itself (not a button) was clicked
     closeRequested = Signal()  # the cross
     expired = Signal()  # its time is up
+    grown = Signal()  # it became taller (its photos arrived): the stack places it again
 
     def __init__(self, title: str, text: str, palette: dict[str, str], icon: str = "cloud",
                  tone: str | None = None, actions: Sequence[Action] = (), timeout: int = TIMEOUT_MS,
@@ -319,10 +320,13 @@ class ToastCard(QWidget):
             return
         from .panel_parts import rounded
 
+        before = self.height()  # (read first: showing the picture can already make the card taller)
         shot = self._shots[self._wanted.index(path)]
         shot.setPixmap(rounded(img, 44, 6, max(1.0, self.devicePixelRatioF())))
         shot.show()
         self.adjustSize()
+        if self.height() != before:
+            self.grown.emit()  # (a taller card would otherwise reach down over the taskbar)
 
     # look -----------------------------------------------------------------------------------------
     def _colors(self) -> dict[str, QColor]:
@@ -619,6 +623,7 @@ class Toasts:
         card.clicked.connect(run(on_click))
         card.closeRequested.connect(lambda: self.dismiss(card))
         card.expired.connect(lambda: self.dismiss(card))
+        card.grown.connect(lambda: self._regrow(card))
         card.destroyed.connect(lambda *_: self._forget(card))
 
         while len([c for c in self.cards if not c.leaving]) >= MAX_CARDS:
@@ -707,6 +712,17 @@ class Toasts:
             out[card] = QPoint(x, y)
             offset += inner_h + GAP
         return out
+
+    def _regrow(self, card: ToastCard) -> None:
+        """A card got taller after it was placed (its photos were read): it moves up so its bottom
+        stays above the taskbar, and the older cards make room. One still gliding in keeps fading in."""
+        if card.leaving or card not in self.cards:
+            return
+        pos = self._positions().get(card)
+        if pos is not None:
+            moving = card._move is not None and card._move.state() == QVariantAnimation.Running
+            card.glide(pos, (card.windowOpacity(), 1.0) if moving else None, duration=180)
+        self._reflow(skip=card)
 
     def _reflow(self, skip: ToastCard | None = None) -> None:
         for card, pos in self._positions().items():
