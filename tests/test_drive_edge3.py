@@ -200,7 +200,8 @@ def test_followup_is_not_set_forever_for_a_file_folder_clash(env25):
 # files (folder kept) on a 100k-file Drive.
 def test_count_is_not_quadratic(tmp_path):
     st = de.DriveState(tmp_path / "big.db")
-    with st._db:
+    with st.transaction():
+        assert st._db.in_transaction  # fixture setup should incur one commit for all 20,000 rows
         for i in range(20_000):
             st.put(de.Base(f"F{i % 100}/sub/file{i}.txt", False, "e", 1, 1.0, 1, False))
     s = de.DriveSyncer(st, FakeDrive(), tmp_path / "Drive", 25)
