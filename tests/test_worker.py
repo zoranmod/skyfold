@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QObject, Qt, QThread, Signal, Slot
@@ -31,6 +32,30 @@ class Driver(QObject):
     syncNow = Signal(bool)
     resolve = Signal(str, list)
     apply = Signal(object, bool, bool)
+
+
+def test_large_drive_question_counts_overlapping_paths_without_pairwise_scans():
+    prefix_checks = 0
+
+    class TrackedPath(str):
+        def startswith(self, *args):
+            nonlocal prefix_checks
+            prefix_checks += 1
+            return super().startswith(*args)
+
+    folders = [f"Batch/Set-{i}" for i in range(100)]
+    paths = [TrackedPath(f"{folder}/Garden plan.txt") for folder in folders]
+    rows = {path: SimpleNamespace(is_dir=False) for path in paths}
+    rows["Empty"] = SimpleNamespace(is_dir=True)
+    worker = wk.SyncWorker(Settings())
+    worker.drive_state = SimpleNamespace(all=lambda: rows)
+
+    worker._on_drive_pending(["Batch", *folders, folders[0], "Empty", "Untracked"], [paths[0]])
+
+    assert worker._drive_pending.files_to_cloud == 102
+    assert worker._drive_pending.files_to_pc == 1
+    # A per-folder scan over every file would do thousands of prefix checks here.
+    assert prefix_checks <= 4 * len(paths)
 
 
 def pump(cond, timeout=10.0):

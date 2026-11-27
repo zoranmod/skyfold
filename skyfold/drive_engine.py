@@ -78,6 +78,29 @@ class Base:
     #                          the PC size/time of the row stay the same)
 
 
+def affected_file_count(paths: list[str], rows: dict[str, Base]) -> int:
+    """Count files below the selected paths once, and empty or untracked entries once each."""
+    if not paths:
+        return 0
+    selected = set(paths)
+    covered = set()
+    files = 0
+    for path, row in rows.items():
+        if row.is_dir:
+            continue
+        matched = False
+        while True:
+            if path in selected:
+                covered.add(path)
+                matched = True
+            if "/" not in path:
+                break
+            path = path.rsplit("/", 1)[0]
+        if matched:
+            files += 1
+    return files + len(selected - covered)
+
+
 @dataclass
 class DriveResult:
     last_down: str = ""  # a file to show in Explorer when the activity entry is clicked
@@ -2229,37 +2252,16 @@ class DriveSyncer:
         # a quick pass only holds a slice: a deleted folder's files are elsewhere
         everything = self.state.all() if (to_cloud or to_pc) else {}
 
-        def tops_of(p: str, tops: set[str]) -> list[str]:
-            """The affected entries this path is (or lies inside)."""
-            found = []
-            while True:
-                if p in tops:
-                    found.append(p)
-                if "/" not in p:
-                    return found
-                p = p.rsplit("/", 1)[0]
-
-        def count(paths: list[str], _tree: dict) -> int:
-            # each file once, with its affected ancestors: one walk, never file x entry pairs
-            tops = set(paths)
-            files, covered = 0, set()
-            for p, b in everything.items():
-                if not b.is_dir:
-                    hit = tops_of(p, tops)
-                    if hit:
-                        files += 1
-                        covered.update(hit)
-            n = files + len(tops - covered)  # (an empty folder, or an entry with no file row, counts once)
+        def over_threshold(paths: list[str]) -> bool:
+            n = affected_file_count(paths, everything)
             total = sum(1 for b in everything.values() if not b.is_dir)
-            if n >= 5 and n > total // 2:
-                return threshold + 1  # more than half of everything (5 items or more): always ask
-            return n
+            return n > threshold or (n >= 5 and n > total // 2)
 
         if to_cloud:
             if not self.delete_pc_to_cloud:
                 for p in to_cloud:  # keep in iCloud: download it again
                     self.state.drop(p)
-            elif self._needs_answer(to_cloud, "cloud", count(to_cloud, base) > threshold, remote, everything):
+            elif self._needs_answer(to_cloud, "cloud", over_threshold(to_cloud), remote, everything):
                 res.pending_to_cloud = to_cloud
             else:
                 for p in to_cloud:
@@ -2290,7 +2292,7 @@ class DriveSyncer:
             if not self.delete_cloud_to_pc:
                 for p in to_pc:  # keep on PC: it will be uploaded again
                     self.state.drop(p)
-            elif self._needs_answer(to_pc, "pc", count(to_pc, base) > threshold, remote, everything):
+            elif self._needs_answer(to_pc, "pc", over_threshold(to_pc), remote, everything):
                 res.pending_to_pc = to_pc
             else:
                 queue = list(to_pc)

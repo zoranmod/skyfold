@@ -24,7 +24,7 @@ from . import auth
 from .config import STATE_DB, Settings
 from .drive_engine import MARKER as DRIVE_MARKER
 from .drive_engine import TMP_PREFIX as DRIVE_TMP
-from .drive_engine import DriveState, DriveSyncer, ignored
+from .drive_engine import DriveState, DriveSyncer, affected_file_count, ignored
 from .drive_remote import ICloudDrive
 from .notes_engine import ICloudNotes, NotesState, NotesSyncer
 from . import extras
@@ -957,23 +957,8 @@ class SyncWorker(QObject):
             if self.drive_state is not None:  # a folder counts with all the files inside it
                 rows = self.drive_state.all()
 
-                def files(tops: list[str]) -> int:
-                    top = set(tops)
-
-                    def under(p: str) -> bool:
-                        while True:
-                            if p in top:
-                                return True
-                            if "/" not in p:
-                                return False
-                            p = p.rsplit("/", 1)[0]
-
-                    # every file inside, and each item with no file at all (an empty folder) as one
-                    files = {p for p, b in rows.items() if not b.is_dir and under(p)}
-                    return len(files) + sum(1 for q in top if not any(f == q or f.startswith(q + "/")
-                                                                       for f in files))
-
-                pend.files_to_pc, pend.files_to_cloud = files(pend.to_pc), files(pend.to_cloud)
+                pend.files_to_pc = affected_file_count(pend.to_pc, rows)
+                pend.files_to_cloud = affected_file_count(pend.to_cloud, rows)
         if pend != self._drive_pending or getattr(pend, "gen", None) != getattr(self._drive_pending, "gen", None):
             self._drive_pending = pend
             if pend:
