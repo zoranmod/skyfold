@@ -27,6 +27,7 @@
 
 ## Features
 
+- **Made for Windows 11.** A see-through tray panel and windows in the style of Windows 11, with Light, Dark and a pure black OLED theme, and Skyfold's own notification cards (a bell keeps the ones that went away).
 - **iCloud Photos.** Downloads your whole library (photos, videos, Live Photo videos) to a folder you choose: all in one folder, by year, or by year and month. **Deletions travel both ways:** delete on the iPhone and the PC copy goes to the Recycle Bin; delete on the PC and the photo goes to "Recently Deleted" in iCloud.
 - **Upload from the PC (optional).** Turn on *Upload photos and videos I add to this folder to iCloud Photos* (**Settings → Photos**) and photos and videos in the photos folder that Skyfold didn't download go up to iCloud Photos and appear on your iPhone, **including ones already there when you turn it on**. A file is sent once it has stayed unchanged for two minutes. Sending is **one-way**: the file stays an ordinary file on the PC, deleting it on the PC or on the iPhone doesn't delete it on the other side, and Skyfold doesn't download it back as a second copy. Album folders, hidden files and cloud placeholders are never sent.
 - **One photos folder per Apple ID.** If you sign in with another Apple ID, Skyfold asks you to choose a photos folder for it; a folder that belongs to another Apple ID isn't synced. Downloaded photos sync deletions both ways; photos you send are one-way. Skyfold follows renamed and moved photos by their Windows file id; an editor that replaces the file plus a rename before the next check can still look like a deletion.
@@ -63,7 +64,7 @@
   <img src="docs/screenshots/settings-general.png" width="430" alt="Settings: General">
 </p>
 <p>
-  <img src="docs/screenshots/delete-confirm.png" width="430" alt="Skyfold asks before a large deletion">
+  <img src="docs/screenshots/delete-confirm.png" width="430" alt="Skyfold asks before a large deletion, with the photos as small pictures">
   <img src="docs/screenshots/find-my.png" width="430" alt="Find My: devices, battery and play sound">
 </p>
 <p>

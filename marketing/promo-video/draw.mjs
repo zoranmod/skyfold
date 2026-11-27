@@ -1,6 +1,11 @@
 // The drawing of the Skyfold promo video. draw(t) paints the frame at time t (seconds) and keeps no
 // state between frames: the same t always gives the same picture, so seeking, previews and
 // re-renders are exact. Everything shown is made up: no real photos, files or notes.
+//
+// The app's own surfaces (the tray panel, its notification card, the Photos and Notes windows) follow
+// the 1.1 design in mockups/premium-combined.html: they are drawn in the design's own pixels and
+// scaled into the card, so its sizes (14 px text, 32 px tiles, 34 px buttons, corners 6 / 8 / 12)
+// can be copied as they are.
 
 import {
   FPS, BEAT, EVENTS, OUTRO, PHASES, atFrame, clamp, cuts, easeInOut, easeOut, lerp, mark, rng, scenes, smooth,
@@ -14,11 +19,17 @@ let cut = cuts[format];
 const canvas = document.querySelector('canvas');
 const g = canvas.getContext('2d', { alpha: false });
 
-// --- brand ---------------------------------------------------------------------------------------
+// --- brand and the 1.1 design's dark tokens ---------------------------------------------------------
 const C = {
+  // the video's own backdrop, title column and rail
   bg: '#0d1016', bg2: '#131823', card: '#171c25', card2: '#1c2230', line: '#262e3d', line2: '#323c4f',
-  ink: '#edf1f7', muted: '#9ba7b9', soft: '#c3ccd9', accent: '#8fb8ff', blue: '#3b82f6', blue2: '#4f8dff',
-  green: '#7ad3a0', amber: '#f3c969', pink: '#f36c8c', win: '#1b1f27', win2: '#20252f', black: '#07090d',
+  ink: '#f3f5f8', muted: '#9ba7b9', soft: '#c3ccd9', blue: '#3b82f6', blue2: '#4f8dff', black: '#07090d',
+  // the app (mockups/premium-combined.html, [data-theme="dark"])
+  t2: 'rgba(243,245,248,0.74)', t3: 'rgba(243,245,248,0.52)',
+  accent: '#6fa8ff', accentStrong: '#4a90ff', onAccent: '#06142b', accentSoft: 'rgba(111,168,255,0.16)',
+  green: '#6fd39b', amber: '#f3c969', pink: '#f6809e', drive: '#7dacff', err: '#ff7a85',
+  mica: 'rgba(30,33,39,0.80)', micaSolid: '#1e2127', layer: 'rgba(255,255,255,0.045)', layer2: 'rgba(255,255,255,0.08)',
+  hover: 'rgba(255,255,255,0.09)', stroke: 'rgba(255,255,255,0.07)', stroke2: 'rgba(255,255,255,0.12)',
 };
 const DISPLAY = '"Segoe UI Variable Display", "Segoe UI", sans-serif';
 const TEXT = '"Segoe UI Variable Text", "Segoe UI", sans-serif';
@@ -38,6 +49,9 @@ const LAYOUT = {
 };
 let L = LAYOUT[format];
 export const CW = 700, CH = 460; // a scene's card, in its own units
+const CARD_SIZE = { tray: [700, 530] }; // the desktop is a little taller, for the panel
+const K = 0.75; // app windows: the design's pixels per card unit (a 933 x 613 px window)
+const KT = 0.76; // the tray panel and its card
 
 export function setFormat(f) {
   format = f === 'tall' ? 'tall' : 'wide';
@@ -67,8 +81,12 @@ function strokeRR(x, y, w, h, r, color, lw = 1) {
 function font(size, weight = 400, family = TEXT) {
   g.font = `${weight} ${size}px ${family}`;
 }
+function measure(s, size, weight = 400, family = TEXT) {
+  font(size, weight, family);
+  return g.measureText(s).width;
+}
 function text(s, x, y, { size = 14, weight = 400, color = C.ink, family = TEXT, align = 'left', base = 'alphabetic',
-  maxW } = {}) {
+  maxW, strike = 0 } = {}) {
   font(size, weight, family);
   g.fillStyle = color;
   g.textAlign = align;
@@ -78,7 +96,12 @@ function text(s, x, y, { size = 14, weight = 400, color = C.ink, family = TEXT, 
     s += '…';
   }
   g.fillText(s, x, y);
-  return g.measureText(s).width;
+  const w = g.measureText(s).width;
+  if (strike > 0) {
+    const x0 = align === 'center' ? x - w / 2 : align === 'right' ? x - w : x;
+    g.fillRect(x0, y - size * 0.3, w * clamp(strike), Math.max(1, size * 0.075));
+  }
+  return w;
 }
 function wrap(s, maxW, size, weight, family) {
   font(size, weight, family);
@@ -113,6 +136,76 @@ function mix(a, b, x) {
 function rgba(hex, a) {
   const [r, gg, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
   return `rgba(${r},${gg},${b},${a})`;
+}
+// a word marked by search (the design's <mark>: the warning colour at 35 %)
+function markBg(x, base, w, size) {
+  fillRR(x - 1, base - size * 0.92, w + 2, size * 1.25, 2, 'rgba(243,201,105,0.35)');
+}
+
+// --- the design's line icons (skyfold/ui/svgicons.py: a 20 x 20 grid, 1.6 px round strokes) --------
+const circ = (cx, cy, r) => `M${cx - r} ${cy}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0`;
+const rect = (x, y, w, h, r) => `M${x + r} ${y}h${w - 2 * r}a${r} ${r} 0 0 1 ${r} ${r}v${h - 2 * r}a${r} ${r} 0 0 1 ${-r} ${r}` +
+  `h${-(w - 2 * r)}a${r} ${r} 0 0 1 ${-r} ${-r}v${-(h - 2 * r)}a${r} ${r} 0 0 1 ${r} ${-r}z`;
+const ICON_D = {
+  photo: rect(2.5, 3.5, 15, 13, 2.5) + circ(7.2, 8, 1.6) + 'M17 13.5l-4-4-7.5 7',
+  folder: 'M2.5 6.2a2 2 0 0 1 2-2h3.3l1.8 1.8h5.9a2 2 0 0 1 2 2v6.8a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2z',
+  note: rect(4, 2.5, 12, 15, 2) + 'M7 7h6M7 10h6M7 13h4',
+  // the app's cog with eight teeth (not the mockup's rays)
+  gear: circ(10, 10, 2.6) + 'M8.17 4.08 L8.63 2.02 L11.37 2.02 L11.83 4.08 L12.89 4.52 L14.68 3.39 L16.61 5.32 L15.48 7.11 ' +
+    'L15.92 8.17 L17.98 8.63 L17.98 11.37 L15.92 11.83 L15.48 12.89 L16.61 14.68 L14.68 16.61 L12.89 15.48 L11.83 15.92 ' +
+    'L11.37 17.98 L8.63 17.98 L8.17 15.92 L7.11 15.48 L5.32 16.61 L3.39 14.68 L4.52 12.89 L4.08 11.83 L2.02 11.37 ' +
+    'L2.02 8.63 L4.08 8.17 L4.52 7.11 L3.39 5.32 L5.32 3.39 L7.11 4.52Z',
+  sync: 'M16 9a6 6 0 0 0-10.6-3.4M4 4v3h3M4 11a6 6 0 0 0 10.6 3.4M16 16v-3h-3',
+  check: 'M4.5 10.5l3.5 3.5 7.5-8',
+  chev: 'M8 5l5 5-5 5',
+  back: 'M12 5l-5 5 5 5',
+  chevUp: 'M5 12.5l5-5 5 5',
+  pin: 'M10 17.5s-5.5-4.8-5.5-9a5.5 5.5 0 0 1 11 0c0 4.2-5.5 9-5.5 9z' + circ(10, 8.5, 2),
+  more: circ(5, 10, 0.9) + circ(10, 10, 0.9) + circ(15, 10, 0.9),
+  stop: rect(5.5, 5.5, 9, 9, 1.5),
+  up: 'M10 15V5M6 9l4-4 4 4',
+  arrowL: 'M15 10H5M9 6l-4 4 4 4',
+  arrowR: 'M5 10h10M11 6l4 4-4 4',
+  dl: 'M10 4v9M6 9.5l4 4 4-4M4.5 16h11',
+  info: circ(10, 10, 7.5) + 'M10 9v5M10 6.3v.2',
+  clock: circ(10, 10, 7.5) + 'M10 6v4.3l2.8 1.7',
+  heart: 'M10 16.5s-6.5-3.9-6.5-8.6A3.6 3.6 0 0 1 10 5.8a3.6 3.6 0 0 1 6.5 2.1c0 4.7-6.5 8.6-6.5 8.6z',
+  trash: 'M4 6h12M8 6V4h4v2M5.5 6l.8 10h7.4l.8-10',
+  search: circ(9, 9, 5) + 'M13 13l4 4',
+  device: rect(6, 2.5, 8, 15, 2) + 'M9 14.8h2',
+  monitor: rect(2.5, 3.5, 15, 10.5, 1.5) + 'M7 17h6M10 14v3',
+  file: 'M5.5 2.5h6l3 3v11a1 1 0 0 1-1 1h-8a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z M11.5 2.5v3h3',
+};
+const ICON = {};
+for (const [k, d] of Object.entries(ICON_D)) ICON[k] = new Path2D(d);
+// an icon with its top left at (x, y), size wide; dash: 0..1 draws the stroke on
+function ico(name, x, y, size, color, { lw = 1.6, fill = null, dash = 1 } = {}) {
+  g.save();
+  g.translate(x, y);
+  g.scale(size / 20, size / 20);
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  g.lineWidth = lw;
+  g.strokeStyle = color;
+  if (name === 'more') {
+    g.fillStyle = color;
+    g.fill(ICON[name]);
+  } else {
+    if (fill) {
+      g.fillStyle = fill;
+      g.fill(ICON[name]);
+    }
+    if (dash < 1) g.setLineDash([16 * clamp(dash), 40]);
+    if (dash > 0) g.stroke(ICON[name]);
+  }
+  g.restore();
+}
+function spinIcon(cx, cy, size, color, angle, lw = 1.6) {
+  g.save();
+  g.translate(cx, cy);
+  g.rotate(angle);
+  ico('sync', -size / 2, -size / 2, size, color, { lw });
+  g.restore();
 }
 
 // --- the Skyfold mark (the same geometry as the app's icon, skyfold/ui/icons.py) -------------------
@@ -196,103 +289,240 @@ function skyMark(cx, cy, s, color = C.blue, { lw = s * 0.045, aw = s * 0.03, dra
   }
   g.restore();
 }
-function logoTile(cx, cy, s) {
-  if (icon.complete && icon.naturalWidth) g.drawImage(icon, cx - s / 2, cy - s / 2, s, s);
+function logoTile(cx, cy, s, r = 0) {
+  if (!(icon.complete && icon.naturalWidth)) return;
+  g.save();
+  if (r) {
+    rr(cx - s / 2, cy - s / 2, s, s, r);
+    g.clip();
+  }
+  g.drawImage(icon, cx - s / 2, cy - s / 2, s, s);
+  g.restore();
 }
 
-// --- made-up photos: small painted landscapes, the same for the same seed -------------------------
-const photoCache = new Map();
-const SKIES = [
-  ['#ff9a62', '#f6587a', '#3a2350'], ['#8fd3ff', '#4f8dff', '#1a2a5a'], ['#ffd86b', '#ff8a5b', '#5b2a4a'],
-  ['#a7f0d8', '#3fb6a8', '#12424a'], ['#c9b8ff', '#7a6cff', '#221c4a'], ['#ffe3b0', '#f2a65a', '#6a3b2a'],
-];
-export function photo(seed, w, h) {
-  const key = `${seed}:${w}x${h}`;
-  let c = photoCache.get(key);
-  if (c) return c;
-  c = document.createElement('canvas');
-  c.width = w;
-  c.height = h;
-  const p = c.getContext('2d');
-  const r = rng(seed * 7919 + 17);
-  r();
-  const kind = Math.floor(r() * 6);
-  const [s1, s2, s3] = SKIES[Math.floor(r() * SKIES.length)];
-  const sky = p.createLinearGradient(0, 0, 0, h);
-  sky.addColorStop(0, kind === 4 ? '#0b1430' : s2);
-  sky.addColorStop(0.65, kind === 4 ? '#1d2a5c' : s1);
-  sky.addColorStop(1, s1);
-  p.fillStyle = sky;
-  p.fillRect(0, 0, w, h);
-  const horizon = h * (0.45 + r() * 0.2);
-  if (kind === 0 || kind === 2 || kind === 5) { // sun over hills
-    p.fillStyle = 'rgba(255,240,200,0.9)';
-    p.beginPath();
-    p.arc(w * (0.25 + r() * 0.5), horizon - h * 0.08, Math.min(w, h) * (0.08 + r() * 0.06), 0, Math.PI * 2);
-    p.fill();
-    for (let k = 0; k < 3; k++) {
-      p.fillStyle = mixc(s3, '#000000', k * 0.25);
-      p.beginPath();
-      p.moveTo(0, h);
-      const base = horizon + k * h * 0.12;
-      for (let x = 0; x <= w; x += w / 8) p.lineTo(x, base - Math.sin(x / w * 6 + seed + k) * h * 0.05 - r() * h * 0.03);
-      p.lineTo(w, h);
-      p.fill();
+// --- the painted wallpaper "Glasswater Inlet" and its blurred copy (the acrylic behind the glass) -----
+// The same scene as the mockup's wallpaper (an original painting in code), in its 1380 x 550 units.
+const WALL = { sky: '#719793', haze: '#f3c893', pale: '#efefdf', coast: '#416b6b', water: '#658b84', fore: '#22464b' };
+function lcg(seed) {
+  return () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
+}
+let wallCache = null;
+function walls() {
+  if (wallCache) return wallCache;
+  const S = 2;
+  const sharp = document.createElement('canvas');
+  sharp.width = 1380 * S;
+  sharp.height = 550 * S;
+  const c = sharp.getContext('2d');
+  c.scale(S, S);
+  const rand = lcg(714);
+  const sky = c.createLinearGradient(0, 0, 193, 550);
+  sky.addColorStop(0, WALL.sky);
+  sky.addColorStop(0.69, WALL.haze);
+  sky.addColorStop(1, WALL.pale);
+  c.fillStyle = sky;
+  c.fillRect(0, 0, 1380, 550);
+  c.globalAlpha = 0.88;
+  c.fillStyle = WALL.pale;
+  c.beginPath();
+  c.arc(215, 125, 37, 0, Math.PI * 2);
+  c.fill();
+  c.fillStyle = WALL.coast;
+  [[0.24, 'M0 184L48 151 92 160 159 119 217 170 272 145 325 169 385 139 451 195 522 142 605 184 680 163 790 203 900 117 1050 194 1160 158 1380 201V315H0Z'],
+    [0.43, 'M0 215L36 230 83 198 120 188 176 217 258 168 282 173 314 150 366 182 409 169 467 204 517 182 610 228 720 190 810 235 980 172 1100 218 1380 171V315H0Z'],
+    [0.77, 'M0 245L68 213 132 229 180 223 254 261 330 242 397 221 448 226 510 200 550 215 609 205 690 238 734 223 840 271 948 228 1090 267 1220 199 1380 233V309H0Z'],
+  ].forEach(([a, d]) => {
+    c.globalAlpha = a;
+    c.fill(new Path2D(d));
+  });
+  c.globalAlpha = 0.8;
+  c.fillStyle = WALL.fore;
+  c.fill(new Path2D('M0 252Q60 235 125 259T240 273Q280 278 335 269T455 271Q520 281 640 280T812 285L990 296H0Z'));
+  c.globalAlpha = 1;
+  const lake = c.createLinearGradient(0, 296, 207, 551);
+  lake.addColorStop(0, WALL.pale);
+  lake.addColorStop(0.35, WALL.water);
+  lake.addColorStop(1, WALL.coast);
+  c.fillStyle = lake;
+  c.fillRect(0, 296, 1380, 255);
+  c.strokeStyle = WALL.pale;
+  c.lineCap = 'round';
+  c.lineWidth = 1;
+  for (let i = 0; i < 225; i++) {
+    const y = 302 + rand() * 246, x = rand() * 1450 - 30, len = 2 + rand() * 46;
+    c.globalAlpha = 0.06 + rand() * 0.22;
+    c.beginPath();
+    c.moveTo(Math.round(x), Math.round(y));
+    c.lineTo(Math.round(x) + Math.round(len), Math.round(y));
+    c.stroke();
+  }
+  c.globalAlpha = 1;
+  c.fillStyle = WALL.fore;
+  const edge = (x) => 369 + Math.sin(x / 66) * 10 + x * 0.2;
+  for (let i = 0; i < 113; i++) {
+    const x = -28 + i * 4.4, h = (17 + rand() * 40) * (1 - x / 600), y = edge(x);
+    c.beginPath();
+    c.moveTo(x, y - h);
+    for (const side of [1, -1]) {
+      const pts = [[0.32, 0.12], [0.29, 0.045], [0.56, 0.19], [0.49, 0.09], [0.8, 0.25], [0.7, 0.13], [1, 0.3]];
+      for (const [yy, xx] of (side === 1 ? pts : pts.slice().reverse())) c.lineTo(x + xx * h * side, y - h + h * yy);
     }
-  } else if (kind === 1) { // sea
-    p.fillStyle = '#1f5fa8';
-    p.fillRect(0, horizon, w, h - horizon);
-    p.fillStyle = 'rgba(255,255,255,0.55)';
-    for (let k = 0; k < 14; k++) p.fillRect(r() * w, horizon + r() * (h - horizon), w * (0.05 + r() * 0.1), 1.5);
-    p.fillStyle = '#e9d8a6';
-    p.beginPath();
-    p.moveTo(0, h);
-    p.quadraticCurveTo(w * 0.4, h * 0.82, w, h * (0.88 + r() * 0.08));
-    p.lineTo(w, h);
-    p.fill();
-  } else if (kind === 3) { // mountains
-    for (let k = 0; k < 3; k++) {
-      const peak = w * (0.15 + r() * 0.7), top = horizon - h * (0.2 + r() * 0.2) + k * h * 0.08;
-      p.fillStyle = mixc('#2b3d5a', s3, k * 0.3);
-      p.beginPath();
-      p.moveTo(peak - w * 0.6, h);
-      p.lineTo(peak, top);
-      p.lineTo(peak + w * 0.6, h);
-      p.fill();
-      p.fillStyle = 'rgba(255,255,255,0.85)';
-      p.beginPath();
-      p.moveTo(peak - w * 0.08, top + h * 0.08);
-      p.lineTo(peak, top);
-      p.lineTo(peak + w * 0.08, top + h * 0.08);
-      p.fill();
+    c.closePath();
+    c.fill();
+  }
+  c.beginPath();
+  for (let i = 0; i < 58; i++) c[i ? 'lineTo' : 'moveTo'](i * 8, edge(i * 8) - 2);
+  [[510, 480], [420, 481], [365, 477], [291, 497], [216, 496], [143, 520], [0, 542]].forEach(([x, y]) => c.lineTo(x, y));
+  c.closePath();
+  c.fill();
+  // acrylic: blur(40px) saturate(160%) of what is behind, at half size (it is soft anyway)
+  const blur = document.createElement('canvas');
+  blur.width = 690;
+  blur.height = 275;
+  const b = blur.getContext('2d');
+  b.fillStyle = '#6d8f8a';
+  b.fillRect(0, 0, 690, 275);
+  b.filter = 'blur(20px) saturate(160%)';
+  b.drawImage(sharp, -40, -40, 770, 355);
+  wallCache = { sharp, blur };
+  return wallCache;
+}
+// draws the crop [sx, sy, sw, sh] (wallpaper units) of the wallpaper or its blurred copy into a rect
+function wallTo(kind, crop, x, y, w, h) {
+  const img = walls()[kind];
+  const f = img.width / 1380;
+  g.drawImage(img, crop[0] * f, crop[1] * f, crop[2] * f, crop[3] * f, x, y, w, h);
+}
+// a floating surface's shadow (the design's shadow-3), under glass that covers it
+function floatShadow(x, y, w, h, r, blur = 48, dy = 18, a = 0.5) {
+  g.save();
+  g.shadowColor = `rgba(0,0,0,${a})`;
+  g.shadowBlur = blur;
+  g.shadowOffsetY = dy;
+  fillRR(x, y, w, h, r, C.micaSolid);
+  g.restore();
+}
+// Windows 11 acrylic: the wallpaper behind, blurred, under the design's mica tint
+function glass(x, y, w, h, r, crop, area, tint = C.mica) {
+  g.save();
+  rr(x, y, w, h, r);
+  g.clip();
+  wallTo('blur', crop, ...area);
+  g.fillStyle = tint;
+  g.fillRect(x, y, w, h);
+  g.restore();
+}
+
+// --- made-up photos: small paintings (the mockup's painting(), the same for the same index) --------
+const KINDS = ['inlet', 'dusk', 'coast', 'snow', 'orchard', 'city'];
+const PAL = { inlet: ['#8cbcb9', '#f3d69c', '#668e85', '#214f59', '#426d68'], dusk: ['#7c7d9e', '#f6a47b', '#a37874', '#4c5067', '#70747e'],
+  coast: ['#88b9c6', '#e0d5a9', '#a7a37f', '#3e6960', '#4c9c98'], snow: ['#829db5', '#ebe8db', '#8196a4', '#4b6273', '#c6d1d2'],
+  orchard: ['#8dada1', '#f6d0a0', '#af975b', '#465b42', '#829258'], city: ['#404a6a', '#c38679', '#796d79', '#344055', '#485569'] };
+const PS = 1.5; // paintings are 400 x 280, kept at 1.5x for the big viewer
+const paintCache = new Map();
+export function painting(index) {
+  if (paintCache.has(index)) return paintCache.get(index);
+  const cv = document.createElement('canvas');
+  cv.width = 400 * PS;
+  cv.height = 280 * PS;
+  const c = cv.getContext('2d');
+  c.scale(PS, PS);
+  const rand = lcg(index * 723 + 55), kind = KINDS[index % 6];
+  const [sky, haze, back, fore, water] = PAL[kind], shift = Math.floor(rand() * 44);
+  const box = (x, y, w, h, col) => { c.fillStyle = col; c.fillRect(x, y, w, h); };
+  const poly = (pts, col) => {
+    c.fillStyle = col;
+    c.beginPath();
+    pts.forEach(([x, y], j) => (j ? c.lineTo(x, y) : c.moveTo(x, y)));
+    c.closePath();
+    c.fill();
+  };
+  const ridge = (y, amp, col) => {
+    const pts = [[-16, 280]];
+    for (let x = -16; x <= 422; x += 16) pts.push([x, y + Math.sin(x / 48 + shift) * amp + Math.sin(x / 20 + shift) * amp * 0.24 + rand() * 7]);
+    pts.push([422, 280]);
+    poly(pts, col);
+  };
+  const gr = c.createLinearGradient(0, 0, 0, 150);
+  gr.addColorStop(0, sky);
+  gr.addColorStop(1, haze);
+  box(0, 0, 400, 280, gr);
+  c.fillStyle = '#f8dfaa';
+  c.beginPath();
+  c.arc(78 + shift * 3, 58 + shift / 2, kind === 'city' ? 10 : 20, 0, 7);
+  c.fill();
+  ridge(126, 24, back);
+  ridge(153, 20, fore);
+  if (kind === 'snow') {
+    for (let x = -70; x < 435; x += 65) {
+      const h = 64 + rand() * 58;
+      poly([[x, 185], [x + 50, h], [x + 116, 187]], back);
+      poly([[x + 25, (185 + h) / 2], [x + 50, h], [x + 71, h + 30], [x + 52, h + 20], [x + 42, h + 27], [x + 39, h + 18]], '#f1efe5');
     }
-  } else { // a city at night
-    for (let k = 0; k < 9; k++) {
-      const bw = w * (0.08 + r() * 0.1), bh = h * (0.2 + r() * 0.45), bx = (k / 9) * w + r() * 6;
-      p.fillStyle = '#121a33';
-      p.fillRect(bx, h - bh, bw, bh);
-      p.fillStyle = 'rgba(255,214,120,0.8)';
-      for (let y = h - bh + 6; y < h - 4; y += 9) for (let x = bx + 3; x < bx + bw - 4; x += 7) if (r() > 0.55) p.fillRect(x, y, 3, 4);
+    ridge(207, 10, water);
+  } else if (kind === 'orchard') {
+    box(0, 166, 400, 114, water);
+    poly([[174, 280], [239, 165], [247, 166], [255, 280]], haze);
+    for (let j = 0; j < 65; j++) {
+      const x = rand() * 400, y = 161 + rand() * 110;
+      if (x > 162 && x < 265) continue;
+      const s = (y - 130) * 0.21;
+      box(x, y - s, 3, s, fore);
+      for (let t = 0; t < 7; t++) {
+        c.fillStyle = t % 3 === 0 ? '#c48855' : back;
+        c.beginPath();
+        c.arc(x + (rand() - 0.5) * s * 1.7, y - s - rand() * s, s * 0.48, 0, 7);
+        c.fill();
+      }
+    }
+  } else {
+    box(0, 171, 400, 110, water);
+    for (let i = 0; i < 330; i++) {
+      c.globalAlpha = 0.1 + rand() * 0.35;
+      box(rand() * 400, 173 + rand() * 108, 2 + rand() * 22, 1, haze);
+    }
+    c.globalAlpha = 1;
+    if (kind === 'city') {
+      for (let x = -5; x < 407;) {
+        const w = 9 + rand() * 22, h = 18 + rand() * 68;
+        box(x, 170 - h, w, h, fore);
+        for (let y = 177 - h; y < 165; y += 8) for (let xx = x + 3; xx < x + w - 2; xx += 6) if (rand() > 0.55) box(xx, y, 2, 3, haze);
+        x += w + 2;
+      }
+    } else if (kind === 'coast') {
+      poly([[0, 111], [68, 127], [135, 171], [160, 192], [103, 193], [61, 213], [0, 225]], fore);
+      poly([[0, 117], [65, 135], [140, 176], [124, 173], [70, 152], [0, 134]], back);
+    } else {
+      poly([[0, 174], [55, 158], [88, 169], [124, 174], [90, 178], [0, 183]], fore);
+      for (let i = 0; i < 35; i++) {
+        const x = rand() * 90, h = rand() * 14 + 2;
+        poly([[x, 170], [x + 3, 169 - h], [x + 6, 170]], fore);
+      }
     }
   }
-  photoCache.set(key, c);
-  return c;
+  for (let i = 0; i < 2600; i++) {
+    c.globalAlpha = 0.025 + rand() * 0.07;
+    box(rand() * 400, rand() * 280, 1 + rand() * 2, 1, rand() > 0.5 ? '#fff' : '#13292c');
+  }
+  c.globalAlpha = 1;
+  paintCache.set(index, cv);
+  return cv;
 }
-function mixc(a, b, x) {
-  return mix(a, b, x);
-}
-// draw a photo covering the rect (cut to fit)
+// draw a photo covering the rect (cut to fit); 48 paintings, like the mockup's library
 function photoIn(seed, x, y, w, h, r = 0) {
-  const pw = Math.max(8, Math.round(w / 8) * 8), ph = Math.max(8, Math.round(h / 8) * 8);
-  const img = photo(seed, pw, ph);
+  const img = painting(((seed % 48) + 48) % 48);
+  const iw = img.width, ih = img.height, a = w / h;
+  let sx = 0, sy = 0, sw = iw, sh = ih;
+  if (a > iw / ih) { sh = iw / a; sy = (ih - sh) / 2; } else { sw = ih * a; sx = (iw - sw) / 2; }
   g.save();
   if (r) {
     rr(x, y, w, h, r);
     g.clip();
   }
-  g.drawImage(img, x, y, w, h);
+  g.drawImage(img, sx, sy, sw, sh, x, y, w, h);
   g.restore();
 }
+const libraryPhoto = (i) => (i * 5 + 1) % 48; // the Photos window's 48 pictures, in the mockup's order
 
 // --- little UI pieces ----------------------------------------------------------------------------
 function cursor(x, y, press = 0) {
@@ -330,23 +560,14 @@ function ripple(x, y, p) {
   g.stroke();
   g.restore();
 }
-function check(x, y, s, p, color = C.green, lw = s * 0.16) {
-  if (p <= 0) return;
-  g.save();
-  g.strokeStyle = color;
-  g.lineWidth = lw;
-  g.lineCap = 'round';
-  g.lineJoin = 'round';
-  const pts = [[x - s * 0.45, y], [x - s * 0.12, y + s * 0.33], [x + s * 0.5, y - s * 0.35]];
-  const l1 = Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]);
-  const l2 = Math.hypot(pts[2][0] - pts[1][0], pts[2][1] - pts[1][1]);
-  g.setLineDash([(l1 + l2) * clamp(p), l1 + l2]);
+// the design's status badge: a soft disc with the check drawing itself
+function okBadge(cx, cy, r, p, color = C.green) {
   g.beginPath();
-  g.moveTo(...pts[0]);
-  g.lineTo(...pts[1]);
-  g.lineTo(...pts[2]);
-  g.stroke();
-  g.restore();
+  g.arc(cx, cy, r, 0, Math.PI * 2);
+  g.fillStyle = rgba(color, 0.16);
+  g.fill();
+  const s = r;
+  ico('check', cx - s / 2, cy - s / 2, s, color, { lw: 2, dash: p });
 }
 function heartPath(x, y, s) {
   g.beginPath();
@@ -365,38 +586,109 @@ function heart(x, y, s, fill, color = C.ink) {
   g.lineWidth = 1.6;
   g.stroke();
 }
-function windowFrame(x, y, w, h, title, { bar = 34, bg = C.win } = {}) {
+// buttons (px): the plain one on a layer, the main one in the accent with a little light at the top
+function btn(x, y, w, h, label, iconName, { primary = false, size = 13, iconSize = 18, color } = {}) {
   g.save();
-  g.shadowColor = 'rgba(0,0,0,0.5)';
-  g.shadowBlur = 40;
-  g.shadowOffsetY = 18;
-  fillRR(x, y, w, h, 10, bg);
+  g.shadowColor = 'rgba(0,0,0,0.3)';
+  g.shadowBlur = 2;
+  g.shadowOffsetY = 1;
+  if (primary) {
+    const fillG = g.createLinearGradient(0, y, 0, y + h);
+    fillG.addColorStop(0, '#5d9cff');
+    fillG.addColorStop(1, C.accentStrong);
+    fillRR(x, y, w, h, 8, fillG);
+  } else fillRR(x, y, w, h, 8, C.layer2);
   g.restore();
-  strokeRR(x + 0.5, y + 0.5, w - 1, h - 1, 10, C.line2);
-  if (bar) {
-    text(title, x + 14, y + 22, { size: 12.5, color: C.soft });
-    const bx = x + w - 104;
-    g.strokeStyle = C.muted;
-    g.lineWidth = 1.1;
-    g.beginPath();
-    g.moveTo(bx + 10, y + 17);
-    g.lineTo(bx + 20, y + 17);
-    g.rect(bx + 44, y + 12, 9, 9);
-    g.moveTo(bx + 78, y + 12);
-    g.lineTo(bx + 87, y + 21);
-    g.moveTo(bx + 87, y + 12);
-    g.lineTo(bx + 78, y + 21);
-    g.stroke();
+  if (primary) {
+    const edge = g.createLinearGradient(0, y, 0, y + h);
+    edge.addColorStop(0, '#8cbcff');
+    edge.addColorStop(0.2, C.accentStrong);
+    edge.addColorStop(0.85, C.accentStrong);
+    edge.addColorStop(1, '#3b74cf');
+    strokeRR(x + 0.5, y + 0.5, w - 1, h - 1, 7.5, edge);
+  } else strokeRR(x + 0.5, y + 0.5, w - 1, h - 1, 7.5, C.stroke2);
+  const ink = color ?? (primary ? C.onAccent : C.ink);
+  const tw = label ? measure(label, size, 600) : 0;
+  const total = (iconName ? iconSize : 0) + (iconName && label ? 8 : 0) + tw;
+  let cx = x + (w - total) / 2;
+  if (iconName) {
+    ico(iconName, cx, y + (h - iconSize) / 2, iconSize, ink);
+    cx += iconSize + 8;
   }
+  if (label) text(label, cx, y + h / 2 + size * 0.36, { size, weight: 600, color: ink });
 }
+// an app window in the design's pixels: glass, a hairline edge, the title bar with its caption buttons
+const WIN_CROP = [210, 0, 837, 550];
+function appWindow(w, h, title, drawIcon) {
+  floatShadow(0, 0, w, h, 12, 56, 22, 0.55);
+  glass(0, 0, w, h, 12, WIN_CROP, [0, 0, w, h]);
+  strokeRR(0.5, 0.5, w - 1, h - 1, 12, C.stroke2);
+  drawIcon(14, 12, 16);
+  text(title, 40, 24.5, { size: 12, color: C.t2 });
+  g.strokeStyle = C.t2;
+  g.lineWidth = 1;
+  const cx = w - 138;
+  g.beginPath();
+  g.moveTo(cx + 18, 20.5);
+  g.lineTo(cx + 28, 20.5);
+  g.rect(cx + 64.5, 15.5, 9, 9);
+  g.moveTo(cx + 110, 15);
+  g.lineTo(cx + 120, 25);
+  g.moveTo(cx + 120, 15);
+  g.lineTo(cx + 110, 25);
+  g.stroke();
+}
+const skyfoldIcon = (x, y, s) => logoTile(x + s / 2, y + s / 2, s, 4);
+// the shared content layer of the app windows: radius 8 8 12 8
+function pane(x, y, w, h) {
+  rr(x, y, w, h, [8, 8, 12, 8]);
+  g.fillStyle = C.layer;
+  g.fill();
+  rr(x + 0.5, y + 0.5, w - 1, h - 1, [8, 8, 12, 8]);
+  g.strokeStyle = C.stroke;
+  g.lineWidth = 1;
+  g.stroke();
+}
+// a sidebar row (Photos and Notes): 34 px, the accent marker when it is the selected one
+function sideRow(x, y, w, label, iconName, iconColor, count, on) {
+  if (on) {
+    fillRR(x, y, w, 34, 6, C.layer2);
+    fillRR(x, y + 9, 3, 16, 1.5, C.accent);
+  }
+  ico(iconName, x + 10, y + 8, 18, iconColor);
+  text(label, x + 38, y + 22, { size: 14, weight: on ? 600 : 400 });
+  if (count !== undefined) text(String(count), x + w - 10, y + 21.5, { size: 12, family: MONO, color: C.t3, align: 'right' });
+}
+function sideLabel(x, y, s) {
+  text(s, x + 10, y, { size: 12, weight: 600, color: C.t3 });
+}
+// a search box (px), with the focus line when typing
+function searchBox(x, y, w, h, s, { placeholder = 'Search', focus = 0, caret = false, bg = C.layer2 } = {}) {
+  fillRR(x, y, w, h, 6, bg);
+  strokeRR(x + 0.5, y + 0.5, w - 1, h - 1, 6, C.stroke2);
+  if (focus > 0) withAlpha(focus, () => {
+    g.save();
+    rr(x, y, w, h, 6);
+    g.clip();
+    g.fillStyle = C.accent;
+    g.fillRect(x, y + h - 2, w, 2);
+    g.restore();
+  });
+  ico('search', x + 10, y + (h - 18) / 2, 18, C.t3);
+  if (s) {
+    const tw = text(s, x + 36, y + h / 2 + 5, { size: 13.5 });
+    if (caret) {
+      g.fillStyle = C.ink;
+      g.fillRect(x + 37 + tw, y + h / 2 - 8, 1.2, 16);
+    }
+  } else text(placeholder, x + 36, y + h / 2 + 5, { size: 13.5, color: C.t3 });
+}
+// File Explorer's folders (filled, as Windows draws them)
 function folderIcon(x, y, s, color = C.amber) {
   g.save();
-  g.fillStyle = color;
-  rr(x, y + s * 0.1, s * 0.45, s * 0.2, s * 0.06);
-  g.fill();
-  fillRR(x, y + s * 0.22, s, s * 0.68, s * 0.1, color);
-  g.fillStyle = 'rgba(0,0,0,0.12)';
-  g.fillRect(x, y + s * 0.3, s, s * 0.04);
+  fillRR(x, y + s * 0.1, s * 0.48, s * 0.24, s * 0.06, mix(color, '#000000', 0.22));
+  fillRR(x, y + s * 0.2, s, s * 0.7, s * 0.08, mix(color, '#000000', 0.22));
+  fillRR(x, y + s * 0.3, s, s * 0.6, s * 0.08, color);
   g.restore();
 }
 function fileIcon(x, y, s, color) {
@@ -417,7 +709,7 @@ function phoneFrame(x, y, w, h, fn) {
   g.save();
   rr(x + m, y + m, w - 2 * m, h - 2 * m, w * 0.12);
   g.clip();
-  fillRR(x + m, y + m, w - 2 * m, h - 2 * m, 0, '#11151c');
+  fillRR(x + m, y + m, w - 2 * m, h - 2 * m, 0, '#111418');
   fn(x + m, y + m, w - 2 * m, h - 2 * m);
   g.restore();
   fillRR(x + w * 0.36, y + m + 5, w * 0.28, 7, 4, '#000');
@@ -498,9 +790,6 @@ function titleBlock(sc) {
     const a = smooth(mark(sc.local, 0.05, 0.4));
     withAlpha(a, () => {
       const w = text(sc.phase.toUpperCase(), T.x, T.y, { size: 14, weight: 700, color: C.accent, family: TEXT });
-      g.save();
-      g.globalAlpha *= 1;
-      g.restore();
       if (sc.isNew) {
         fillRR(T.x + w + 12, T.y - 15, 46, 20, 10, rgba(C.amber, 0.18));
         text('NEW', T.x + w + 35, T.y - 0.5, { size: 11.5, weight: 700, color: C.amber, align: 'center' });
@@ -586,6 +875,7 @@ function rail(scene, show) {
 
 // --- the card for a scene: springs in, then flies into its dot on the rail ------------------------
 function stage(sc, render) {
+  const [w, h] = CARD_SIZE[sc.id] ?? [CW, CH];
   const pi = PHASES.findIndex((p) => p.id === sc.id);
   const enter = spring(mark(sc.local, 0, 0.6));
   const leave = smooth(1 - sc.remaining / OUTRO);
@@ -598,8 +888,8 @@ function stage(sc, render) {
   g.translate(cx, cy);
   g.rotate((1 - enter) * 0.03 - leave * 0.25);
   g.scale(s, s);
-  g.translate(-CW / 2, -CH / 2);
-  withAlpha(clamp(enter * 3) * (1 - smooth((leave - 0.75) / 0.25)), () => render(sc));
+  g.translate(-w / 2, -h / 2);
+  withAlpha(clamp(enter * 3) * (1 - smooth((leave - 0.75) / 0.25)), () => render(sc, w, h));
   g.restore();
 }
 
@@ -644,10 +934,10 @@ function hook(sc, t) {
     g.scale(ps, ps);
     phoneFrame(-75, -150, 150, 300, (x, y, w) => {
       text('Photos', x + 12, y + 34, { size: 14, weight: 700 });
-      for (let i = 0; i < 12; i++) photoIn(i * 3 + 1, x + 8 + (i % 3) * ((w - 16) / 3), y + 46 + Math.floor(i / 3) * 44,
+      for (let i = 0; i < 12; i++) photoIn(libraryPhoto(i), x + 8 + (i % 3) * ((w - 16) / 3), y + 46 + Math.floor(i / 3) * 44,
         (w - 16) / 3 - 3, 41, 3);
-      fillRR(x + 8, y + 232, w - 16, 34, 8, '#1b212b');
-      text('Notes · Garden plan', x + 16, y + 253, { size: 10.5, color: C.soft });
+      fillRR(x + 8, y + 232, w - 16, 34, 8, '#1d2128');
+      text('Notes · Garden plan', x + 16, y + 253, { size: 10.5, color: C.t2 });
     });
     g.restore();
     const [mx, my, ms] = P.pc;
@@ -655,11 +945,8 @@ function hook(sc, t) {
     g.translate(mx + (1 - devIn) * 40, my);
     g.scale(ms, ms);
     monitorFrame(-190, -125, 380, 240, (x, y, w, h) => {
-      const wall = g.createLinearGradient(x, y, x + w, y + h);
-      wall.addColorStop(0, '#16233f');
-      wall.addColorStop(1, '#2a1838');
-      g.fillStyle = wall;
-      g.fillRect(x, y, w, h);
+      // the desktop's painted wallpaper (the same one as the tray scene)
+      wallTo('sharp', [0, 0, 550 * (w / h), 550], x, y, w, h);
       // folders arrive once the cloud links them
       const names = ['iCloud Photos', 'iCloud Drive', 'Apple Notes'];
       names.forEach((n, i) => {
@@ -669,13 +956,22 @@ function hook(sc, t) {
         const fx = x + 40 + i * 108, fy = y + 70;
         g.translate(fx + 26, fy + 26);
         g.scale(p, p);
-        folderIcon(-26, -26, 52, [C.pink, C.blue2, C.amber][i]);
+        g.shadowColor = 'rgba(0,0,0,0.35)';
+        g.shadowBlur = 8;
+        folderIcon(-26, -26, 52, [C.pink, C.drive, C.amber][i]);
         g.restore();
-        withAlpha(p, () => text(n, fx + 26, fy + 78, { size: 11, align: 'center', color: C.ink }));
+        withAlpha(p, () => {
+          g.save();
+          g.shadowColor = 'rgba(0,0,0,0.8)';
+          g.shadowBlur = 4;
+          text(n, fx + 26, fy + 78, { size: 11, align: 'center', color: '#ffffff', weight: 600 });
+          g.restore();
+        });
       });
-      fillRR(x, y + h - 18, w, 18, 0, 'rgba(10,12,16,0.85)');
+      g.fillStyle = 'rgba(30,33,39,0.88)';
+      g.fillRect(x, y + h - 18, w, 18);
       withAlpha(1 - smooth(mark(lt, tA + 0.4, 0.5)), () => text('?', x + w / 2, y + h / 2 + 10,
-        { size: 46, weight: 700, color: rgba(C.muted, 0.5), align: 'center', family: DISPLAY }));
+        { size: 46, weight: 700, color: 'rgba(255,255,255,0.75)', align: 'center', family: DISPLAY }));
     });
     g.restore();
     // the link: dots from the phone to the cloud to the PC
@@ -726,348 +1022,537 @@ function hook(sc, t) {
   });
 }
 
-function tray(sc) {
+// --- Tray: the Windows 11 desktop, the tray icon, the panel (376 px wide in the design) ----------------
+const DESK_CROP = [30, 0, 726, 550]; // the part of the wallpaper on the 700 x 530 desktop
+const PW = 376, PH = 600;
+const TRAY_EVENTS = [
+  ['up', C.drive, 'Field guide.pdf', 'Uploaded · iCloud Drive/Trips', '14:05'],
+  ['art', 3, 'IMG_2041.HEIC', 'Downloaded · 2026/11', '09:12'],
+  ['note', C.amber, 'Garden plan', 'Updated · Notes/Home', '07:15'],
+];
+function tray(sc, w, h) {
   const t = sc.local;
   const tc = ev(sc, 0), tok = ev(sc, 1);
-  // desktop
-  const wall = g.createLinearGradient(0, 0, CW, CH);
-  wall.addColorStop(0, '#1a2747');
-  wall.addColorStop(0.6, '#2b1d43');
-  wall.addColorStop(1, '#3b2140');
+  const area = [0, 0, w, h];
+  floatShadow(0, 0, w, h, 14, 40, 18);
   g.save();
-  g.shadowColor = 'rgba(0,0,0,0.5)';
-  g.shadowBlur = 40;
-  g.shadowOffsetY = 18;
-  fillRR(0, 0, CW, CH, 14, '#1a2747');
-  g.restore();
-  g.save();
-  rr(0, 0, CW, CH, 14);
+  rr(0, 0, w, h, 14);
   g.clip();
-  g.fillStyle = wall;
-  g.fillRect(0, 0, CW, CH);
-  for (let i = 0; i < 3; i++) {
-    g.fillStyle = rgba('#8fb8ff', 0.06);
-    g.beginPath();
-    g.ellipse(120 + i * 200, 180 + i * 40, 260, 90, -0.3, 0, Math.PI * 2);
-    g.fill();
-  }
-  // taskbar
-  g.fillStyle = 'rgba(16,19,26,0.92)';
-  g.fillRect(0, CH - 40, CW, 40);
-  for (let i = 0; i < 5; i++) fillRR(220 + i * 44, CH - 32, 26, 26, 6, i === 0 ? '#3b82f6' : 'rgba(255,255,255,0.12)');
-  // tray: ^, Skyfold, wifi, sound, clock
-  text('^', 470, CH - 14, { size: 14, color: C.soft, align: 'center' });
-  const ix = 506, iy = CH - 20;
+  wallTo('sharp', DESK_CROP, 0, 0, w, h);
+  // the taskbar: the same glass, a hairline on top, the apps in the middle, the tray on the right
+  const tb = h - 40;
+  glass(0, tb, w, 40, 0, DESK_CROP, area, 'rgba(30,33,39,0.86)');
+  g.fillStyle = C.stroke2;
+  g.fillRect(0, tb, w, 1);
+  const my = tb + 20;
+  // start
+  [[0, 0], [1, 0], [0, 1], [1, 1]].forEach(([i, j]) => {
+    const sg = g.createLinearGradient(0, my - 9, 0, my + 9);
+    sg.addColorStop(0, '#7fb6ff');
+    sg.addColorStop(1, '#3b82f6');
+    fillRR(262 + i * 9.5, my - 9 + j * 9.5, 8.5, 8.5, 1.5, sg);
+  });
+  ico('search', 300, my - 9, 18, C.ink);
+  folderIcon(332, my - 10, 20, C.amber);
+  fillRR(338, tb + 35, 8, 2.5, 1.25, C.t3);
+  g.beginPath();
+  g.arc(381, my, 9, 0, Math.PI * 2);
+  const bg2 = g.createLinearGradient(372, my - 9, 390, my + 9);
+  bg2.addColorStop(0, '#5fd3c6');
+  bg2.addColorStop(1, '#3b82f6');
+  g.fillStyle = bg2;
+  g.fill();
+  fillRR(406, my - 9, 18, 18, 4, '#2a2f38');
+  text('>_', 415, my + 4, { size: 9, weight: 700, family: MONO, align: 'center', color: C.ink });
+  // the tray
+  ico('chevUp', 526, my - 7, 14, C.t2);
+  const ix = 556, iy = my;
   const hover = clamp(1 - Math.abs(t - tc) / 0.4);
-  fillRR(ix - 16, iy - 15, 32, 30, 6, rgba('#ffffff', 0.12 * hover + (t > tc ? 0.1 : 0)));
-  skyMark(ix, iy, 26, '#ffffff', { lw: 1.9, aw: 1.4, inset: 0.03 });
-  g.strokeStyle = C.soft;
-  g.lineWidth = 1.5;
+  const open = easeOut(mark(t, tc + 0.05, 0.3));
+  fillRR(ix - 13, iy - 14, 26, 28, 4, `rgba(255,255,255,${0.09 * Math.max(hover, open)})`);
+  logoTile(ix, iy, 16, 3);
+  g.strokeStyle = C.ink;
+  g.lineWidth = 1.4;
+  g.lineCap = 'round';
   for (let k = 0; k < 3; k++) {
     g.beginPath();
-    g.arc(544, iy + 6, 4 + k * 4, -Math.PI * 0.75, -Math.PI * 0.25);
+    g.arc(584, iy + 6, 3 + k * 3.6, -Math.PI * 0.75, -Math.PI * 0.25);
     g.stroke();
   }
   g.beginPath();
-  g.moveTo(572, iy - 3);
-  g.lineTo(576, iy - 3);
-  g.lineTo(581, iy - 7);
-  g.lineTo(581, iy + 7);
-  g.lineTo(576, iy + 3);
-  g.lineTo(572, iy + 3);
+  g.moveTo(602, iy - 3);
+  g.lineTo(606, iy - 3);
+  g.lineTo(611, iy - 7);
+  g.lineTo(611, iy + 7);
+  g.lineTo(606, iy + 3);
+  g.lineTo(602, iy + 3);
   g.closePath();
   g.stroke();
-  text('14:32', 650, CH - 23, { size: 11.5, color: C.ink, align: 'right' });
-  text('25.11.2026', 650, CH - 9, { size: 11.5, color: C.ink, align: 'right' });
-  // the panel slides up
-  const open = spring(mark(t, tc + 0.05, 0.6));
+  text('14:32', 688, tb + 17, { size: 11, color: C.ink, align: 'right' });
+  text('25.11.2026', 688, tb + 31, { size: 11, color: C.ink, align: 'right' });
+  // the notification card when the sync is done, beside the panel
+  const px = w - 12 - PW * KT, py = tb - 12 - PH * KT;
+  const tCard = tok + 0.25;
+  const ca = easeOut(mark(t, tCard, 0.3));
+  if (ca > 0) {
+    const cw = 360 * KT, chh = 182 * KT;
+    const cx = px - 9 - cw, cy = tb - 12 - chh + (1 - ca) * 14 * KT;
+    withAlpha(ca, () => {
+      g.save();
+      g.translate(cx + cw / 2, cy + chh / 2);
+      g.scale(lerp(0.98, 1, ca), lerp(0.98, 1, ca));
+      g.translate(-cw / 2, -chh / 2);
+      floatShadow(0, 0, cw, chh, 12 * KT, 36, 12, 0.45);
+      g.restore();
+      const s = lerp(0.98, 1, ca);
+      const ox = cx + (cw - cw * s) / 2, oy = cy + (chh - chh * s) / 2;
+      glass(ox, oy, cw * s, chh * s, 12 * KT * s, DESK_CROP, area);
+      g.save();
+      g.translate(ox, oy);
+      g.scale(KT * s, KT * s);
+      photosCard(t - tCard);
+      g.restore();
+    });
+  }
+  // the panel rises 12 px and fades in
   if (open > 0) {
-    const px = 368, pw = 300, ph = 404, py = CH - 48 - ph + (1 - open) * 40;
-    withAlpha(clamp(open * 2), () => panel(px, py, pw, ph, t, tc, tok));
+    const oy = py + (1 - open) * 12 * KT;
+    withAlpha(open, () => {
+      floatShadow(px, oy, PW * KT, PH * KT, 12 * KT, 40, 14, 0.5);
+      glass(px, oy, PW * KT, PH * KT, 12 * KT, DESK_CROP, area);
+      g.save();
+      g.translate(px, oy);
+      g.scale(KT, KT);
+      panel(t, tc, tok);
+      g.restore();
+    });
   }
   g.restore();
-  const [x, y] = path([[0, 250, 200], [tc - 0.05, ix + 2, iy - 2], [tc + 0.8, 250, 260]], t);
+  strokeRR(0.5, 0.5, w - 1, h - 1, 14, C.stroke2);
+  const [x, y] = path([[0, 250, 200], [tc - 0.05, ix + 2, iy - 2], [tc + 0.8, 320, 230]], t);
   cursor(x, y, clickPress(t, tc));
   ripple(ix, iy, (t - tc) / 0.5);
 }
-function panel(x, y, w, h, t, tc, tok) {
-  g.save();
-  g.shadowColor = 'rgba(0,0,0,0.55)';
-  g.shadowBlur = 30;
-  g.shadowOffsetY = 12;
-  fillRR(x, y, w, h, 12, '#1a1f28');
-  g.restore();
-  strokeRR(x + 0.5, y + 0.5, w - 1, h - 1, 12, C.line2);
-  // header
-  fillRR(x + 14, y + 14, 34, 34, 9, '#243049');
-  skyMark(x + 31, y + 31, 28, '#a9c4ef', { lw: 1.8, aw: 1.3, inset: 0.12 });
-  text('Skyfold', x + 58, y + 30, { size: 17, weight: 700, family: DISPLAY });
-  const ok = t >= tok;
-  if (ok) {
-    check(x + 64, y + 42, 9, (t - tok) / 0.3, C.green, 2);
-    text('Everything is in sync', x + 74, y + 46, { size: 11.5, color: C.green });
-  } else {
-    g.save();
-    g.translate(x + 63, y + 42);
-    g.rotate(t * 6);
-    g.strokeStyle = C.accent;
-    g.lineWidth = 1.8;
+// the panel's content, in the design's pixels (376 x 600)
+function panel(t, tc, tok) {
+  const W = PW, H = PH;
+  strokeRR(0.5, 0.5, W - 1, H - 1, 12, C.stroke2);
+  const prog = easeInOut(mark(t, tc + 0.2, tok - tc - 0.3));
+  const n = Math.round(lerp(612, 1284, prog));
+  const pct = Math.floor((n / 1284) * 100);
+  // the syncing state goes first, then the finished one comes in (never both at once)
+  const busy = 1 - smooth(mark(t, tok, 0.12)), ok = smooth(mark(t, tok + 0.1, 0.2));
+  // head: the logo tile, the name, the status line, Settings
+  const lg = g.createLinearGradient(0, 14, 0, 50);
+  lg.addColorStop(0, '#1e293b');
+  lg.addColorStop(1, '#0b1220');
+  fillRR(14, 14, 36, 36, 10, lg);
+  strokeRR(14.5, 14.5, 35, 35, 9.5, 'rgba(255,255,255,0.08)');
+  logoTile(32, 32, 30, 7);
+  text('Skyfold', 62, 30, { size: 16, weight: 600, family: DISPLAY });
+  withAlpha(busy, () => {
+    spinIcon(68, 42, 12, C.accent, t * 5, 2);
+    text('Syncing', 79, 46.5, { size: 12, color: C.accent });
+  });
+  withAlpha(ok, () => {
     g.beginPath();
-    g.arc(0, 0, 4.5, 0, Math.PI * 1.4);
-    g.stroke();
-    g.restore();
-    text('Syncing…', x + 74, y + 46, { size: 11.5, color: C.accent });
-  }
-  // rows
-  fillRR(x + 12, y + 62, w - 24, 150, 9, '#212734');
-  const p = easeOut(mark(t, tc + 0.3, tok - tc - 0.3));
+    g.arc(65.5, 42.2, 6.5, 0, Math.PI * 2);
+    g.fillStyle = rgba(C.green, 0.22);
+    g.fill();
+    g.beginPath();
+    g.arc(65.5, 42.2, 3.5, 0, Math.PI * 2);
+    g.fillStyle = C.green;
+    g.fill();
+    text('Everything is in sync', 75, 46.5, { size: 12, color: C.green });
+  });
+  ico('gear', 336, 23, 18, C.t2);
+  // the status card
+  fillRR(12, 60, 352, 72, 8, C.layer);
+  strokeRR(12.5, 60.5, 351, 71, 8, C.stroke);
+  withAlpha(busy, () => {
+    g.beginPath();
+    g.arc(46, 96, 22, 0, Math.PI * 2);
+    g.fillStyle = C.layer2;
+    g.fill();
+    g.beginPath();
+    g.moveTo(46, 96);
+    g.arc(46, 96, 22, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (n / 1284));
+    g.closePath();
+    g.fillStyle = C.accent;
+    g.fill();
+    g.beginPath();
+    g.arc(46, 96, 18, 0, Math.PI * 2);
+    g.fillStyle = C.micaSolid;
+    g.fill();
+    text(`${pct}%`, 46, 100, { size: 11, weight: 600, family: MONO, align: 'center' });
+    text('Downloading photos', 80, 92, { size: 14, weight: 600, family: DISPLAY });
+    const eta = n < 900 ? 3 : n < 1150 ? 2 : 1;
+    text(`${num(n)} of 1,284 · 4.2 MB/s · ~${eta} min`, 80, 110.5, { size: 12.5, family: MONO, color: C.t2 });
+  });
+  withAlpha(ok, () => {
+    okBadge(46, 96, 22, mark(t, tok + 0.05, 0.5));
+    text('Up to date', 80, 83, { size: 14, weight: 600, family: DISPLAY });
+    wrap('Photos, iCloud Drive and Notes are in step with iCloud.', 272, 12.5, 400, TEXT)
+      .forEach((l, i) => text(l, 80, 101 + i * 18, { size: 12.5, color: C.t2 }));
+  });
+  // the services, one card with hairlines across
+  fillRR(12, 140, 352, 170, 8, C.layer);
+  strokeRR(12.5, 140.5, 351, 169, 8, C.stroke);
   const rows = [
-    ['Photos', `${num(1284 * p)} photos · ${num(36 * p)} videos`, C.pink],
-    ['iCloud Drive', `${num(4210 * p)} files · ${(31 * p).toFixed(1)} GB`, C.blue2],
-    ['Notes', `${num(86 * p)} notes`, C.amber],
+    ['photo', 'Photos', C.pink, `${num(n)} of 1,284`, '1,284 photos · 36 videos'],
+    ['folder', 'iCloud Drive', C.drive, 'Waiting', '4,210 files · 31.0 GB'],
+    ['note', 'Notes', C.amber, 'Up to date', '86 notes'],
   ];
-  rows.forEach(([name, sub, color], i) => {
-    const ry = y + 62 + i * 50;
-    fillRR(x + 24, ry + 12, 26, 26, 7, rgba(color, 0.2));
-    strokeRR(x + 24.5, ry + 12.5, 25, 25, 7, rgba(color, 0.6));
-    if (i === 0) {
-      g.strokeStyle = color;
-      g.lineWidth = 1.4;
-      g.strokeRect(x + 30, ry + 19, 14, 11);
-    } else if (i === 1) folderIcon(x + 30, ry + 18, 14, color);
-    else {
-      g.strokeStyle = color;
-      g.lineWidth = 1.4;
-      g.strokeRect(x + 32, ry + 18, 10, 14);
+  rows.forEach(([ic, name, color, working, idle], i) => {
+    const ry = 141 + i * 56;
+    if (i) {
+      g.fillStyle = C.stroke;
+      g.fillRect(13, ry - 0.5, 350, 1);
     }
-    text(name, x + 60, ry + 24, { size: 13, weight: 650 });
-    text(sub, x + 60, ry + 40, { size: 11, color: C.muted });
-    text('›', x + w - 28, ry + 32, { size: 16, color: C.muted });
-    if (i < 2) {
-      g.fillStyle = C.line2;
-      g.fillRect(x + 60, ry + 50, w - 84, 1);
-    }
+    fillRR(24, ry + 12, 32, 32, 9, rgba(color, 0.16));
+    ico(ic, 31.5, ry + 19.5, 17, color);
+    text(name, 68, ry + 25, { size: 14, weight: 600 });
+    withAlpha(busy, () => text(working, 68, ry + 43.5, { size: 12.5, color: C.t3 }));
+    withAlpha(ok, () => text(idle, 68, ry + 43.5, { size: 12.5, color: C.t3 }));
+    ico('chev', 334, ry + 19, 18, C.t3);
   });
-  // storage
-  const sy = y + 230;
-  text('iCloud storage', x + 16, sy, { size: 11.5, color: C.soft });
-  text('74 GB of 200 GB', x + w - 16, sy, { size: 11.5, color: C.soft, align: 'right' });
-  fillRR(x + 16, sy + 9, w - 32, 6, 3, C.line2);
-  const bw = w - 32;
-  const segs = [[0.19, C.pink], [0.145, C.blue2], [0.035, C.amber]];
-  let sx = x + 16;
-  segs.forEach(([f, color]) => {
-    const ww = bw * f * p;
+  // iCloud storage
+  text('iCloud storage', 16, 335.5, { size: 12.5, color: C.t2 });
+  text('74 / 200 GB', 360, 335.5, { size: 12.5, family: MONO, color: C.t2, align: 'right' });
+  fillRR(16, 348, 344, 6, 3, C.layer2);
+  const grow = easeOut(mark(t, tc + 0.2, 0.7));
+  let sx = 16;
+  [[0.19, C.pink], [0.145, C.drive], [0.035, C.amber]].forEach(([f, color]) => {
+    const ww = 344 * f * grow;
+    if (ww > 1) fillRR(sx, 348, ww, 6, 3, color);
+    sx += ww + 2;
+  });
+  let lx = 16;
+  [['Photos', '38 GB', C.pink], ['Drive', '29 GB', C.drive], ['Other', '7 GB', C.amber]].forEach(([k, v, color]) => {
+    g.beginPath();
+    g.arc(lx + 3.5, 371, 3.5, 0, Math.PI * 2);
     g.fillStyle = color;
-    g.fillRect(sx, sy + 9, ww, 6);
-    sx += ww;
+    g.fill();
+    lx += 13;
+    lx += text(`${k} `, lx, 375, { size: 12, color: C.t3 });
+    lx += text(v, lx, 375, { size: 12, weight: 600, color: C.t2 }) + 14;
   });
-  // recent activity
-  text('Recent activity', x + 16, sy + 44, { size: 11.5, color: C.muted, weight: 600 });
-  const acts = [['Budget 2026.xlsx', 'Downloaded · iCloud Drive/Projects', 'just now'],
-    ['IMG_2048.HEIC', 'Downloaded · Photos/2026/11', '1 min ago']];
-  acts.forEach(([n, s, when], i) => {
-    const a = easeOut(mark(t, tc + 0.6 + i * 0.25, 0.4));
-    withAlpha(a, () => {
-      const ay = sy + 68 + i * 38 + (1 - a) * 8;
-      text('↓', x + 20, ay + 6, { size: 13, color: C.accent });
-      text(n, x + 38, ay, { size: 12 });
-      text(s, x + 38, ay + 15, { size: 10.5, color: C.muted });
-      text(when, x + w - 16, ay, { size: 10.5, color: C.muted, align: 'right' });
+  // Today: what happened, newest first; the finished download arrives on top
+  text('Today', 16, 406, { size: 12, weight: 600, color: C.t3 });
+  text('Clear', 360, 406, { size: 12.5, weight: 600, color: C.accent, align: 'right' });
+  const ins = easeOut(mark(t, tok + 0.1, 0.3)), arrive = smooth(mark(t, tok + 0.32, 0.25));
+  const list = [['art', 7, '672 new photos', 'Downloaded · 2026/11', 'now'], ...TRAY_EVENTS];
+  g.save();
+  g.beginPath();
+  g.rect(0, 413, W, 132);
+  g.clip();
+  list.forEach((e, i) => {
+    const [kind, a, title, sub, when] = e;
+    const isNew = i === 0;
+    const ry = isNew ? 413 + (1 - arrive) * 8 : 413 + (i - 1 + ins) * 50;
+    const fade = clamp((545 - (ry + 18)) / 32) * (isNew ? arrive : 1);
+    withAlpha(fade, () => {
+      if (kind === 'art') photoIn(a, 16, ry + 6, 32, 32, 7);
+      else {
+        fillRR(16, ry + 6, 32, 32, 9, rgba(a, 0.16));
+        ico(kind, 23.5, ry + 13.5, 17, a);
+      }
+      text(title, 60, ry + 22, { size: 14, weight: 500 });
+      text(sub, 60, ry + 40, { size: 12, color: C.t3 });
+      text(when, 360, ry + 30, { size: 12, family: MONO, color: C.t3, align: 'right' });
     });
   });
-  fillRR(x + 12, y + h - 44, w - 24, 32, 8, '#243049');
-  text('⟳  Sync now', x + 26, y + h - 23, { size: 12.5, weight: 650, color: C.accent });
+  g.restore();
+  // the footer: when, the main button (Stop while syncing), three square buttons
+  g.fillStyle = 'rgba(30,33,39,0.4)';
+  g.fillRect(0.5, 545, W - 1, H - 545.5);
+  g.fillStyle = C.stroke;
+  g.fillRect(0.5, 545, W - 1, 1);
+  withAlpha(busy, () => {
+    text('Started', 12, 567.5, { size: 11.5, color: C.t3 });
+    text('at 14:31', 12, 582, { size: 11.5, color: C.t3 });
+    btn(106, 555, 132, 34, 'Stop', 'stop');
+  });
+  withAlpha(ok, () => {
+    text('Last checked', 12, 567.5, { size: 11.5, color: C.t3 });
+    text('at 14:32', 12, 582, { size: 11.5, color: C.t3 });
+    btn(106, 555, 132, 34, 'Sync now', 'sync', { primary: true });
+  });
+  ['folder', 'pin', 'more'].forEach((ic, i) => btn(246 + i * 42, 555, 34, 34, '', ic));
+}
+// the notification card (360 px wide in the design): tile, "Skyfold · Photos · now", a photo strip, buttons, a countdown
+function photosCard(since) {
+  const W = 360, H = 182;
+  strokeRR(0.5, 0.5, W - 1, H - 1, 12, C.stroke2);
+  fillRR(14, 14, 32, 32, 9, rgba(C.pink, 0.16));
+  ico('photo', 21.5, 21.5, 17, C.pink);
+  logoTile(65, 22.5, 14, 4);
+  text('Skyfold · Photos · now', 78, 27, { size: 12, color: C.t3 });
+  text('672 new photos', 58, 48, { size: 14, weight: 600, family: DISPLAY });
+  text('Saved to Pictures › iCloud Photos › 2026 › 11.', 58, 67, { size: 13, color: C.t2 });
+  [7, 12, 2].forEach((p, i) => photoIn(p, 58 + i * 48, 80, 44, 44, 6));
+  const b1 = measure('View photos', 12.5, 600) + 24, b2 = measure('Show in folder', 12.5, 600) + 24;
+  btn(58, 136, b1, 30, 'View photos', null, { size: 12.5 });
+  btn(58 + b1 + 8, 136, b2, 30, 'Show in folder', null, { size: 12.5 });
+  g.save();
+  rr(0, 0, W, H, 12);
+  g.clip();
+  g.fillStyle = rgba(C.pink, 0.75);
+  g.fillRect(0, H - 2, W * (1 - clamp(since / 7)), 2);
+  g.restore();
 }
 
+// --- Photos: they fly into iCloud Photos\2026\11 in File Explorer --------------------------------------
+function explorerBar(W, crumbs, searchLabel) {
+  ico('arrowL', 14, 53, 18, C.t2);
+  ico('arrowR', 44, 53, 18, C.t3);
+  ico('up', 74, 53, 18, C.t2);
+  const aw = W - 104 - 236;
+  fillRR(104, 46, aw, 32, 6, C.layer2);
+  strokeRR(104.5, 46.5, aw - 1, 31, 6, C.stroke2);
+  let cx = 116;
+  crumbs.forEach((c, i) => {
+    cx += text(c, cx, 66.5, { size: 12.5, color: i === crumbs.length - 1 ? C.ink : C.t2 }) + 7;
+    if (i < crumbs.length - 1) {
+      ico('chev', cx - 2, 56, 12, C.t3);
+      cx += 15;
+    }
+  });
+  searchBox(W - 222, 46, 208, 32, '', { placeholder: searchLabel });
+}
 function photos(sc) {
   const t = sc.local;
-  windowFrame(0, 0, CW, CH, 'iCloud Photos — File Explorer');
-  // address bar
-  fillRR(14, 40, CW - 28, 28, 6, C.win2);
-  const crumbs = ['This PC', 'Pictures', 'iCloud Photos', '2026', '11'];
-  let cx = 26;
-  crumbs.forEach((c, i) => {
-    cx += text(c, cx, 59, { size: 12, color: i === crumbs.length - 1 ? C.ink : C.soft }) + 8;
-    if (i < crumbs.length - 1) cx += text('›', cx, 59, { size: 12, color: C.muted }) + 8;
-  });
-  // nav pane
-  const nav = [['Home', 0], ['Pictures', 0], ['iCloud Photos', 1], ['2025', 2], ['2026', 2], ['Albums', 2],
+  const W = CW / K, H = CH / K;
+  g.save();
+  g.scale(K, K);
+  appWindow(W, H, 'iCloud Photos — File Explorer', (x, y, s) => folderIcon(x, y, s, C.amber));
+  explorerBar(W, ['This PC', 'Pictures', 'iCloud Photos', '2026', '11'], 'Search 11');
+  // the navigation pane
+  const nav = [['Home', 0], ['Pictures', 0], ['iCloud Photos', 1], ['2025', 2], ['2026', 2], ['11', 3], ['Albums', 2],
     ['iCloud Drive', 0], ['Documents', 0]];
   nav.forEach(([n, lvl], i) => {
-    const y = 96 + i * 30;
-    if (n === '2026') fillRR(10, y - 18, 140, 26, 5, rgba(C.blue, 0.22));
-    folderIcon(18 + (lvl ? (lvl - 1) * 12 + 12 : 0), y - 13, 15, n.startsWith('iCloud') ? C.blue2 : C.amber);
-    text(n, 40 + (lvl ? (lvl - 1) * 12 + 12 : 0), y, { size: 12, color: C.ink });
+    const y = 92 + i * 34;
+    if (n === '11') {
+      fillRR(8, y, 184, 32, 6, C.layer2);
+      fillRR(8, y + 9, 3, 14, 1.5, C.accent);
+    }
+    const x = 20 + lvl * 14;
+    folderIcon(x, y + 7, 18, n.startsWith('iCloud') ? C.drive : C.amber);
+    text(n, x + 26, y + 21, { size: 13 });
   });
-  g.fillStyle = C.line;
-  g.fillRect(160, 78, 1, CH - 110);
-  // the grid of photos arriving from iCloud
-  const cols = 5, tw = 86, gap = 14, gx = 182, gy = 92;
+  // the folder, the photos arriving from iCloud
+  const px = 200, py = 88, pw = W - 208, ph = H - 88 - 36;
+  pane(px, py, pw, ph);
+  const cols = 5, tw = 118, gap = 20, gx = px + 22, gy = py + 20;
   const names = [2031, 2032, 2033, 2034, 2035, 2036, 2037, 2038, 2039, 2040, 2041, 2042, 2043, 2044, 2045];
   names.forEach((n, i) => {
     const at = 0.6 + i * 0.16;
     const p = spring(mark(t, at, 0.7));
     if (p <= 0) return;
-    const x = gx + (i % cols) * (tw + gap), y = gy + Math.floor(i / cols) * (tw + 26);
+    const x = gx + (i % cols) * (tw + gap), y = gy + Math.floor(i / cols) * (tw * 0.75 + 40);
     g.save();
-    g.translate(x + tw / 2, lerp(-140, y + tw / 2, p));
+    g.translate(x + tw / 2, lerp(-190, y + tw * 0.375, p));
     g.scale(lerp(0.6, 1, p), lerp(0.6, 1, p));
     withAlpha(clamp(p * 2), () => {
-      photoIn(n, -tw / 2, -tw / 2, tw, tw * 0.78, 5);
+      photoIn(n, -tw / 2, -tw * 0.375, tw, tw * 0.75, 4);
       if (n % 4 === 1) { // a Live Photo's video sits next to it, in the same folder
-        fillRR(-tw / 2 + 4, -tw / 2 + 4, 26, 14, 7, 'rgba(0,0,0,0.5)');
-        text('LIVE', -tw / 2 + 17, -tw / 2 + 14.5, { size: 8.5, weight: 700, align: 'center' });
+        fillRR(-tw / 2 + 6, -tw * 0.375 + 6, 34, 17, 4, 'rgba(0,0,0,0.5)');
+        text('LIVE', -tw / 2 + 23, -tw * 0.375 + 18.5, { size: 10, weight: 700, align: 'center' });
       }
-      text(`IMG_${n}.HEIC`, 0, tw * 0.28 + 14, { size: 10.5, color: C.soft, align: 'center' });
+      text(`IMG_${n}.HEIC`, 0, tw * 0.375 + 20, { size: 12, color: C.t2, align: 'center' });
     });
     g.restore();
   });
-  // status bar
-  g.fillStyle = C.line;
-  g.fillRect(0, CH - 30, CW, 1);
+  // the status bar
   const tok = ev(sc, 4);
   if (t < tok) {
     const p = easeInOut(mark(t, 0.5, tok - 0.5));
-    text(`Downloading · ${num(lerp(0, 1284, p))} of 1,284 photos`, 16, CH - 11, { size: 11.5, color: C.accent });
-    fillRR(CW - 196, CH - 19, 180, 5, 3, C.line2);
-    fillRR(CW - 196, CH - 19, 180 * p, 5, 3, C.blue);
+    spinIcon(22, H - 18, 14, C.accent, t * 5, 2);
+    text(`Downloading · ${num(lerp(0, 1284, p))} of 1,284 photos`, 36, H - 13.5, { size: 12, color: C.accent });
+    fillRR(W - 230, H - 21, 216, 4, 2, C.layer2);
+    fillRR(W - 230, H - 21, 216 * p, 4, 2, C.accentStrong);
   } else {
-    check(22, CH - 15, 10, (t - tok) / 0.3, C.green, 2);
-    text('1,284 photos · 36 videos · all on this PC', 34, CH - 11, { size: 11.5, color: C.green });
+    okBadge(22, H - 18, 9, (t - tok) / 0.35);
+    text('1,284 photos · 36 videos · all on this PC', 38, H - 13.5, { size: 12, color: C.green });
   }
+  g.restore();
 }
 
+// --- Gallery: the Photos window (sidebar, the pictures under a title, the floating switch, the viewer) ---
 function gallery(sc) {
   const t = sc.local, len = sc.length;
   const tClick = ev(sc, 0), tHeart = ev(sc, 1);
-  windowFrame(0, 0, CW, CH, 'Photos — Skyfold', { bg: '#15181e' });
-  // sidebar
-  const sw = 150;
-  fillRR(1, 34, sw, CH - 35, 0, '#1a1e26');
-  const side = [['Library', true], ['Recently added'], ['Favourites'], ['Videos'], ['Live Photos'], ['Screenshots']];
-  side.forEach(([n, sel], i) => {
-    const y = 64 + i * 30;
-    if (sel) fillRR(8, y - 18, sw - 16, 26, 6, rgba(C.blue, 0.25));
-    text(n, 22, y, { size: 12.5, color: sel ? C.ink : C.soft, weight: sel ? 650 : 400 });
-  });
-  text('Albums', 22, 262, { size: 11, color: C.muted, weight: 700 });
-  ['Holidays', 'Family', 'Garden'].forEach((n, i) => text(n, 22, 290 + i * 28, { size: 12.5, color: C.soft }));
-  // grid, gliding up as the wheel turns (the smooth scrolling of the new window)
-  const gx = sw + 4, gw = CW - gx - 4, cols = 5, ts = gw / cols;
-  const glides = [[0.5, 70], [1.2, 110], [1.9, 90]];
+  const W = CW / K, H = CH / K; // 933 x 613
+  g.save();
+  g.scale(K, K);
+  appWindow(W, H, 'Photos', skyfoldIcon);
+  // the sidebar
+  const fav = t > tHeart + 0.1 ? 6 : 5;
+  sideRow(8, 44, 184, 'Library', 'photo', C.pink, 48, true);
+  sideRow(8, 80, 184, 'Recently added', 'clock', C.ink, 12);
+  sideRow(8, 116, 184, 'Favourites', 'heart', C.ink, fav);
+  sideLabel(8, 174, 'Media types');
+  sideRow(8, 182, 184, 'Videos', 'dl', C.ink, 3);
+  sideRow(8, 218, 184, 'Live Photos', 'photo', C.ink, 2);
+  sideLabel(8, 274, 'Albums');
+  sideRow(8, 282, 184, 'Glasswater', 'folder', C.ink, 9);
+  sideRow(8, 318, 184, 'Orchard walks', 'folder', C.ink, 6);
+  // the pictures, gliding up as the wheel turns
+  const px = 200, py = 40, pw = W - 208, ph = H - 48;
+  pane(px, py, pw, ph);
+  const cols = 4, ts = (pw - 2 * (cols - 1)) / cols;
+  const glides = [[0.16, 93], [0.39, 147], [0.62, 120]].map(([f, d]) => [f * tClick, d]);
   let scroll = 0;
   glides.forEach(([at, d]) => { scroll += d * easeOut(mark(t, at, 0.5)); });
-  const target = { row: 5, col: 2 };
+  const target = 13; // row 3, column 1
+  const tileAt = (i) => ({ x: px + (i % cols) * (ts + 2), y: py + 74 + Math.floor(i / cols) * (ts + 2) - scroll, w: ts, h: ts });
   g.save();
-  rr(gx, 34, gw, CH - 35, 0);
+  rr(px, py, pw, ph, [8, 8, 12, 8]);
   g.clip();
-  for (let row = 0; row < 9; row++) {
-    for (let col = 0; col < cols; col++) {
-      const x = gx + col * ts, y = 34 + row * ts - scroll;
-      if (y > CH || y + ts < 34) continue;
-      photoIn(row * 7 + col * 3 + 11, x, y, ts - 2, ts - 2);
-      if ((row * cols + col) % 9 === 4) heart(x + ts - 16, y + ts - 16, 10, 1, '#fff');
-    }
+  for (let i = 0; i < 48; i++) {
+    const r = tileAt(i);
+    if (r.y > py + ph || r.y + ts < py) continue;
+    photoIn(libraryPhoto(i), r.x, r.y, r.w, r.h);
   }
-  // header over the photos
-  const hg = g.createLinearGradient(0, 34, 0, 110);
-  hg.addColorStop(0, 'rgba(10,12,16,0.85)');
-  hg.addColorStop(1, 'rgba(10,12,16,0)');
-  g.fillStyle = hg;
-  g.fillRect(gx, 34, gw, 76);
-  text(scroll > 150 ? 'November 2026' : 'October – November 2026', gx + 16, 64, { size: 19, weight: 700, family: DISPLAY });
-  text('1,284 items', gx + 16, 82, { size: 11.5, color: C.soft });
-  // the Years / Months / All Photos pill
-  fillRR(gx + gw / 2 - 120, CH - 46, 240, 30, 15, 'rgba(32,37,47,0.92)');
-  ['Years', 'Months', 'All Photos'].forEach((n, i) => {
-    const x = gx + gw / 2 - 120 + 8 + i * 76;
-    if (i === 2) fillRR(x, CH - 42, 72, 22, 11, '#3a4354');
-    text(n, x + 36, CH - 27, { size: 11.5, align: 'center', color: i === 2 ? C.ink : C.soft, weight: 600 });
+  // the title over the pictures, on a band of the window's colour
+  const band = g.createLinearGradient(0, py, 0, py + 74);
+  band.addColorStop(0, 'rgba(30,33,39,0.92)');
+  band.addColorStop(1, 'rgba(30,33,39,0)');
+  g.fillStyle = band;
+  g.fillRect(px, py, pw, 74);
+  text('Library', px + 18, py + 37, { size: 24, weight: 600, family: DISPLAY });
+  text('October – November 2026 · 48 items', px + 18, py + 56, { size: 12.5, color: C.t2 });
+  searchBox(px + pw - 238, py + 14, 220, 34, '', { bg: C.mica });
+  // Years · Months · All Photos, floating at the bottom (the selection is neutral, not the accent)
+  const segs = ['Years', 'Months', 'All Photos'];
+  const sw = segs.map((s) => measure(s, 13, 600) + 26);
+  const segW = sw.reduce((a, b) => a + b, 0) + 8, segH = 38;
+  const sx0 = px + pw / 2 - segW / 2, sy0 = py + ph - 14 - segH;
+  g.save();
+  g.shadowColor = 'rgba(0,0,0,0.35)';
+  g.shadowBlur = 24;
+  g.shadowOffsetY = 8;
+  fillRR(sx0, sy0, segW, segH, 10, 'rgba(30,33,39,0.9)');
+  g.restore();
+  strokeRR(sx0 + 0.5, sy0 + 0.5, segW - 1, segH - 1, 10, C.stroke);
+  let bx = sx0 + 4;
+  segs.forEach((s, i) => {
+    if (i === 2) {
+      g.save();
+      g.shadowColor = 'rgba(0,0,0,0.3)';
+      g.shadowBlur = 2;
+      g.shadowOffsetY = 1;
+      fillRR(bx, sy0 + 4, sw[i], segH - 8, 7, '#2a2e36');
+      g.restore();
+    }
+    text(s, bx + sw[i] / 2, sy0 + segH / 2 + 4.5, { size: 13, weight: 600, align: 'center', color: i === 2 ? C.ink : C.t2 });
+    bx += sw[i];
   });
   g.restore();
-  // the viewer opens from the photo clicked
-  const tile = { x: gx + target.col * ts, y: 34 + target.row * ts - scroll, w: ts - 2, h: ts - 2 };
+  // the viewer opens from the photo clicked, on the same material
+  const tile = tileAt(target);
   const vo = easeInOut(mark(t, tClick + 0.05, 0.5));
+  const heartX = px + pw - 12 - 34 * 3 - 20, heartY = py + 10; // the heart button's corner
   if (vo > 0) {
-    const vx = 1, vy = 34, vw = CW - 2, vh = CH - 35;
-    withAlpha(clamp(vo * 1.6), () => fillRR(vx, vy, vw, vh, 0, '#0b0d11'));
-    const area = { x: 60, y: 84, w: CW - 120, h: CH - 160 };
-    const fw = area.h * 1.33;
-    const fx = area.x + (area.w - fw) / 2;
-    const r = { x: lerp(tile.x, fx, vo), y: lerp(tile.y, area.y, vo), w: lerp(tile.w, fw, vo), h: lerp(tile.h, area.h, vo) };
-    photoIn(target.row * 7 + target.col * 3 + 11, r.x, r.y, r.w, r.h, 4 * vo);
+    g.save();
+    rr(px, py, pw, ph, [8, 8, 12, 8]);
+    g.clip();
+    withAlpha(clamp(vo * 1.6), () => {
+      g.fillStyle = '#1d2025';
+      g.fillRect(px, py, pw, ph);
+    });
+    const fw = pw - 120, fh = fw / (400 / 280);
+    const fx = px + 60, fy = py + 54 + (ph - 54 - 50 - fh) / 2;
+    const r = { x: lerp(tile.x, fx, vo), y: lerp(tile.y, fy, vo), w: lerp(tile.w, fw, vo), h: lerp(tile.h, fh, vo) };
+    g.save();
+    g.shadowColor = `rgba(0,0,0,${0.35 * vo})`;
+    g.shadowBlur = 24;
+    g.shadowOffsetY = 8;
+    fillRR(r.x, r.y, r.w, r.h, 6 * vo, '#1d2025');
+    g.restore();
+    photoIn(libraryPhoto(target), r.x, r.y, r.w, r.h, 6 * vo);
     withAlpha(smooth(mark(t, tClick + 0.35, 0.3)), () => {
-      text('‹  Library', 18, 64, { size: 13, color: C.accent, weight: 600 });
-      text('Tuesday, 18 November 2026', CW / 2, 58, { size: 13, weight: 700, align: 'center' });
-      text('14:05 · IMG_2048.HEIC · 812 of 1,284', CW / 2, 74, { size: 10.5, color: C.muted, align: 'center' });
-      // heart, info, delete
+      const bw = 12 + 14 + 8 + measure('Library', 12.5, 600) + 12;
+      btn(px + 12, py + 12, bw, 30, 'Library', 'back', { size: 12.5, iconSize: 14 });
+      text('Wednesday, 18 November 2026', px + pw / 2, py + 26, { size: 14, weight: 600, family: DISPLAY, align: 'center' });
+      text('IMG_2014.HEIC · 14 of 48', px + pw / 2, py + 43, { size: 12, family: MONO, color: C.t3, align: 'center' });
+      // the heart, Info, Delete: 34 px square buttons
       const hp = easeOut(mark(t, tHeart, 0.3));
       const burst = mark(t, tHeart, 0.6);
+      const pop = 1 + Math.sin(clamp(burst / 0.6) * Math.PI) * 0.3;
+      btn(heartX, heartY, 34, 34, '', null);
       g.save();
-      g.translate(CW - 92, 60);
-      const s = 1 + Math.sin(clamp(burst) * Math.PI) * 0.35;
-      g.scale(s, s);
-      heart(0, 0, 18, hp);
+      g.translate(heartX + 17, heartY + 17);
+      g.scale(pop, pop);
+      ico('heart', -9, -9, 18, hp > 0.5 ? C.pink : C.t2, { fill: hp > 0 ? rgba(C.pink, hp) : null });
       g.restore();
       if (burst > 0 && burst < 1) {
         for (let i = 0; i < 10; i++) {
           const a = (i / 10) * Math.PI * 2;
-          const d = 10 + burst * 26;
+          const d = 14 + burst * 30;
           g.fillStyle = rgba(i % 2 ? C.pink : C.amber, 1 - burst);
           g.beginPath();
-          g.arc(CW - 92 + Math.cos(a) * d, 60 + Math.sin(a) * d, 2.4, 0, Math.PI * 2);
+          g.arc(heartX + 17 + Math.cos(a) * d, heartY + 17 + Math.sin(a) * d, 3, 0, Math.PI * 2);
           g.fill();
         }
       }
-      g.strokeStyle = C.ink;
-      g.lineWidth = 1.5;
-      g.beginPath();
-      g.arc(CW - 58, 60, 8, 0, Math.PI * 2);
-      g.stroke();
-      text('i', CW - 58, 64.5, { size: 11, weight: 700, align: 'center' });
-      g.strokeRect(CW - 30, 54, 10, 12);
-      g.beginPath();
-      g.moveTo(CW - 33, 54);
-      g.lineTo(CW - 17, 54);
-      g.stroke();
-      // film strip
-      for (let i = -6; i <= 6; i++) {
-        const sz = i === 0 ? 34 : 26;
-        const x = CW / 2 + i * 30 - sz / 2 + (i > 0 ? 6 : i < 0 ? -6 : 0);
-        photoIn(target.row * 7 + target.col * 3 + 11 + i * 3, x, CH - 52 + (34 - sz) / 2, sz, sz, 3);
+      btn(heartX + 44, heartY, 34, 34, '', 'info');
+      btn(heartX + 88, heartY, 34, 34, '', 'trash');
+      // the film strip, centred: the current photo wider, the others dimmed
+      const k = target, from = k - 7, to = k + 7;
+      const widths = [];
+      for (let j = from; j <= to; j++) widths.push(j === k ? 40 : 30);
+      const total = widths.reduce((a, b) => a + b, 0) + 3 * (widths.length - 1);
+      let x = px + pw / 2 - total / 2;
+      for (let j = from; j <= to; j++) {
+        const ww = j === k ? 40 : 30;
+        withAlpha(j === k ? 1 : 0.6, () => photoIn(libraryPhoto(((j % 48) + 48) % 48), x, py + ph - 40, ww, 30, 4));
+        x += ww + 3;
       }
     });
-    // the toast and the iPhone that gets the heart too
+    // the toast
     const toast = smooth(mark(t, tHeart + 0.15, 0.3)) * (1 - smooth(mark(t, len - 0.7, 0.3)));
     withAlpha(toast, () => {
-      fillRR(CW / 2 - 90, CH - 108, 180, 30, 15, 'rgba(40,46,58,0.95)');
-      text('Added to Favourites', CW / 2, CH - 88.5, { size: 12, align: 'center', weight: 600 });
+      const tw = measure('Added to Favourites', 13, 600) + 52;
+      const tx = px + pw / 2 - tw / 2, ty = py + ph - 100 + (1 - toast) * 6;
+      g.save();
+      g.shadowColor = 'rgba(0,0,0,0.35)';
+      g.shadowBlur = 24;
+      g.shadowOffsetY = 8;
+      fillRR(tx, ty, tw, 38, 10, 'rgba(36,40,47,0.96)');
+      g.restore();
+      strokeRR(tx + 0.5, ty + 0.5, tw - 1, 37, 10, C.stroke2);
+      ico('heart', tx + 14, ty + 10, 18, C.pink, { fill: C.pink });
+      text('Added to Favourites', tx + 40, ty + 24, { size: 13, weight: 600 });
     });
+    g.restore();
   }
-  const ph = spring(mark(t, tHeart + 0.4, 0.7));
-  if (ph > 0) {
+  g.restore();
+  // the iPhone that gets the heart too (card units)
+  const ph2 = spring(mark(t, tHeart + 0.4, 0.7));
+  if (ph2 > 0) {
     g.save();
-    g.translate(CW - 30 + (1 - ph) * 140, CH - 40);
+    g.translate(CW - 30 + (1 - ph2) * 140, CH - 40);
     g.rotate(0.06);
-    phoneFrame(-110, -230, 120, 240, (x, y, w, h) => {
+    phoneFrame(-110, -230, 120, 240, (x, y, w) => {
       text('18 November', x + 10, y + 30, { size: 11, weight: 700 });
-      photoIn(target.row * 7 + target.col * 3 + 11, x, y + 50, w, w * 0.75);
+      photoIn(libraryPhoto(target), x, y + 50, w, w * 0.75);
       heart(x + w / 2, y + 50 + w * 0.75 + 30, 14, 1);
       text('Favourite', x + w / 2, y + 50 + w * 0.75 + 58, { size: 10, color: C.pink, align: 'center', weight: 600 });
     });
     g.restore();
     withAlpha(smooth(mark(t, tHeart + 0.8, 0.4)), () => {
-      fillRR(CW - 150, 140, 124, 24, 12, 'rgba(60,24,36,0.95)');
+      fillRR(CW - 152, 140, 128, 24, 12, 'rgba(58,30,40,0.96)');
+      strokeRR(CW - 151.5, 140.5, 127, 23, 11.5, rgba(C.pink, 0.4));
       text('on your iPhone too', CW - 88, 156.5, { size: 11.5, color: C.pink, align: 'center', weight: 650 });
     });
   }
-  // the cursor: wheel over the grid, a click on the photo, a click on the heart
-  const keys = [[0, 420, 360], [0.45, 430, 300], [2.3, 440, 300], [tClick - 0.05, tile.x + tile.w * 0.55 + 0,
-    34 + target.row * ts - (70 + 110 + 90) + tile.h * 0.5], [tClick + 0.6, 480, 240], [tHeart - 0.05, CW - 92, 62],
-  [tHeart + 0.8, CW - 150, 120]];
-  const [cx, cy] = path(keys, t);
-  if (t < 2.5) { // the wheel
+  // the cursor: the wheel over the pictures, a click on the photo, a click on the heart (design px → card units)
+  const tcx = tile.x + tile.w * 0.55, tcy = py + 74 + Math.floor(target / cols) * (ts + 2) - 360 + tile.h * 0.5;
+  const keys = [[0, 560, 480], [0.15 * tClick, 575, 400], [0.76 * tClick, 590, 400], [tClick - 0.05, tcx, tcy],
+    [tClick + 0.6, 640, 330], [tHeart - 0.05, heartX + 17, heartY + 18], [tHeart + 0.8, 700, 160]];
+  const [cx, cy] = path(keys, t).map((v) => v * K);
+  if (t < tClick) { // the wheel
     const turn = glides.some(([at]) => t > at - 0.05 && t < at + 0.25);
     if (turn) {
       g.strokeStyle = rgba(C.accent, 0.8);
@@ -1082,67 +1567,80 @@ function gallery(sc) {
     }
   }
   cursor(cx, cy, clickPress(t, tClick) + clickPress(t, tHeart));
-  ripple(tile.x + tile.w * 0.55, tile.y + tile.h * 0.5, (t - tClick) / 0.45);
-  ripple(CW - 92, 60, (t - tHeart) / 0.45);
+  ripple(tcx * K, tcy * K, (t - tClick) / 0.45);
+  ripple((heartX + 17) * K, (heartY + 17) * K, (t - tHeart) / 0.45);
 }
 
+// --- iCloud Drive: Ctrl+S on the PC goes up to the iPhone; a new file comes back down -------------------
 function drive(sc) {
   const t = sc.local;
   const tSave = ev(sc, 0), tOk = ev(sc, 1);
-  const ww = 440;
-  windowFrame(0, 0, ww, CH, 'Projects — File Explorer');
-  fillRR(12, 40, ww - 24, 28, 6, C.win2);
-  text('iCloud Drive  ›  Projects', 24, 59, { size: 12, color: C.soft });
-  text('Name', 46, 92, { size: 11, color: C.muted });
-  text('Date modified', 250, 92, { size: 11, color: C.muted });
-  text('Status', ww - 22, 92, { size: 11, color: C.muted, align: 'right' });
+  const ww = 440, W = ww / K, H = CH / K; // 587 x 613 px
+  g.save();
+  g.scale(K, K);
+  appWindow(W, H, 'Projects — File Explorer', (x, y, s) => folderIcon(x, y, s, C.drive));
+  ico('arrowL', 14, 53, 18, C.t2);
+  ico('arrowR', 44, 53, 18, C.t3);
+  fillRR(74, 46, W - 88, 32, 6, C.layer2);
+  strokeRR(74.5, 46.5, W - 89, 31, 6, C.stroke2);
+  let ax = 86 + text('iCloud Drive', 86, 66.5, { size: 12.5, color: C.t2 }) + 7;
+  ico('chev', ax - 2, 56, 12, C.t3);
+  text('Projects', ax + 15, 66.5, { size: 12.5 });
+  pane(8, 88, W - 16, H - 88 - 36);
+  text('Name', 54, 113, { size: 12, color: C.t3 });
+  text('Date modified', 330, 113, { size: 12, color: C.t3 });
+  text('Status', W - 26, 113, { size: 12, color: C.t3, align: 'right' });
+  g.fillStyle = C.stroke;
+  g.fillRect(9, 124, W - 18, 1);
   const newIn = easeOut(mark(t, tOk + 0.9, 0.5));
   const files = [
     ['Budget 2026.xlsx', '#21a366'], ['Letter.docx', '#2b7cd3'], ['House plans.pdf', '#e5533d'],
     ['Trip photos.zip', '#c9a227'], ['Ideas.txt', '#8a94a6'],
   ];
-  const rowsY = 104;
+  const rowsY = 132, step = 48;
+  const status = (x, y, p) => { // available on this PC: a green check in a ring
+    g.beginPath();
+    g.arc(x, y, 8, 0, Math.PI * 2);
+    g.strokeStyle = C.green;
+    g.lineWidth = 1.5;
+    g.stroke();
+    ico('check', x - 6, y - 6, 12, C.green, { lw: 2.2, dash: p });
+  };
   // a new file arrives from the iPhone
   withAlpha(newIn, () => {
     const y = rowsY;
-    fillRR(10, y, ww - 20, 34, 6, rgba(C.green, 0.1 * (1 - smooth(mark(t, tOk + 1.6, 0.6)))));
-    fileIcon(20, y + 8, 18, '#8a94a6');
-    text('Packing list.txt', 46, y + 22, { size: 12.5 });
-    text('just now', 250, y + 22, { size: 11.5, color: C.soft });
-    check(ww - 32, y + 17, 10, mark(t, tOk + 1.2, 0.3), C.green, 2);
+    fillRR(16, y, W - 32, 42, 6, rgba(C.green, 0.12 * (1 - smooth(mark(t, tOk + 1.6, 0.6)))));
+    fileIcon(28, y + 10, 22, '#8a94a6');
+    text('Packing list.txt', 54, y + 26, { size: 13.5 });
+    text('just now', 330, y + 26, { size: 12.5, color: C.t2 });
+    status(W - 42, y + 21, mark(t, tOk + 1.2, 0.3));
   });
   files.forEach(([n, color], i) => {
-    const y = rowsY + (i + newIn) * 38;
+    const y = rowsY + (i + newIn) * step;
     const isBudget = i === 0;
     const sel = isBudget && t > tSave - 0.1;
-    if (sel) fillRR(10, y, ww - 20, 34, 6, rgba(C.blue, 0.18));
-    fileIcon(20, y + 8, 18, color);
-    text(n, 46, y + 22, { size: 12.5 });
-    text(isBudget && t > tSave ? 'just now' : `2${i}.11.2026 09:1${i}`, 250, y + 22, { size: 11.5, color: C.soft });
+    if (sel) fillRR(16, y, W - 32, 42, 6, C.accentSoft);
+    fileIcon(28, y + 10, 22, color);
+    text(n, 54, y + 26, { size: 13.5 });
+    text(isBudget && t > tSave ? 'just now' : `2${i}.11.2026 09:1${i}`, 330, y + 26, { size: 12.5, color: C.t2 });
     if (isBudget && t > tSave && t < tOk) {
-      g.save();
-      g.translate(ww - 32, y + 17);
-      g.rotate(t * 5);
-      g.strokeStyle = C.accent;
-      g.lineWidth = 2;
-      g.beginPath();
-      g.arc(0, 0, 6, 0, Math.PI * 1.4);
-      g.stroke();
-      g.restore();
+      spinIcon(W - 42, y + 21, 18, C.accent, t * 5, 1.8);
       const p = easeInOut(mark(t, tSave + 0.15, tOk - tSave - 0.2));
-      fillRR(46, y + 28, 180, 3, 2, C.line2);
-      fillRR(46, y + 28, 180 * p, 3, 2, C.blue);
-    } else check(ww - 32, y + 17, 10, isBudget && t > tOk ? (t - tOk) / 0.3 : 1, C.green, 2);
+      fillRR(54, y + 33, 220, 3, 1.5, C.layer2);
+      fillRR(54, y + 33, 220 * p, 3, 1.5, C.accentStrong);
+    } else status(W - 42, y + 21, isBudget && t > tOk ? (t - tOk) / 0.3 : 1);
   });
-  withAlpha(t > tSave && t < tOk + 0.3 ? 1 : 0, () =>
-    text('Uploading · 4.2 MB/s', 18, CH - 14, { size: 11.5, color: C.accent }));
-  // the iPhone, with the same folder
+  withAlpha(t > tSave && t < tOk + 0.3 ? 1 : 0, () => {
+    spinIcon(22, H - 18, 14, C.accent, t * 5, 2);
+    text('Uploading · 4.2 MB/s', 36, H - 13.5, { size: 12, color: C.accent });
+  });
+  g.restore();
+  // the iPhone, with the same folder (card units)
   const px = 500, py = 40, pw = 190, ph = 380;
   phoneFrame(px, py, pw, ph, (x, y, w) => {
     text('‹ iCloud Drive', x + 10, y + 34, { size: 10.5, color: C.accent });
     text('Projects', x + 10, y + 60, { size: 17, weight: 700, family: DISPLAY });
     const list = [['Packing list.txt', '#8a94a6', 'Just now'], ...files.map(([n, c]) => [n, c, 'Yesterday'])];
-    const phoneNew = 1; // it was written on the phone
     list.forEach(([n, color, when], i) => {
       if (i === 0 && t < tOk + 0.6) return;
       const yy = y + 78 + (i - (t < tOk + 0.6 ? 1 : 0)) * 40 + (i === 0 ? (1 - easeOut(mark(t, tOk + 0.6, 0.4))) * -10 : 0);
@@ -1150,9 +1648,8 @@ function drive(sc) {
       if (flash > 0) fillRR(x + 4, yy - 4, w - 8, 36, 6, rgba(C.green, 0.25 * flash));
       fileIcon(x + 10, yy + 2, 20, color);
       text(n, x + 36, yy + 13, { size: 10.5, maxW: w - 46 });
-      text(i === 1 && t > tOk ? 'Just now' : when, x + 36, yy + 26, { size: 9, color: C.muted });
+      text(i === 1 && t > tOk ? 'Just now' : when, x + 36, yy + 26, { size: 9, color: C.t3 });
     });
-    void phoneNew;
   });
   // the link between them, through iCloud
   const up = t > tSave && t < tOk + 0.2, down = t > tOk + 0.5 && t < tOk + 1.3;
@@ -1168,126 +1665,157 @@ function drive(sc) {
       g.fill();
     }
   };
+  const fileAt = [(W - 42) * K, (rowsY + 21) * K];
   if (up) {
-    dots([ww - 30, rowsY + 17], [cx - 6, cy + 14], 1);
+    dots(fileAt, [cx - 6, cy + 14], 1);
     dots([cx + 6, cy + 14], [px + 30, py + 120], 1);
   }
   if (down) {
     dots([px + 30, py + 120], [cx + 6, cy + 14], 1);
-    dots([cx - 6, cy + 14], [ww - 30, rowsY + 17], 1);
+    dots([cx - 6, cy + 14], fileAt, 1);
   }
   // the cursor saves the budget (Ctrl+S)
-  const [kx, ky] = path([[0, 300, 330], [tSave - 0.05, 120, rowsY + 20], [tSave + 1, 160, 300]], t);
+  const [kx, ky] = path([[0, 300, 330], [tSave - 0.05, 120, (rowsY + 24) * K], [tSave + 1, 160, 300]], t);
   cursor(kx, ky, clickPress(t, tSave));
   withAlpha(clamp(1 - Math.abs(t - tSave - 0.25) / 0.5), () => {
-    fillRR(kx + 18, ky + 22, 62, 24, 6, 'rgba(32,37,47,0.95)');
+    fillRR(kx + 18, ky + 22, 62, 24, 6, 'rgba(36,40,47,0.96)');
+    strokeRR(kx + 18.5, ky + 22.5, 61, 23, 6, C.stroke2);
     text('Ctrl + S', kx + 49, ky + 38, { size: 11.5, weight: 650, align: 'center' });
   });
 }
 
+// --- Notes: search finds "garden"; the note with its checklist and table ----------------------------
+const NOTE_LIST = [
+  ['Garden plan', 'Jobs for the garden in spring', '07:15'],
+  ['Lake weekend', 'Glasswater Inlet, two nights', 'Sat'],
+  ['Shopping list', 'Milk, bread, coffee, apples.', '18 Nov'],
+  ['Book ideas', 'A story told by a lighthouse…', '12 Nov'],
+];
+function chk(x, y, label, done, strike = done) {
+  // 18 px rounded box; ticked: the accent with the check, the text struck through
+  strokeRR(x + 0.75, y + 0.75, 16.5, 16.5, 5, C.t3, 1.5);
+  if (done > 0) withAlpha(clamp(done * 2), () => {
+    fillRR(x, y, 18, 18, 5, C.accentStrong);
+    ico('check', x + 3, y + 3, 12, C.onAccent, { lw: 2.4, dash: done });
+  });
+  const color = strike > 0.5 ? C.t3 : C.ink;
+  text(label, x + 28, y + 14, { size: 14, color, strike });
+}
 function notes(sc) {
   const t = sc.local;
   const tSearch = ev(sc, 0), tPick = ev(sc, 1), tTick = ev(sc, 2);
-  windowFrame(0, 0, CW, CH, 'Notes — Skyfold');
+  const W = CW / K, H = CH / K;
+  g.save();
+  g.scale(K, K);
+  appWindow(W, H, 'Notes', skyfoldIcon);
+  // the sidebar: All notes, then the iCloud folders
+  sideRow(8, 44, 184, 'All notes', 'note', C.amber, 4, true);
+  sideLabel(8, 102, 'iCloud');
+  [['Home', 2], ['Travel', 1], ['Work', 1]].forEach(([n, c], i) => sideRow(8, 110 + i * 36, 184, n, 'folder', C.amber, c));
+  const px = 200, py = 40, pw = W - 208, ph = H - 48;
+  pane(px, py, pw, ph);
+  // the list, with its search box; filtered as you type
+  const lw = 256;
+  g.fillStyle = C.stroke;
+  g.fillRect(px + lw, py + 1, 1, ph - 2);
   const query = 'garden';
   const typed = query.slice(0, Math.floor(clamp((t - tSearch - 0.15) / 0.6) * query.length + 0.0001));
-  strokeRR(12, 42, CW - 24, 30, 7, t > tSearch ? C.accent : C.line2, 1.2);
-  if (typed) {
-    const w = text(typed, 24, 62, { size: 12.5 });
-    if (Math.floor(t * 2) % 2 === 0) g.fillRect(25 + w, 50, 1.2, 15);
-  } else text('Search notes (Ctrl+K)', 24, 62, { size: 12.5, color: C.muted });
-  // folders
-  strokeRR(12, 82, 150, CH - 96, 8, C.line);
-  const folders = [['All notes', 8], ['Notes', 2], ['Home', 2], ['Recipes', 1], ['Travel', 1], ['Work', 1]];
-  folders.forEach(([n, c], i) => {
-    const y = 108 + i * 30;
-    if (i === 0) fillRR(18, y - 18, 138, 26, 6, rgba(C.blue, 0.22));
-    folderIcon(26 + (i === 3 ? 12 : 0), y - 12, 14, C.amber);
-    text(n, 48 + (i === 3 ? 12 : 0), y, { size: 12 });
-    text(String(c), 148, y, { size: 11.5, color: C.muted, align: 'right' });
-  });
-  // the list, filtered as you type
-  strokeRR(170, 82, 190, CH - 96, 8, C.line);
-  const list = [['Garden plan', 'Jobs for the garden in spring', '24.11.2026'], ['Shopping list', 'Milk, bread, coffee, apples.', '22.11.2026'],
-    ['Trip to Mostar', 'Bridge at sunset, then dinner…', '18.11.2026'], ['Book ideas', 'A story told by a lighthouse…', '12.11.2026']];
+  searchBox(px + 10, py + 10, lw - 20, 34, typed, { placeholder: 'Search notes', focus: t > tSearch ? 1 : 0,
+    caret: t > tSearch && Math.floor(t * 2) % 2 === 0 });
   const filt = smooth(mark(t, tSearch + 0.6, 0.35));
-  list.forEach(([n, s, d], i) => {
-    const a = i === 0 ? 1 : 1 - filt;
-    withAlpha(a, () => {
-      const y = 92 + i * 62;
-      const sel = i === 0 && t > tPick;
-      if (sel) {
-        fillRR(176, y, 178, 54, 7, '#243049');
-        strokeRR(176.5, y + 0.5, 177, 53, 7, C.accent, 1.2);
-      }
-      text(n, 188, y + 20, { size: 12.5, weight: 700 });
-      text(d, 344, y + 20, { size: 10, color: C.muted, align: 'right' });
-      const sub = s;
-      text(sub, 188, y + 40, { size: 11, color: C.soft, maxW: 156 });
-      if (i === 0 && filt > 0) { // the match, marked
-        font(11, 400, TEXT);
-        const pre = g.measureText('Jobs for the ').width;
-        const mw = g.measureText('garden').width;
-        g.fillStyle = rgba(C.amber, 0.35 * filt);
-        g.fillRect(188 + pre - 1, y + 29, mw + 2, 15);
-      }
+  const picked = t > tPick;
+  NOTE_LIST.forEach(([n, s, d], i) => {
+    withAlpha(i === 0 ? 1 : 1 - filt, () => {
+      const y = py + 54 + i * 60;
+      const x = px + 10, w = lw - 20;
+      const sel = i === 0 ? picked : i === 1 && !picked;
+      if (sel) fillRR(x, y, w, 58, 6, C.accentSoft);
+      text(n, x + 12, y + 25, { size: 14, weight: 600 });
+      text(d, x + w - 12, y + 24, { size: 11.5, family: MONO, color: C.t3, align: 'right' });
+      text(s, x + 12, y + 44, { size: 12.5, color: C.t3, maxW: w - 24 });
+      if (i === 0 && filt > 0) withAlpha(filt, () => {
+        const pre = measure('Jobs for the ', 12.5);
+        markBg(x + 12 + pre, y + 44, measure('garden', 12.5), 12.5);
+        text('garden', x + 12 + pre, y + 44, { size: 12.5, color: C.t3 });
+      });
     });
   });
   // the note
-  strokeRR(368, 82, CW - 380, CH - 96, 8, C.line);
-  const open = smooth(mark(t, tPick + 0.05, 0.35));
-  withAlpha(open, () => {
-    const x = 388, y = 116 + (1 - open) * 8;
-    text('Home · 24.11.2026. 07:15', x, y - 10, { size: 10.5, color: C.muted });
-    text('Garden plan', x, y + 20, { size: 22, weight: 700, family: DISPLAY });
-    font(12.5, 400, TEXT);
-    const pre = 'Spring jobs for the back ';
-    text(pre, x, y + 48, { size: 12.5 });
-    const pw = g.measureText(pre).width;
-    g.fillStyle = rgba(C.amber, 0.35);
-    font(12.5, 400, TEXT);
-    g.fillRect(x + pw - 1, y + 35, g.measureText('garden').width + 2, 18);
-    text('garden', x + pw, y + 48, { size: 12.5 });
-    text(', before April.', x + pw + g.measureText('garden').width, y + 48, { size: 12.5 });
-    text('To do', x, y + 82, { size: 15, weight: 700 });
-    const items = ['Prune the apple tree', 'Buy tomato seedlings', 'Fix the fence by the shed', 'Plant beans'];
-    items.forEach((it, i) => {
-      const yy = y + 108 + i * 26;
-      strokeRR(x + 6, yy - 12, 14, 14, 3, C.accent, 1.3);
-      if (i < 2) check(x + 13, yy - 5, 9, mark(t, tTick + i * 0.25, 0.3), C.accent, 2);
-      text(it, x + 30, yy, { size: 12.5 });
+  const dx = px + lw + 32, dw = pw - lw - 64;
+  g.save();
+  rr(px + lw + 1, py + 1, pw - lw - 2, ph - 2, [0, 8, 12, 0]);
+  g.clip();
+  const swap = smooth(mark(t, tPick + 0.05, 0.3));
+  withAlpha(1 - smooth(mark(t, tPick, 0.15)), () => { // Lake weekend, open before the search
+    let y = py + 26;
+    text('Travel · 22 November 2026, 09:15', dx, y + 13, { size: 12, color: C.t3 });
+    text('Lake weekend', dx, y + 48, { size: 26, weight: 600, family: DISPLAY });
+    const lines = wrap('Two nights by the inlet. Early walk to the ridge, then the boat back.', dw, 14, 400, TEXT);
+    lines.forEach((l, i) => text(l, dx, y + 81 + i * 20.3, { size: 14, color: C.t2 }));
+    y += 81 + lines.length * 20.3 + 4;
+    const iw = Math.min(dw, 420);
+    photoIn(0, dx, y, iw, iw * 0.7, 10);
+    y += iw * 0.7 + 30;
+    text('To do', dx, y, { size: 14, weight: 600 });
+    [['Book the cabin', 1], ['Rain jackets', 0], ['Camera battery', 0]].forEach(([l, d], i) => chk(dx, y + 12 + i * 28, l, d));
+  });
+  withAlpha(swap, () => { // Garden plan
+    const y = py + 26 + (1 - swap) * 8;
+    text('Home · 24 November 2026, 07:15', dx, y + 13, { size: 12, color: C.t3 });
+    text('Garden plan', dx, y + 48, { size: 26, weight: 600, family: DISPLAY });
+    const pre = 'Jobs for the ';
+    const pw0 = measure(pre, 14);
+    markBg(dx + pw0, y + 81, measure('garden', 14), 14);
+    text(pre, dx, y + 81, { size: 14, color: C.t2 });
+    text('garden', dx + pw0, y + 81, { size: 14, color: C.t2 });
+    text(' in spring, before the end of April.', dx + pw0 + measure('garden', 14), y + 81, { size: 14, color: C.t2 });
+    text('To do', dx, y + 115, { size: 14, weight: 600 });
+    ['Prune the apple tree', 'Buy tomato seedlings', 'Fix the fence by the shed', 'Plant beans'].forEach((it, i) => {
+      const d = i < 2 ? mark(t, tTick + i * 0.25, 0.35) : 0;
+      chk(dx, y + 127 + i * 28.3, it, d, i < 2 ? mark(t, tTick + i * 0.25 + 0.15, 0.3) : 0);
     });
-    text('Budget', x, y + 228, { size: 15, weight: 700 });
+    text('Budget', dx, y + 266, { size: 14, weight: 600 });
+    // the table: a rounded card, the header on a layer, hairlines between the rows
+    const tx = dx, ty = y + 278, c1 = 128, c2 = 70, rh = 33;
     const rows = [['Item', 'Price'], ['Seedlings', '12 €'], ['Fence boards', '48 €']];
+    g.save();
+    rr(tx, ty, c1 + c2, rh * 3, 8);
+    g.clip();
+    g.fillStyle = C.layer2;
+    g.fillRect(tx, ty, c1 + c2, rh);
+    g.fillStyle = C.stroke;
+    g.fillRect(tx, ty + rh, c1 + c2, 1);
+    g.fillRect(tx, ty + rh * 2, c1 + c2, 1);
+    g.restore();
+    strokeRR(tx + 0.5, ty + 0.5, c1 + c2 - 1, rh * 3 - 1, 8, C.stroke2);
     rows.forEach((r, i) => {
-      const yy = y + 240 + i * 24;
-      strokeRR(x, yy, 110, 24, 0, C.line2);
-      strokeRR(x + 110, yy, 60, 24, 0, C.line2);
-      text(r[0], x + 8, yy + 16, { size: 11.5, weight: i ? 400 : 700 });
-      text(r[1], x + 118, yy + 16, { size: 11.5, weight: i ? 400 : 700 });
+      text(r[0], tx + 14, ty + i * rh + 21, { size: 13, weight: i ? 400 : 600 });
+      text(r[1], tx + c1 + 14, ty + i * rh + 21, { size: 13, weight: i ? 400 : 600 });
     });
   });
-  const [cx, cy] = path([[0, 300, 300], [tSearch - 0.05, 160, 58], [tPick - 0.05, 250, 118], [tPick + 1.2, 470, 380]], t);
+  g.restore();
+  g.restore();
+  const keys = [[0, 600, 480], [tSearch - 0.05, 330, 67], [tPick - 0.05, 300, 124], [tPick + 1.2, 700, 430]];
+  const [cx, cy] = path(keys, t).map((v) => v * K);
   cursor(cx, cy, clickPress(t, tSearch) + clickPress(t, tPick));
-  ripple(160, 58, (t - tSearch) / 0.45);
-  ripple(250, 118, (t - tPick) / 0.45);
+  ripple(330 * K, 67 * K, (t - tSearch) / 0.45);
+  ripple(300 * K, 124 * K, (t - tPick) / 0.45);
 }
 
+// --- Safe: Recently Deleted, the Recycle Bin, a conflict keeps both copies ----------------------------
 function safe(sc) {
   const t = sc.local;
   const t1 = ev(sc, 0), t2 = ev(sc, 1), tOk = ev(sc, 2);
-  g.save();
-  g.shadowColor = 'rgba(0,0,0,0.5)';
-  g.shadowBlur = 40;
-  g.shadowOffsetY = 18;
-  fillRR(0, 0, CW, CH, 14, C.card);
-  g.restore();
-  strokeRR(0.5, 0.5, CW - 1, CH - 1, 14, C.line2);
+  floatShadow(0, 0, CW, CH, 12, 48, 18, 0.5);
+  glass(0, 0, CW, CH, 12, WIN_CROP, [0, 0, CW, CH]);
+  strokeRR(0.5, 0.5, CW - 1, CH - 1, 12, C.stroke2);
+  const big = (name, x, y, color, s = 46) => ico(name, x - s / 2, y - s / 2, s, color, { lw: 1.6 * 20 / s * 1.3 });
   const lane = (y, from, to, label, file, at, fromIcon, toIcon) => {
-    fillRR(24, y, CW - 48, 112, 12, C.card2);
+    fillRR(20, y, CW - 40, 116, 8, C.layer);
+    strokeRR(20.5, y + 0.5, CW - 41, 115, 8, C.stroke);
     fromIcon(80, y + 50);
     toIcon(CW - 110, y + 50);
-    g.strokeStyle = C.line2;
+    g.strokeStyle = C.stroke2;
     g.lineWidth = 2;
     g.setLineDash([4, 6]);
     g.beginPath();
@@ -1295,59 +1823,47 @@ function safe(sc) {
     g.lineTo(CW - 170, y + 50);
     g.stroke();
     g.setLineDash([]);
-    text(from, 80, y + 98, { size: 11.5, color: C.muted, align: 'center' });
-    text(to, CW - 110, y + 98, { size: 11.5, color: C.ink, align: 'center', weight: 650 });
+    text(from, 80, y + 100, { size: 11.5, color: C.t3, align: 'center' });
+    text(to, CW - 110, y + 100, { size: 11.5, color: C.ink, align: 'center', weight: 600 });
     const p = easeInOut(mark(t, at - 0.35, 0.7));
-    const fx = lerp(150, CW - 230, p), fy = y + 50 - Math.sin(p * Math.PI) * 16;
+    const fx = lerp(150, CW - 240, p), fy = y + 50 - Math.sin(p * Math.PI) * 16;
     withAlpha(p > 0 && p < 1 ? 1 : 0, () => {
-      fillRR(fx, fy - 13, 120, 26, 13, '#2a3242');
-      text(file, fx + 60, fy + 4.5, { size: 11, align: 'center' });
+      const fw = measure(file, 11, 500) + 40;
+      fillRR(fx, fy - 14, fw, 28, 6, '#2b3038');
+      strokeRR(fx + 0.5, fy - 13.5, fw - 1, 27, 6, C.stroke2);
+      fileIcon(fx + 10, fy - 7, 14, file.endsWith('.docx') ? '#2b7cd3' : C.pink);
+      text(file, fx + 28, fy + 4, { size: 11, weight: 500 });
     });
     withAlpha(smooth(mark(t, at + 0.3, 0.4)), () => {
-      text(label, CW / 2 - 20, y + 30, { size: 12, color: C.green, align: 'center', weight: 650 });
+      text(label, CW / 2 - 20, y + 30, { size: 12, color: C.green, align: 'center', weight: 600 });
     });
   };
-  const pcIcon = (x, y) => {
-    strokeRR(x - 26, y - 22, 52, 36, 5, C.soft, 2);
-    g.fillStyle = C.soft;
-    g.fillRect(x - 8, y + 16, 16, 3);
-  };
-  const phoneIcon = (x, y) => strokeRR(x - 14, y - 26, 28, 50, 6, C.soft, 2);
-  const binIcon = (x, y) => {
-    g.strokeStyle = C.accent;
-    g.lineWidth = 2;
-    g.beginPath();
-    g.moveTo(x - 18, y - 16);
-    g.lineTo(x + 18, y - 16);
-    g.moveTo(x - 14, y - 16);
-    g.lineTo(x - 11, y + 22);
-    g.lineTo(x + 11, y + 22);
-    g.lineTo(x + 14, y - 16);
-    g.moveTo(x - 6, y - 21);
-    g.lineTo(x + 6, y - 21);
-    g.stroke();
-  };
+  const pcIcon = (x, y) => big('monitor', x, y, C.t2, 50);
+  const phoneIcon = (x, y) => big('device', x, y, C.t2, 50);
+  const binIcon = (x, y) => big('trash', x, y, C.accent, 48);
   const cloudBin = (x, y) => skyMark(x, y - 4, 64, C.accent, { lw: 2.4, aw: 1.8 });
-  lane(22, 'Deleted on this PC', 'Recently Deleted in iCloud', '30 days to change your mind', 'IMG_2051.HEIC', t1,
+  lane(20, 'Deleted on this PC', 'Recently Deleted in iCloud', '30 days to change your mind', 'IMG_2051.HEIC', t1,
     pcIcon, cloudBin);
-  lane(150, 'Deleted on the iPhone', 'Recycle Bin on this PC', 'Restore it any time', 'Letter.docx', t2, phoneIcon, binIcon);
+  lane(146, 'Deleted on the iPhone', 'Recycle Bin on this PC', 'Restore it any time', 'Letter.docx', t2, phoneIcon, binIcon);
   // a conflict keeps both
-  fillRR(24, 278, CW - 48, 160, 12, C.card2);
-  text('Changed on both sides?', 48, 308, { size: 14, weight: 700 });
+  fillRR(20, 272, CW - 40, 168, 8, C.layer);
+  strokeRR(20.5, 272.5, CW - 41, 167, 8, C.stroke);
+  text('Changed on both sides?', 44, 304, { size: 14, weight: 600, family: DISPLAY });
   const a = spring(mark(t, tOk - 0.3, 0.6));
   [['Budget 2026.xlsx', 'iCloud\'s version'], ['Budget 2026 (PC conflict …).xlsx', 'this PC\'s version']].forEach(([n, who], i) => {
     const p = i ? a : 1;
     withAlpha(clamp(p * 2), () => {
-      const y = 330 + i * 46 + (1 - p) * -20;
-      fillRR(48, y, 380, 36, 8, '#252c3a');
-      fileIcon(60, y + 8, 20, '#21a366');
-      text(n, 88, y + 23, { size: 12.5 });
-      text(who, 418, y + 23, { size: 11, color: C.muted, align: 'right' });
+      const y = 326 + i * 48 + (1 - p) * -20;
+      fillRR(44, y, 384, 38, 6, C.layer2);
+      strokeRR(44.5, y + 0.5, 383, 37, 6, C.stroke);
+      fileIcon(56, y + 9, 20, '#21a366');
+      text(n, 84, y + 24, { size: 12.5 });
+      text(who, 416, y + 24, { size: 11, color: C.t3, align: 'right' });
     });
   });
   withAlpha(smooth(mark(t, tOk, 0.3)), () => {
-    check(470, 368, 16, mark(t, tOk, 0.35), C.green, 3);
-    text('Both copies kept', 490, 374, { size: 14, color: C.green, weight: 700 });
+    okBadge(472, 368, 14, mark(t, tOk, 0.4));
+    text('Both copies kept', 494, 373, { size: 14, color: C.green, weight: 600 });
   });
 }
 
@@ -1389,8 +1905,8 @@ function end(sc) {
       g.save();
       g.translate(bx + w / 2, by + 17);
       g.scale(lerp(0.8, 1, a), lerp(0.8, 1, a));
-      fillRR(-w / 2, -17, w, 34, 17, C.card2);
-      strokeRR(-w / 2 + 0.5, -16.5, w - 1, 33, 17, C.line2);
+      fillRR(-w / 2, -17, w, 34, 8, C.card2);
+      strokeRR(-w / 2 + 0.5, -16.5, w - 1, 33, 8, C.line2);
       text(c, 0, 5, { size: 15, weight: 600, align: 'center' });
       g.restore();
     });
@@ -1451,6 +1967,8 @@ window.fontsOk = () => {
   return { display: probe('"Segoe UI Variable Display"'), text: probe('"Segoe UI Variable Text"'), mono: probe('"Cascadia Mono"') };
 };
 Promise.all([document.fonts.ready, icon.decode().catch(() => {})]).then(() => {
+  walls(); // the wallpaper and its blur, once
+  for (let i = 0; i < 48; i++) painting(i);
   window.promoReady = true;
   window.dispatchEvent(new Event('promo-ready'));
 });
