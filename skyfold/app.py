@@ -22,6 +22,7 @@ from .ui.dialogs import ask, inform, warn
 from .ui.dialogs import (FindMyDialog, FolderSetupDialog, LoginDialog, PendingDialog, SettingsDialog, UpdateDialog,
                          make_popup_round)
 from .ui.flyout import STATE_TITLES, Flyout
+from .ui.glow import animations_on
 from .ui.icons import app_icon, tray_icon
 from .ui.notices import Notice, NoticeLog
 from .ui.toast import Toasts
@@ -416,7 +417,10 @@ class Controller(QObject):
         self.m_status.setText(title)
         self.tray.setToolTip(f"{APP_NAME}\n{text or title}"[:120])
         if state == "syncing":
-            if not self.anim.isActive():
+            if not animations_on():  # Windows' animation effects are off: the syncing mark stands still
+                self.anim.stop()
+                self.tray.setIcon(tray_icon("syncing"))
+            elif not self.anim.isActive():
                 self.anim.start()
         else:
             self.anim.stop()
@@ -432,7 +436,9 @@ class Controller(QObject):
 
         refresh_palette(self.c, skip=(self.flyout,))  # open Settings, Find My, … too
         # the tray mark is black or white depending on the taskbar colour
-        QTimer.singleShot(500, lambda: self._on_state(self.state, self.flyout.status_text.text()))
+        # (the worker's own words, not what the card shows now: that may be the progress numbers, and
+        # the description above them was replaced by a plain "Syncing…")
+        QTimer.singleShot(500, lambda: self._on_state(self.state, self.flyout.state_text))
 
     def _on_progress(self, done, total, text: str) -> None:
         self.flyout.set_progress(int(done), int(total), text)
@@ -445,7 +451,7 @@ class Controller(QObject):
         self._pending = pending
         self.flyout.set_pending(pending)
         if self.state != "syncing":
-            self._on_state(self.state, self.flyout.status_text.text())
+            self._on_state(self.state, self.flyout.state_text)
 
     def _notify(self, title: str, text: str) -> None:
         important = title in (t("Sign-in required"), t("Confirmation needed"))
@@ -857,9 +863,11 @@ class Controller(QObject):
         avatar.forget_all()  # the account picture leaves with the account
         netdiag.delete()  # and the connection diagnostics file
         try:  # and the copy of the Safari bookmarks the browser extension reads
-            from . import native_host
+            from . import bookmarks
 
-            native_host.cache_file().unlink(missing_ok=True)
+            # (under the cache's lock, after account_gen moved on in _close_photos: a read finishing
+            # now either wrote before this or sees the account is gone and writes nothing)
+            bookmarks.remove_cache()
         except OSError as exc:
             log.info("Bookmarks copy not removed: %s", exc.__class__.__name__)
         self._login_api = None
