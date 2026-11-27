@@ -2581,14 +2581,28 @@ class PhotosWindow(LibraryDialog):
         m.deleteLater()  # (it held the chosen photos)
 
     def open_file(self, path: Path) -> None:
+        from ..engine import MEDIA_EXTS
+
+        if Path(path).suffix.lower() not in MEDIA_EXTS or Path(path).suffix.lower() == ".aae":
+            # (only photos and videos open in their app; anything else is shown in File Explorer)
+            self._select_in_explorer(Path(path))
+            return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _select_in_explorer(self, path: Path) -> None:
+        try:
+            subprocess.Popen([os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "explorer.exe"), "/select,",
+                              str(path)])
+        except OSError as exc:
+            self.message(str(exc))
 
     def show_in_explorer(self, items: list[lib.PhotoItem]) -> None:
         if not items:
             self.message(t("Select some photos first"))
             return
         try:
-            subprocess.Popen(["explorer.exe", "/select,", str(items[0].path)])
+            subprocess.Popen([os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "explorer.exe"), "/select,",
+                              str(items[0].path)])  # (by its full path: never an explorer.exe planted elsewhere)
         except OSError as exc:
             self.message(str(exc))
 
@@ -2673,6 +2687,7 @@ class PhotosWindow(LibraryDialog):
         to_cloud = bool(getattr(s, "delete_pc_to_cloud", True))
         n = len(items)
         box = QMessageBox(self)
+        box.setTextFormat(Qt.PlainText)  # (file names from iCloud: never HTML)
         box.setIcon(QMessageBox.Warning)
         box.setWindowTitle(t("Delete"))
         box.setText(t("Delete {name}?", name=items[0].name) if n == 1 else t("Delete {n} items?", n=n))

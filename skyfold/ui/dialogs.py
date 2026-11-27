@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QRunnable, QSize, Qt, QThreadPool, Signal, Slot
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractSpinBox,
@@ -142,6 +142,66 @@ class _ReleaseNotes(QTextBrowser):
     def loadResource(self, kind, url):  # noqa: N802
         return None
 
+    def style_notes(self, palette: dict[str, str]) -> None:
+        """Readable as in the 1.1 design: body text 14 px with air between the lines, headings 600
+        in Segoe UI Variable Display (an all-capitals heading is set in sentence case), links in the
+        accent; on the card under it (no frame or background of its own)."""
+        from PySide6.QtGui import QTextBlockFormat, QTextCharFormat, QTextCursor
+
+        self.setFrameShape(QFrame.NoFrame)
+        self.setStyleSheet("QTextBrowser { background: transparent; border: none; }")
+        self.viewport().setAutoFillBackground(False)
+        doc = self.document()
+        doc.setDocumentMargin(12)
+        cur = QTextCursor(doc)
+        cur.beginEditBlock()
+        block = doc.begin()
+        first = True
+        while block.isValid():
+            level = block.blockFormat().headingLevel()
+            text = block.text()
+            if level and len(text) > 3 and text.isupper():  # sentence case, as the design's headings
+                c2 = QTextCursor(block)
+                c2.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
+                c2.insertText(text[0] + text[1:].lower(), c2.charFormat())
+            bf = QTextBlockFormat()
+            bf.setLineHeight(130 if level else 145, 1)  # (1: proportional height)
+            if level:
+                bf.setTopMargin(0 if first else 14)
+                bf.setBottomMargin(4)
+            else:
+                bf.setBottomMargin(4)
+            c1 = QTextCursor(block)
+            c1.mergeBlockFormat(bf)
+            c1.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
+            cf = QTextCharFormat()
+            if level:
+                cf.setFontFamilies(["Segoe UI Variable Display", "Segoe UI"])
+                cf.setFontPointSize({1: 15, 2: 12}.get(level, 11.25))  # 20 / 16 / 15 px
+                cf.setFontWeight(QFont.DemiBold)
+                cf.setProperty(QTextCharFormat.FontSizeAdjustment, 0)
+            else:
+                cf.setFontPointSize(10.5)  # 14 px
+            c1.mergeCharFormat(cf)
+            first = False
+            block = block.next()
+        # links in the accent (their own colour, whatever the theme)
+        block = doc.begin()
+        while block.isValid():
+            it = block.begin()
+            while not it.atEnd():
+                frag = it.fragment()
+                if frag.isValid() and frag.charFormat().isAnchor():
+                    c3 = QTextCursor(doc)
+                    c3.setPosition(frag.position())
+                    c3.setPosition(frag.position() + frag.length(), QTextCursor.KeepAnchor)
+                    lf = QTextCharFormat()
+                    lf.setForeground(QColor(palette["accent_fg"]))
+                    c3.mergeCharFormat(lf)
+                it += 1
+            block = block.next()
+        cur.endEditBlock()
+
 
 def _show_log() -> None:
     import os
@@ -179,11 +239,90 @@ def _logo(size: int) -> QLabel:
     return lbl
 
 
+def _palette_of(widget) -> dict[str, str]:
+    """The palette a window was given (its own or a parent's), else the one the app shows now."""
+    w = widget
+    while w is not None:
+        c = getattr(w, "c", None)
+        if isinstance(c, dict) and "bg" in c and "accent" in c:
+            return c
+        w = w.parentWidget() if isinstance(w, QWidget) else None
+    return _current_palette()
+
+
+def _tile_pixmap(icon, c: dict[str, str], dpr: float = 2.0) -> QPixmap:
+    """The message's sign as in the 1.1 design: a rounded tile tinted with the state's colour (warning:
+    amber, error: red, question and information: the accent) and its line icon in that colour."""
+    colour = {QMessageBox.Warning: c["warn"], QMessageBox.Critical: c["err"]}.get(icon, c["accent_fg"])
+    size = 40
+    pm = QPixmap(round(size * dpr), round(size * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    tint = QColor(colour)
+    tint.setAlphaF(0.14 if QColor(c["bg"]).lightness() > 128 else 0.20)
+    p.setPen(Qt.NoPen)
+    p.setBrush(tint)
+    p.drawRoundedRect(QRectF(0, 0, size, size), 10, 10)
+    if icon == QMessageBox.Question:  # (the icon set has no question mark: drawn as text)
+        f = QFont()
+        f.setFamilies(["Segoe UI Variable Display", "Segoe UI"])
+        f.setPixelSize(22)
+        f.setWeight(QFont.DemiBold)
+        p.setFont(f)
+        p.setPen(QColor(colour))
+        p.drawText(QRectF(0, 0, size, size), Qt.AlignCenter, "?")
+    else:
+        name = "info" if icon in (QMessageBox.Information, QMessageBox.NoIcon) else "error"
+        glyph(name, colour, 22).paint(p, 9, 9, 22, 22)
+    p.end()
+    return pm
+
+
+def style_message_box(box: QMessageBox, kind=None) -> None:
+    """A QMessageBox in the 1.1 design, still a QMessageBox (its answers, roles and Escape work as
+    before): 14 px text, the sign on a tile in the state's colour, the main answer highlighted and
+    on the right, the buttons in a band along the bottom. kind: the box's icon (default: its own)."""
+    c = _palette_of(box.parentWidget()) if box.parentWidget() is not None else _current_palette()
+    kind = box.icon() if kind is None else kind
+    primary = box.defaultButton() or (box.buttons()[0] if len(box.buttons()) == 1 else None)
+    if primary is not None:
+        primary.setObjectName("Primary")
+    for b in box.buttons():
+        b.setMinimumWidth(96)
+        b.setCursor(Qt.PointingHandCursor)
+    box.setObjectName("Message")
+    box.setStyleSheet(
+        # button-layout 3: the main answer on the right ("No  Yes"), as in Windows 11's own dialogs
+        f"QMessageBox#Message {{ background: {c['bg']}; }}"
+        "QMessageBox#Message QLabel#qt_msgbox_label { font-size: 10.5pt; min-width: 300px; max-width: 440px; }"
+        f"QMessageBox#Message QLabel#qt_msgbox_informativelabel {{ font-size: 9.25pt; color: {c.get('muted2', c['muted'])}; }}")
+    from PySide6.QtWidgets import QDialogButtonBox
+
+    buttons = box.findChild(QDialogButtonBox)
+    if buttons is not None:  # (set on the button box itself: a rule from the box loses to the app's sheet)
+        buttons.setStyleSheet("QDialogButtonBox { button-layout: 3; }")
+    label = box.findChild(QLabel, "qt_msgboxex_icon_label")
+    if label is not None:  # the sign drawn in the design (box.icon() keeps telling what it is)
+        label.setPixmap(_tile_pixmap(kind, c, max(2.0, box.devicePixelRatioF())))
+        label.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        label.setContentsMargins(0, 2, 8, 0)
+    else:
+        box.setIconPixmap(_tile_pixmap(kind, c))
+    lay = box.layout()
+    if lay is not None:
+        lay.setContentsMargins(24, 22, 24, 18)
+        lay.setVerticalSpacing(18)
+
+
 def _box(parent, icon, title: str, text: str, yes_no: bool) -> int:
-    """QMessageBox with the buttons in the app's language (Qt's own Yes/No/OK stay English)."""
+    """QMessageBox with the buttons in the app's language (Qt's own Yes/No/OK stay English), in the
+    1.1 design (style_message_box)."""
     box = QMessageBox(parent)
     box.setIcon(icon)
     box.setWindowTitle(title)
+    box.setTextFormat(Qt.PlainText)  # (messages name files and folders from iCloud: never HTML)
     box.setText(text)
     if yes_no:
         box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
@@ -193,6 +332,8 @@ def _box(parent, icon, title: str, text: str, yes_no: bool) -> int:
     else:
         box.setStandardButtons(QMessageBox.Ok)
         box.button(QMessageBox.Ok).setText(t("OK"))
+        box.setDefaultButton(QMessageBox.Ok)
+    style_message_box(box, icon)
     return box.exec()
 
 
@@ -210,7 +351,9 @@ def warn(parent, title: str, text: str) -> None:
 
 
 def _label(text: str, name: str | None = None, wrap: bool = False) -> QLabel:
-    lbl = QLabel(text)
+    lbl = QLabel()
+    lbl.setTextFormat(Qt.PlainText)  # (names from iCloud are never read as HTML; markup opts in itself)
+    lbl.setText(text)
     if name:
         lbl.setObjectName(name)
     lbl.setWordWrap(wrap)
@@ -275,6 +418,9 @@ class _Dialog(QDialog):
             # controls as light layers too (the main button keeps its colour)
             f"QPushButton, QComboBox, QLineEdit {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
             f"QPushButton:hover, QComboBox:hover {{ background: {g['hover']}; }}"
+            # quiet links stay text only (the button layer above would put a box behind them)
+            "QPushButton#Link, QPushButton#Link:hover, QPushButton#Link:pressed"
+            " { background: transparent; border: none; }"
             f"QPushButton#Primary {{ background: {accent_fill(self.c['btn'], 0.80)}; {accent_edges(self.c['btn'], 0.85)} }}"
             f"QPushButton#Primary:hover {{ background: {accent_fill(self.c['btn_hover'], 0.92)};"
             f" {accent_edges(self.c['btn_hover'], 0.95)} }}")
@@ -1290,6 +1436,7 @@ class SettingsDialog(_Dialog):
         disk = (probe.anchor or str(probe)).rstrip("\\")
         est = self.drive_estimate()
         box = QMessageBox(self)
+        box.setTextFormat(Qt.PlainText)  # (folder names from iCloud: never HTML)
         box.setWindowTitle(t("iCloud Drive"))
         box.setIcon(QMessageBox.Information)
         if est is None:
@@ -1352,6 +1499,7 @@ class SettingsDialog(_Dialog):
         if self.folders_chosen:
             return True
         box = QMessageBox(self)
+        box.setTextFormat(Qt.PlainText)  # (folder names from iCloud: never HTML)
         box.setWindowTitle(t("iCloud Drive"))
         box.setIcon(QMessageBox.Question)
         box.setText(t("What should Skyfold sync from your iCloud Drive?"))
@@ -1378,6 +1526,7 @@ class SettingsDialog(_Dialog):
         if not gone:
             return True
         box = QMessageBox(self)
+        box.setTextFormat(Qt.PlainText)  # (folder names from iCloud: never HTML)
         box.setWindowTitle(t("iCloud Drive"))
         box.setIcon(QMessageBox.Question)
         box.setText(t("{n} folders on this PC will no longer be synced.", n=len(gone)))
@@ -1626,16 +1775,79 @@ class SettingsDialog(_Dialog):
         return self.s
 
 
+# shared parts of the compact windows (Drive folders, update, Find My) -------------------------
+_MONO = ["Cascadia Mono", "Cascadia Code", "Consolas"]
+
+
+def _mono_font(px: float = 12.0) -> QFont:
+    """Cascadia Mono for counts, sizes, times and versions (as in the 1.1 design)."""
+    f = QFont()
+    f.setFamilies(_MONO)
+    f.setPixelSize(round(px))
+    return f
+
+
+def _footer_band(outer: QVBoxLayout) -> QHBoxLayout:
+    """The band along the bottom of a compact window (as the deletion question's): a quiet link on
+    the left, the answers on the right."""
+    foot = QWidget()
+    foot.setObjectName("Footer")
+    foot.setAttribute(Qt.WA_StyledBackground, True)
+    fl = QHBoxLayout(foot)
+    fl.setContentsMargins(24, 12, 24, 12)
+    fl.setSpacing(8)
+    outer.addWidget(foot)
+    return fl
+
+
+def _quiet_button(text: str) -> QPushButton:
+    b = QPushButton(text)
+    b.setObjectName("Link")
+    b.setCursor(Qt.PointingHandCursor)
+    # (its own: over the glass a window's sheet gives every button a light layer; a link has none)
+    b.setStyleSheet("QPushButton#Link { background: transparent; border: none; }"
+                    "QPushButton#Link:focus { border: 2px solid palette(highlight); border-radius: 4px; }")
+    return b
+
+
+def _layer(c: dict[str, str]) -> str:
+    """A light hover layer over a card (see-through, so it suits the glass and the plain theme)."""
+    return "rgba(255, 255, 255, 20)" if QColor(c["bg"]).lightness() < 128 else "rgba(0, 0, 0, 10)"
+
+
 # iCloud Drive folders -----------------------------------------------------------------
 class DriveFoldersDialog(_Dialog):
     """Tick the iCloud Drive folders to sync. Folders are read from iCloud as they are opened;
-    sizes come from the last full Drive read, when there is one."""
+    sizes come from the last full Drive read, when there is one.
 
+    As in the 1.1 design: a compact header, the folder tree on a rounded card (sizes in Cascadia
+    Mono), and the footer band with Cancel as a quiet link and Save as the main button."""
+
+    GLASS = True
     PATH = Qt.UserRole
     LOADED = Qt.UserRole + 1
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette  # folders read later are drawn in the new colours
+        self._tree_style()
+        stack = [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
+        while stack:  # the folders already shown take the new colours too
+            it = stack.pop()
+            if it.data(0, self.PATH) is not None:
+                self._paint_item(it)
+            stack.extend(it.child(i) for i in range(it.childCount()))
+
+    def _tree_style(self) -> None:
+        self.tree.setStyleSheet(
+            "QTreeView { background: transparent; border: none; padding: 4px; }"
+            "QTreeView::item { padding: 5px 2px; border-radius: 6px; }"
+            f"QTreeView::item:hover, QTreeView::item:selected {{ background: {_layer(self.c)}; color: {self.c['text']}; }}")
+
+    def _paint_item(self, node) -> None:
+        from .theme import service_color
+
+        node.setIcon(0, glyph("folder", service_color(self.c, "folder") or self.c["accent_fg"], 16))
+        node.setForeground(1, QColor(self.c.get("muted2", self.c["muted"])))
 
     def __init__(self, selection: list[str] | None, palette: dict[str, str], get_api,
                  sizes: dict[str, tuple[int, int]] | None = None) -> None:
@@ -1645,36 +1857,51 @@ class DriveFoldersDialog(_Dialog):
         self._items: dict[str, Any] = {}  # path -> DriveItem, for reading deeper levels
         self._tasks: list = []
         self._updating = False
-        self.resize(*_fit_screen(560, 580))
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 20, 24, 18)
-        lay.setSpacing(10)
+        self.setMinimumWidth(480)
+        self.resize(*_fit_screen(560, 600))
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(24, 22, 24, 16)
+        lay.setSpacing(4)
+        outer.addWidget(body, 1)
         lay.addWidget(_label(t("What should be synced?"), "Title"))
         lay.addWidget(_label(t("Checked folders are downloaded and kept in sync. Unchecked folders stay in iCloud, "
                                "untouched. Files directly in iCloud Drive (outside any folder) are always synced."),
-                             "Muted", True))
+                             "Lead", True))
+        lay.addSpacing(12)
+        card = SoftCard()
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(4, 4, 4, 4)
         self.tree = QTreeWidget()
         self.tree.setColumnCount(2)
         self.tree.setHeaderHidden(True)
+        self.tree.setIconSize(QSize(16, 16))
+        self.tree.setFrameShape(QFrame.NoFrame)
+        self.tree.setAccessibleName(t("iCloud Drive folders"))
         self.tree.header().setStretchLastSection(False)
         self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.tree.itemExpanded.connect(self._expand)
         self.tree.itemChanged.connect(self._changed)
-        lay.addWidget(self.tree, 1)
+        self._tree_style()
+        cl.addWidget(self.tree)
+        lay.addWidget(card, 1)
+        lay.addSpacing(6)
         self.info = _label(t("Reading your iCloud Drive folders…"), "Muted", True)
         lay.addWidget(self.info)
-        btns = QHBoxLayout()
-        cancel = QPushButton(t("Cancel"))
+        fl = _footer_band(outer)
+        cancel = _quiet_button(t("Cancel"))
         cancel.clicked.connect(self.reject)
         self.ok = QPushButton(t("Save"))
         self.ok.setObjectName("Primary")
         self.ok.setEnabled(False)
         self.ok.clicked.connect(self.accept)
-        btns.addStretch(1)
-        btns.addWidget(cancel)
-        btns.addWidget(self.ok)
-        lay.addLayout(btns)
+        fl.addWidget(cancel)
+        fl.addStretch(1)
+        fl.addWidget(self.ok)
         self._load(None)
 
     # reading -------------------------------------------------------------------------------
@@ -1729,6 +1956,9 @@ class DriveFoldersDialog(_Dialog):
             files, size = self.sizes.get(it.path, (0, 0))
             if files:
                 node.setText(1, t("{files} files · {size}", files=count_text(files), size=size_text(size)))
+                node.setFont(1, _mono_font(12))
+                node.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+            self._paint_item(node)
             node.addChild(QTreeWidgetItem([t("Loading…"), ""]))  # makes it expandable
             if parent is not None:
                 parent.addChild(node)
@@ -1804,6 +2034,8 @@ class PendingDialog(_Dialog):
     short explanation, the photos themselves in a small strip (or the first names), the whole list
     on request, and the two answers. Keeping is the highlighted answer: the safe one."""
 
+    GLASS = True
+
     decided = Signal(str, list)  # "approve"|"reject", ids
     STRIP = 5
 
@@ -1858,6 +2090,21 @@ class PendingDialog(_Dialog):
         fl.addLayout(self._answers)
         outer.addWidget(foot)
         self.adjustSize()
+
+    def _fit(self) -> None:
+        """Tall enough for the wrapped lines at this width, measured with the real fonts."""
+        for w in self.findChildren(QWidget):
+            w.ensurePolished()
+        lay = self.layout()
+        lay.invalidate()
+        lay.activate()
+        need = lay.totalHeightForWidth(self.width())
+        if need > self.height():
+            self.resize(self.width(), need)
+
+    def showEvent(self, e) -> None:  # noqa: N802
+        super().showEvent(e)
+        self._fit()
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette
@@ -1959,6 +2206,7 @@ class PendingDialog(_Dialog):
 
         shot.setPixmap(rounded(img, 56, 6, max(1.0, self.devicePixelRatioF())))
         shot.show()
+        self._fit()  # (the strip appears after the window opened: room for it)
 
     def _decide(self, decision: str, ids: list, buttons: tuple = ()) -> None:
         self.decided.emit(decision, list(ids))
@@ -2138,6 +2386,8 @@ class Hero(QWidget):
 class FolderSetupDialog(_Dialog):
     """First run, as in the 1.1 design: step 1 where the photos go (the folder and its layout as three
     pictures), step 2 the plain-language agreement; signing in is step 3, in its own window."""
+
+    GLASS = True
 
     def __init__(self, current: str, palette: dict[str, str]) -> None:
         super().__init__(t("Welcome – {app}", app=APP_NAME))
@@ -2348,51 +2598,92 @@ class FolderSetupDialog(_Dialog):
 
 
 # Find My ------------------------------------------------------------------------------------
-class DeviceRow(QFrame):
+class DeviceRow(SoftCard):
+    """One device as a card: its icon on a tile tinted with the accent, the name, the battery and when
+    it was located on a quieter line, and its two actions as small buttons."""
+
     def __init__(self, dev, palette: dict[str, str], get_api) -> None:
         super().__init__()
+        from .panel_parts import TintTile
+
         self.setObjectName("Device")
+        self.setMinimumHeight(64)
         self.dev, self.c, self.get_api = dev, palette, get_api
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 10, 10, 10)
-        lay.setSpacing(12)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(14)
+        self._tile = TintTile(36, 9)
+        tl = QVBoxLayout(self._tile)
+        tl.setContentsMargins(0, 0, 0, 0)
         icon = QLabel()
-        icon.setPixmap(glyph("device", palette["accent_fg"], 22).pixmap(QSize(22, 22)))
+        icon.setAlignment(Qt.AlignCenter)
+        tl.addWidget(icon)
         self._icon = icon
         col = QVBoxLayout()
         col.setSpacing(1)
-        name = QLabel(dev.name)
-        name.setStyleSheet("font-weight: 600;")
-        name.setWordWrap(True)
-        bits = [dev.model] if dev.model else []
-        if dev.battery is not None:
-            bits.append(f"{round(dev.battery * 100)}%" + (" " + t("charging") if dev.charging else ""))
-        bits.append(t("online") if dev.online else t("offline"))
-        if dev.located_at:
-            from ..worker import fmt_time
-
-            bits.append(t("located {when}", when=fmt_time(dev.located_at)))
-        detail = _label(" · ".join(bits), "Muted", True)
+        name = _label(dev.name, "SetTitle", True)
+        name.setTextFormat(Qt.PlainText)  # (names come from iCloud: never read as markup)
+        plain, rich = self._details(dev)
+        detail = _label(rich, "SetSub", True)
+        detail.setTextFormat(Qt.RichText)
+        detail.setTextInteractionFlags(Qt.NoTextInteraction)
         col.addWidget(name)
         col.addWidget(detail)
-        lay.addWidget(icon, 0, Qt.AlignVCenter)
+        lay.addWidget(self._tile, 0, Qt.AlignVCenter)
         lay.addLayout(col, 1)
+        self.setAccessibleName(f"{dev.name}, {plain}")
         self.map_btn = QPushButton(t("Map"))
         self.map_btn.setToolTip(t("Opens Google Maps in your browser with the device's last location."))
-        self.map_btn.setObjectName("Link")
-        self.map_btn.setCursor(Qt.PointingHandCursor)
+        self.map_btn.setAccessibleName(f"{t('Map')}: {dev.name}")
         self.map_btn.setEnabled(dev.lat is not None)
         self.map_btn.clicked.connect(self._map)
         self.sound_btn = QPushButton(t("Play sound"))
-        self.sound_btn.setCursor(Qt.PointingHandCursor)
+        self.sound_btn.setAccessibleName(f"{t('Play sound')}: {dev.name}")
         self.sound_btn.setEnabled(dev.can_sound)
         self.sound_btn.clicked.connect(self._sound)
-        lay.addWidget(self.map_btn)
-        lay.addWidget(self.sound_btn)
+        for btn in (self.map_btn, self.sound_btn):
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setIconSize(QSize(14, 14))
+            btn.setStyleSheet("min-height: 28px; max-height: 28px; padding: 0 12px;")  # small, as in the design
+            lay.addWidget(btn, 0, Qt.AlignVCenter)
+        self.apply_palette(palette)
+
+    @staticmethod
+    def _details(dev) -> tuple[str, str]:
+        """The quieter line: model, battery, online and when it was located (numbers and times in
+        Cascadia Mono). Returns it as plain text (screen readers) and as markup."""
+        import html
+
+        mono = "<span style=\"font-family:'Cascadia Mono','Cascadia Code','Consolas'\">{}</span>"
+        plain: list[str] = []
+        rich: list[str] = []
+        if dev.model:
+            plain.append(dev.model)
+            rich.append(html.escape(dev.model))
+        if dev.battery is not None:
+            pct = f"{round(dev.battery * 100)}%"
+            extra = " " + t("charging") if getattr(dev, "charging", False) else ""
+            plain.append(pct + extra)
+            rich.append(mono.format(pct) + html.escape(extra))
+        state = t("online") if dev.online else t("offline")
+        plain.append(state)
+        rich.append(html.escape(state))
+        if dev.located_at:
+            from ..worker import fmt_time
+
+            when = fmt_time(dev.located_at)
+            plain.append(t("located {when}", when=when))
+            rich.append(html.escape(t("located {when}", when="\x00")).replace("\x00", mono.format(html.escape(when))))
+        return " · ".join(plain), " · ".join(rich)
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette
-        self._icon.setPixmap(glyph("device", palette["accent_fg"], 22).pixmap(QSize(22, 22)))
+        tint = QColor(palette["accent_fg"])
+        tint.setAlphaF(0.14 if QColor(palette["bg"]).lightness() > 128 else 0.20)
+        self._tile.set_fill(tint)
+        self._icon.setPixmap(glyph("device", palette["accent_fg"], 20).pixmap(QSize(20, 20)))
+        self.map_btn.setIcon(glyph("pin", palette["text"], 14))
+        self.sound_btn.setIcon(glyph("bell", palette["text"], 14))
 
     def _map(self) -> None:
         from PySide6.QtCore import QUrl
@@ -2425,55 +2716,132 @@ class _Progress(QObject):
     moved = Signal(int, int)  # bytes so far, total (emitted from the download thread)
 
 
-class UpdateDialog(_Dialog):
-    """A newer Skyfold: what's new (the release notes) and Update now / Later."""
+def _current_palette() -> dict[str, str]:
+    """The theme the app shows now (for a window that isn't handed one): told apart by the window
+    colour the app's palette was set to (theme.qpalette)."""
+    from .theme import DARK, LIGHT, OLED, palette
 
+    bg = QApplication.palette().color(QPalette.Window).name().lower() if QApplication.instance() else ""
+    for c in (OLED, DARK, LIGHT):
+        if bg == c["bg"].lower():
+            return c
+    return palette("system")
+
+
+class _GlowHead(QWidget):
+    """The top of a compact window: a soft glow of the accent behind the mark (as Hero's)."""
+
+    def __init__(self, palette: dict[str, str]) -> None:
+        super().__init__()
+        self.c = palette
+
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
+        self.update()
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        from PySide6.QtGui import QRadialGradient
+
+        p = QPainter(self)
+        # around the mark, gone before the bottom edge (no visible seam with the body under it)
+        g = QRadialGradient(50, 50, max(self.height(), 1))
+        glow = QColor(self.c["accent"])
+        glow.setAlphaF(0.16)
+        g.setColorAt(0, glow)
+        glow.setAlphaF(0.0)
+        g.setColorAt(0.55, glow)
+        p.fillRect(self.rect(), g)
+
+
+class UpdateDialog(_Dialog):
+    """A newer Skyfold: what's new (the release notes) and Update now / Later. As in the 1.1 design:
+    the mark, a large title and the versions in Cascadia Mono, the notes readable on a card, and the
+    footer band ("Later" quietly on the left)."""
+
+    GLASS = True
     ready = Signal(object)  # the unpacked new version: the controller installs it and quits
 
-    def __init__(self, rel, can_install: bool) -> None:
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
+        self.notes.style_notes(palette)
+
+    def __init__(self, rel, can_install: bool, palette: dict[str, str] | None = None) -> None:
+        import html
+
         super().__init__(t("Update – {app}", app=APP_NAME))
+        self.c = palette or _current_palette()
         self.rel = rel
         self.can_install = can_install
         self._task: Any = None
         self._cancel = False
-        self.resize(*_fit_screen(560, 560))
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 22, 24, 18)
-        lay.setSpacing(10)
-        head = QHBoxLayout()
-        head.setSpacing(14)
-        head.addWidget(_logo(40))
+        self.setMinimumWidth(500)
+        self.resize(*_fit_screen(580, 600))
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        head = _GlowHead(self.c)
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(24, 24, 24, 8)
+        hl.setSpacing(16)
+        logo = _logo(44)
+        logo.setFixedSize(52, 52)
+        hl.addWidget(logo, 0, Qt.AlignTop)
         col = QVBoxLayout()
         col.setSpacing(2)
-        col.addWidget(_label(t("Skyfold {version} is available", version=rel.version), "Title"))
-        col.addWidget(_label(t("You have version {version}.", version=VERSION), "Muted"))
-        head.addLayout(col, 1)
-        lay.addLayout(head)
-        lay.addWidget(_label(t("What's new"), "Muted"))
+        title = _label(t("Skyfold {version} is available", version=rel.version), "Title", True)
+        title.setTextFormat(Qt.PlainText)
+        col.addWidget(title)
+        mono = "<span style=\"font-family:'Cascadia Mono','Cascadia Code','Consolas'\">{}</span>"
+        have = _label(html.escape(t("You have version {version}.", version="\x00")).replace(
+            "\x00", mono.format(html.escape(VERSION))), "Lead", True)
+        have.setTextFormat(Qt.RichText)
+        have.setTextInteractionFlags(Qt.NoTextInteraction)
+        have.setAccessibleName(t("You have version {version}.", version=VERSION))
+        col.addWidget(have)
+        hl.addLayout(col, 1)
+        outer.addWidget(head)
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(24, 8, 24, 16)
+        lay.setSpacing(4)
+        outer.addWidget(body, 1)
+        lay.addWidget(_label(t("What's new"), "GroupLabel"))
+        lay.addSpacing(4)
+        card = SoftCard()
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(6, 6, 6, 6)
         self.notes = _ReleaseNotes()
-        self.notes.setOpenExternalLinks(True)
+        # links in the release notes: only https pages open (in the browser); a file or network
+        # path written into them (the notes aren't covered by the build attestation) never does
+        self.notes.setOpenExternalLinks(False)
+        self.notes.setOpenLinks(False)
+        self.notes.anchorClicked.connect(
+            lambda u: u.scheme() == "https" and _open_url(u.toString()))
+        self.notes.setAccessibleName(t("What's new"))
         from ..updater import whats_new
 
         self.notes.setMarkdown(whats_new(rel.notes) or t("No description for this version."))
-        lay.addWidget(self.notes, 1)
+        self.notes.style_notes(self.c)
+        cl.addWidget(self.notes)
+        lay.addWidget(card, 1)
+        lay.addSpacing(8)
         self.status = _label(
             t("Skyfold downloads the new version, checks it, closes and starts again. Your settings and "
               "synced files stay as they are.") if can_install else
             t("Download the new version from GitHub and replace your Skyfold folder with it (settings are kept)."),
             "Hint", True)
         lay.addWidget(self.status)
-        btns = QHBoxLayout()
-        self.later = QPushButton(t("Later"))
+        fl = _footer_band(outer)
+        self.later = _quiet_button(t("Later"))
         self.later.setAutoDefault(False)
         self.later.clicked.connect(self.reject)
         self.go = QPushButton(t("Update now") if can_install else t("Open download page"))
         self.go.setObjectName("Primary")
         self.go.setDefault(True)
         self.go.clicked.connect(self._go)
-        btns.addStretch(1)
-        btns.addWidget(self.later)
-        btns.addWidget(self.go)
-        lay.addLayout(btns)
+        fl.addWidget(self.later)
+        fl.addStretch(1)
+        fl.addWidget(self.go)
 
     def _go(self) -> None:
         from .. import updater
@@ -2522,26 +2890,43 @@ class UpdateDialog(_Dialog):
 
 
 class FindMyDialog(_Dialog):
-    """Your Apple devices with battery, last location (opens a map) and 'play sound'."""
+    """Your Apple devices with battery, last location (opens a map) and 'play sound': each device a
+    card, a compact header with Refresh, and the footer band."""
 
+    GLASS = True
     signInAgain = Signal()
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette  # rows made later (Refresh) take the new colours too
+        self.refresh_btn.setIcon(glyph("sync", palette["text"], 14))
 
     def __init__(self, palette: dict[str, str], get_api) -> None:
         super().__init__(t("Find My – {app}", app=APP_NAME))
         self.c, self.get_api = palette, get_api
         self.setMinimumWidth(560)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 20, 24, 18)
-        lay.setSpacing(12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(24, 22, 24, 16)
+        lay.setSpacing(4)
+        outer.addWidget(body, 1)
         head = QHBoxLayout()
-        head.addWidget(_label(t("Find My"), "Title"), 1)
+        head.setSpacing(12)
+        col = QVBoxLayout()
+        col.setSpacing(4)
+        col.addWidget(_label(t("Find My"), "Title"))
+        col.addWidget(_label(t("The location opens in Google Maps in your browser. "
+                               "Lost device? Use iCloud.com for Lost Mode or erasing."), "Lead", True))
+        head.addLayout(col, 1)
         self.refresh_btn = QPushButton(t("Refresh"))
+        self.refresh_btn.setIconSize(QSize(14, 14))
+        self.refresh_btn.setCursor(Qt.PointingHandCursor)
         self.refresh_btn.clicked.connect(self.load)
-        head.addWidget(self.refresh_btn)
+        head.addWidget(self.refresh_btn, 0, Qt.AlignTop)
         lay.addLayout(head)
+        lay.addSpacing(12)
         self.info = _label(t("Locating your devices…"), "Muted", True)
         lay.addWidget(self.info)
         self.signin_btn = QPushButton(t("Sign in again"))
@@ -2549,11 +2934,11 @@ class FindMyDialog(_Dialog):
         self.signin_btn.clicked.connect(self._sign_in_again)
         self.signin_btn.hide()
         lay.addWidget(self.signin_btn, 0, Qt.AlignLeft)
-        self.card = QFrame()
-        self.card.setObjectName("Card")
+        self.card = QWidget()
+        self.card.setObjectName("Root")
         self.rows = QVBoxLayout(self.card)
-        self.rows.setContentsMargins(6, 6, 6, 6)
-        self.rows.setSpacing(0)
+        self.rows.setContentsMargins(0, 0, 0, 2)
+        self.rows.setSpacing(4)
         self.card.hide()
         self._devices_scroll = QScrollArea()
         self._devices_scroll.setWidgetResizable(True)
@@ -2563,11 +2948,17 @@ class FindMyDialog(_Dialog):
         self._devices_scroll.setMaximumHeight(_fit_screen(10_000, 600)[1] - 220)
         self._devices_scroll.hide()
         lay.addWidget(self._devices_scroll)
-        lay.addWidget(_label(t("The location opens in Google Maps in your browser. "
-                               "Lost device? Use iCloud.com for Lost Mode or erasing."), "Hint", True))
+        lay.addStretch(1)
+        fl = _footer_band(outer)
+        web = _quiet_button(t("Open iCloud.com"))
+        web.clicked.connect(lambda: _open_url("https://www.icloud.com"))
         close = QPushButton(t("Close"))
+        close.setObjectName("Primary")
         close.clicked.connect(self.accept)
-        lay.addWidget(close, 0, Qt.AlignRight)
+        fl.addWidget(web)
+        fl.addStretch(1)
+        fl.addWidget(close)
+        self.apply_palette(palette)
         self.load()
 
     def _sign_in_again(self) -> None:
@@ -2594,11 +2985,7 @@ class FindMyDialog(_Dialog):
                 w = self.rows.takeAt(0).widget()
                 if w:
                     w.deleteLater()
-            for i, d in enumerate(devs):
-                if i:
-                    sep = QFrame()
-                    sep.setObjectName("Sep")
-                    self.rows.addWidget(sep)
+            for d in devs:
                 self.rows.addWidget(DeviceRow(d, self.c, self.get_api))
             self.card.setVisible(bool(devs))
             self._devices_scroll.setVisible(bool(devs))

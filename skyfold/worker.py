@@ -423,6 +423,9 @@ class SyncWorker(QObject):
     def sign_out(self) -> None:
         self.cancel()
         self._avatar_at = 0.0
+        from . import avatar
+
+        avatar.forget_all()  # (again here: a picture read just before signing out never stays)
         self.api = None
         self.syncer = None
         self.drive = None
@@ -829,14 +832,17 @@ class SyncWorker(QObject):
         self._avatar_at = time.monotonic()
         from . import avatar
 
+        api, who = self.api, self.settings.apple_id
         try:
-            data = extras.account_photo(self.api)
+            data = extras.account_photo(api)
         except Exception as exc:  # noqa: BLE001 - purely cosmetic
             log.info("Account picture unavailable: %s", describe(exc))
             return
+        if self.api is not api or self.settings.apple_id != who or auth.signed_out():
+            return  # signed out (or another Apple ID) while the picture was on its way: never kept
         if data is None:
-            avatar.forget(self.settings.apple_id)  # (taken off the card: the letter again)
-        elif not avatar.save(self.settings.apple_id, data):
+            avatar.forget(who)  # (taken off the card: the letter again)
+        elif not avatar.save(who, data):
             log.info("Account picture unreadable")
 
     def _run_bookmarks(self, problems: list[str]) -> bool:

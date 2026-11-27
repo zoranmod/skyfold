@@ -456,6 +456,19 @@ class ServiceRow(QFrame):
         super().keyPressEvent(e)
 
 
+def _our_note_page(p) -> bool:
+    """A page Skyfold wrote for a note (in the Notes folder), not any .html file that came from
+    iCloud Drive: only those open in the browser; anything else is shown in File Explorer."""
+    try:
+        from ..config import Settings
+        from ..notes_engine import _is_our_page
+
+        notes = Settings.load().notes_dir
+        return bool(notes) and p.resolve().is_relative_to(type(p)(notes).resolve()) and _is_our_page(p)
+    except Exception:  # noqa: BLE001 - when in doubt, Explorer
+        return False
+
+
 def reveal(target: str) -> None:
     """Show what an activity entry is about: a note page opens in the browser, a file is selected
     in Explorer, a folder opens. If the file is gone, its folder opens instead."""
@@ -466,7 +479,7 @@ def reveal(target: str) -> None:
     from PySide6.QtGui import QDesktopServices
 
     p = Path(target)
-    if p.is_file() and p.suffix.lower() == ".html":
+    if p.is_file() and p.suffix.lower() == ".html" and _our_note_page(p):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
     elif p.is_file():
         subprocess.Popen([os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "explorer.exe"), "/select,", str(p)])
@@ -517,6 +530,9 @@ class ActivityRow(QFrame):
         self.detail.setVisible(bool(self.detail_text))
         self.when = QLabel(fmt_time(ts))
         self.when.setObjectName("ActWhen")
+        from .safe_text import plain
+
+        plain(self.text, self.detail, self.when)  # (file and note names come from iCloud: never HTML)
         col = QVBoxLayout()
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(0)
@@ -548,7 +564,9 @@ class ActivityRow(QFrame):
         tip = [title] + ([self.detail_text] if self.detail_text else []) + ([self.target] if self.target else [])
         if self.kind == "error" and not self.target:
             tip.append(t("Click for details"))
-        self.setToolTip(chr(10).join(tip))
+        from .safe_text import plain_tip
+
+        self.setToolTip(plain_tip(chr(10).join(tip)))
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette
@@ -630,6 +648,7 @@ class Banner(QFrame):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 10, 10, 10)
         self.text = QLabel()
+        self.text.setTextFormat(Qt.PlainText)
         self.text.setWordWrap(True)
         self.btn = QPushButton(button)
         self.btn.setCursor(Qt.PointingHandCursor)
@@ -714,6 +733,7 @@ class Flyout(QWidget):
         self._spin_angle = 0.0
         self._spin_base: QPixmap | None = None
         self.status_line = QLabel("")
+        self.status_line.setTextFormat(Qt.PlainText)
         self.status_line.setObjectName("StatusLine")
         status.addWidget(self.status_icon, 0, Qt.AlignVCenter)
         status.addWidget(self.status_line, 1)
@@ -803,6 +823,7 @@ class Flyout(QWidget):
         self.bar.setTextVisible(False)
         self.bar.setRange(0, 1000)
         self.bar_label = QLabel()
+        self.bar_label.setTextFormat(Qt.PlainText)
         self.bar_label.setObjectName("Hint")
         cl.addWidget(self.bar)
         cl.addWidget(self.bar_label)
@@ -974,13 +995,14 @@ class Flyout(QWidget):
         super().paintEvent(e)
 
     def _more_menu(self) -> None:
-        from PySide6.QtWidgets import QMenu
+        from .menus import Menu
 
-        menu = QMenu(self)
-        menu.addAction(glyph("globe", self.c["muted"]), t("Open iCloud.com"), self.web_btn.click)
-        pause = menu.addAction(glyph("play" if self.paused else "pause", self.c["muted"]),
-                               t("Resume syncing") if self.paused else t("Pause all syncing"), self.togglePause.emit)
+        menu = Menu(self.c, self)  # (rounded, 32 px items with 16 px icons, as in the 1.1 design)
+        menu.add("globe", t("Open iCloud.com"), self.web_btn.click)
+        pause = menu.add("play" if self.paused else "pause",
+                         t("Resume syncing") if self.paused else t("Pause all syncing"), self.togglePause.emit)
         pause.setEnabled(self.state not in ("auth", "setup"))
+        menu.set_glyph(pause, "play" if self.paused else "pause")  # (quieter while it can't be used)
         menu.exec(self.more_btn.mapToGlobal(self.more_btn.rect().topRight())
                   - QPoint(menu.sizeHint().width(), menu.sizeHint().height() + 4))
 
@@ -1108,7 +1130,9 @@ class Flyout(QWidget):
         if pending:
             self.status_title.setText(t("Deletion needs your OK"))
             self.status_text.setText(getattr(self, "_pending_short", "") or self._pending_text)
-            self.status_text.setToolTip(self._pending_text)
+            from .safe_text import plain_tip
+
+            self.status_text.setToolTip(plain_tip(self._pending_text))
             self.status_text.show()
         elif self.state == "idle":
             self.status_title.setText(t("Up to date"))  # (the line under the name says "in sync")
@@ -1346,6 +1370,7 @@ class Flyout(QWidget):
         box = QMessageBox(self)
         box.setWindowTitle(t("Sync problem"))
         box.setIcon(QMessageBox.Warning)
+        box.setTextFormat(Qt.PlainText)  # (the message names files from iCloud: never HTML)
         box.setText(row.message)
         when = fmt_time(row.ts) + (f"  (×{row.count})" if row.count > 1 else "")
         network = any(w in row.message.lower() for w in ("connection", "timed out", "reach", "network",

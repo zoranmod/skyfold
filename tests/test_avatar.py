@@ -38,10 +38,12 @@ class _Api:
         assert name == "contacts"
         return "https://p01-contactsws.example.invalid"
 
-    def _get(self, url, params=None, timeout=None):
+    def _get(self, url, params=None, timeout=None, stream=False):
         self.asked.append(url.rsplit("/co", 1)[-1] if "/co" in url else url)
         if url == PHOTO_URL:
-            return SimpleNamespace(status_code=self._status, content=self._content)
+            body = self._content
+            return SimpleNamespace(status_code=self._status, headers={"Content-Type": "image/png"},
+                                   iter_content=lambda n: [body[i:i + n] for i in range(0, len(body), n)])
         key = url.rsplit("/co", 1)[-1]
         if key in self.refuse or (key.startswith("/mecard") and "/startup" in self.refuse_until_startup()
                                   and "prefToken" not in (params or {})):
@@ -69,7 +71,7 @@ def test_the_card_after_the_start_up_request_when_apple_wants_it(qapp):  # noqa:
     api.refuse_until_startup = lambda: {"/startup"}
     real = api._get
 
-    def get(url, params=None, timeout=None):
+    def get(url, params=None, timeout=None, stream=False):
         key = url.rsplit("/co", 1)[-1]
         if key == "/startup":
             api.asked.append(key)
@@ -77,7 +79,7 @@ def test_the_card_after_the_start_up_request_when_apple_wants_it(qapp):  # noqa:
         if key.startswith("/mecard") and "prefToken" not in (params or {}):
             api.asked.append(key)
             return SimpleNamespace(status_code=400, json=lambda: {})
-        return real(url, params, timeout)
+        return real(url, params, timeout, stream)
 
     api.session.get = get
     assert extras.account_photo(api) == png

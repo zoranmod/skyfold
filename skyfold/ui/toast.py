@@ -442,8 +442,10 @@ class ToastCard(QWidget):
         s = 17
         self._glyph.paint(p, QRect(int(tr.center().x() - s / 2 + 0.5), int(tr.center().y() - s / 2 + 0.5), s, s))
         # the time left, as a thin line along the bottom that stops while the pointer is on the card
-        if self._timer.isActive() and self.timeout > 0:
-            left = max(0.0, min(1.0, self._timer.remainingTime() / self.timeout))
+        if self.timeout > 0 and not self.leaving:
+            if self._timer.isActive():  # running: what is left; while the pointer is on it: where it stopped
+                self._left = max(0.0, min(1.0, self._timer.remainingTime() / self.timeout))
+            left = getattr(self, "_left", 1.0)
             line = QColor(col["accent"])
             line.setAlphaF(0.75)
             p.save()

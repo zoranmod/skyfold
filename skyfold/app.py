@@ -361,30 +361,36 @@ class Controller(QObject):
 
     # plumbing ---------------------------------------------------------------
     def _build_menu(self) -> None:
-        m = QMenu()
-        make_popup_round(m)  # rounded like the rest of the app
-        self.m_status = QAction(t("Everything is in sync"))
+        from .ui.menus import Menu
+
+        # the 1.1 design: rounded, 32 px items with 16 px line icons, hairline separators; it takes a
+        # new theme by itself (refresh_palette reaches it: it is a window of its own)
+        m = Menu(self.c)
+        self.m_status = QAction(t("Everything is in sync"), m)
         self.m_status.setEnabled(False)
         m.addAction(self.m_status)
+        m.set_glyph(self.m_status, "cloud")
         m.addSeparator()
-        m.addAction(t("Show"), lambda: self.flyout.show_at(self.tray.geometry()))
-        m.addAction(t("Sync now"), lambda: self.req.syncNow.emit(True))
-        m.addAction(t("Full library check"), lambda: self.req.fullCheck.emit())
-        self.m_pause = m.addAction(t("Pause"), self.toggle_pause)
-        m.addAction(t("Photos"), self.open_photos_or_folder)
-        m.addAction(t("Notes"), self.open_notes)
-        m.addAction(t("Find My devices…"), self.open_find_my)
+        m.add("window", t("Show"), lambda: self.flyout.show_at(self.tray.geometry()))
+        m.add("sync", t("Sync now"), lambda: self.req.syncNow.emit(True))
+        m.add("search", t("Full library check"), lambda: self.req.fullCheck.emit())
+        self.m_pause = m.add("pause", t("Pause"), self.toggle_pause)
+        m.add("photo", t("Photos"), self.open_photos_or_folder)
+        m.add("note", t("Notes"), self.open_notes)
+        m.add("pin", t("Find My devices…"), self.open_find_my)
         m.addSeparator()
-        m.addAction(t("Settings…"), self.open_settings)
-        m.addAction(t("Open log"), self.open_log)
+        m.add("gear", t("Settings…"), self.open_settings)
+        m.add("file", t("Open log"), self.open_log)
         m.addSeparator()
-        m.addAction(t("Quit"), self.quit)
+        m.add("power", t("Quit"), self.quit)
         self.menu = m
         self.tray.setContextMenu(m)
         self._sync_pause_label()
 
     def _sync_pause_label(self) -> None:
         self.m_pause.setText(t("Resume syncing") if self.settings.paused else t("Pause"))
+        if hasattr(self.menu, "set_glyph"):
+            self.menu.set_glyph(self.m_pause, "play" if self.settings.paused else "pause")
 
     # events -------------------------------------------------------------------
     def _on_tray(self, reason) -> None:
@@ -849,6 +855,13 @@ class Controller(QObject):
         from . import avatar
 
         avatar.forget_all()  # the account picture leaves with the account
+        netdiag.delete()  # and the connection diagnostics file
+        try:  # and the copy of the Safari bookmarks the browser extension reads
+            from . import native_host
+
+            native_host.cache_file().unlink(missing_ok=True)
+        except OSError as exc:
+            log.info("Bookmarks copy not removed: %s", exc.__class__.__name__)
         self._login_api = None
         self.worker.cancel()  # stop the running pass now; the rest happens on the worker thread
         # Right now, not queued: a sign-in made while the worker is still busy must never be undone by it.
@@ -997,17 +1010,21 @@ def main() -> int:
     app.setQuitOnLastWindowClosed(False)
     app.setStyle("Fusion")
 
-    # single instance: a second launch just pops the running one open
-    sock = QLocalSocket()
+    # single instance: a second launch just pops the running one open. The mutex (in this Windows
+    # session's own namespace) decides whether Skyfold runs; the pipe only carries "show". (Asking
+    # the pipe first let another user on this PC, who can create a pipe of that name, keep Skyfold
+    # from starting at all.)
     instance = _instance_name()
-    sock.connectToServer(instance)
-    if sock.waitForConnected(300):
-        sock.write(b"quit" if "--quit" in sys.argv else b"show")
-        sock.flush()
-        sock.waitForBytesWritten(300)
+
+    def _tell_running() -> int:
+        sock = QLocalSocket()
+        sock.connectToServer(instance)
+        if sock.waitForConnected(300):
+            sock.write(b"quit" if "--quit" in sys.argv else b"show")
+            sock.flush()
+            sock.waitForBytesWritten(300)
         return 0
-    if "--quit" in sys.argv:
-        return 0  # nothing running
+
     global _MUTEX
     if "--after" in sys.argv:  # started by a restart: the old copy must have ended first
         try:
@@ -1017,9 +1034,19 @@ def main() -> int:
             pass
     _MUTEX = _single_instance_mutex(instance)
     if _MUTEX is False:
-        return 0  # another Skyfold of this user is just starting: it will show itself
+        return _tell_running()  # Skyfold already runs for this user: show it (or quit it)
+    if _MUTEX is None:  # (no mutex on this system: the pipe alone tells)
+        probe = QLocalSocket()
+        probe.connectToServer(instance)
+        if probe.waitForConnected(300):
+            probe.abort()
+            return _tell_running()
+    if "--quit" in sys.argv:
+        return 0  # nothing running
     QLocalServer.removeServer(instance)
     server = QLocalServer()
+    if hasattr(server, "setSocketOptions"):
+        server.setSocketOptions(QLocalServer.UserAccessOption)  # only this Windows user may talk to it
     listen_error = "" if server.listen(instance) else server.errorString()
 
     setup_logging()

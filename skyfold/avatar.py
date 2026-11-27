@@ -26,6 +26,10 @@ def save(apple_id: str, data: bytes, folder: Path | None = None) -> bool:
     from PySide6.QtCore import QRect, Qt
     from PySide6.QtGui import QImage
 
+    from . import auth
+
+    if auth.signed_out():
+        return False  # (signed out meanwhile: nothing of the account is written)
     img = QImage.fromData(data)
     if img.isNull() or img.width() < 8 or img.height() < 8:
         return False

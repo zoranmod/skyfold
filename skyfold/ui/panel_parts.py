@@ -167,6 +167,7 @@ class TwoLineLabel(QLabel):
         super().__init__()
         self._full = ""
         self._lines = lines
+        self.setTextFormat(Qt.PlainText)  # (status text names files from iCloud: never HTML)
         self.setWordWrap(False)
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -176,8 +177,10 @@ class TwoLineLabel(QLabel):
         return self._full
 
     def setText(self, text: str) -> None:  # noqa: N802
+        from .safe_text import plain_tip
+
         self._full = text or ""
-        self.setToolTip(self._full if self._full else "")
+        self.setToolTip(plain_tip(self._full))
         self._render()
 
     def resizeEvent(self, e) -> None:  # noqa: N802

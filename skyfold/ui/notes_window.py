@@ -50,8 +50,8 @@ ROW_ID = Qt.UserRole
 ROW_SNIPPET = Qt.UserRole + 1
 FOLDER_PATH = Qt.UserRole
 OPENABLE = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".heic", ".heif", ".tif", ".tiff", ".webp", ".bmp",
-            ".m4a", ".mp3", ".wav", ".aac", ".caf", ".mov", ".mp4", ".m4v", ".txt", ".csv", ".rtf",
-            ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".pages", ".numbers", ".key", ".vcf"}
+            ".m4a", ".mp3", ".wav", ".aac", ".caf", ".mov", ".mp4", ".m4v", ".txt", ".csv",
+            ".docx", ".xlsx", ".pptx", ".pages", ".numbers", ".key", ".vcf"}  # (no macro-capable .doc/.xls/.ppt/.rtf)
 HIGHLIGHTS = ("#ba55d3", "#ff5252", "#ffb74d", "#80cbc4", "#64b5f6")  # Apple's five highlight colours
 MAX_MARKS = 300  # search words marked in one note
 IMAGE_BUDGET = 400_000_000  # bytes of decoded pictures for the open note (then less sharp, then a note)
@@ -857,6 +857,8 @@ class _Reader(QTextBrowser):
             return self._cache[key]
         reader = QImageReader(str(f))
         reader.setAutoTransform(True)
+        if bytes(reader.format()).lower() in (b"svg", b"svgz"):
+            return None  # (a drawing that can load other things: only real pictures are shown)
         raw = reader.size()  # as stored (a photo taken upright may be stored sideways)
         disp = raw.transposed() if reader.transformation() & QImageIOHandler.TransformationRotate90 else raw
         if raw.isValid() and disp.width() > 0:
@@ -1538,7 +1540,9 @@ class NotesWindow(LibraryDialog):
                                           t("Locked note") if r.locked else "") if x)
             it.setData(Qt.AccessibleTextRole, text)
             it.setData(Qt.AccessibleDescriptionRole, snip)
-            it.setToolTip(text)
+            from .safe_text import plain_tip
+
+            it.setToolTip(plain_tip(text))  # (a shared note's title is anyone's text: never HTML)
             self.notes.addItem(it)
             if r.id == keep:
                 select = it
@@ -1602,7 +1606,9 @@ class NotesWindow(LibraryDialog):
         when = _long_when(row.modified) if row.modified else ""
         folder = row.folder.replace("/", " \u203a ")
         self.meta.setText(" \u00b7 ".join(x for x in (folder, when) if x))  # "Home \u00b7 24 November 2026, 07:15"
-        self.meta.setToolTip(self.meta.text())
+        from .safe_text import plain_tip
+
+        self.meta.setToolTip(plain_tip(self.meta.text()))
         self._note_failed = 0.0
         if row.locked:
             self.reader.clear_note()
@@ -1707,6 +1713,8 @@ class NotesWindow(LibraryDialog):
                 continue
             reader = QImageReader(str(f))
             reader.setAutoTransform(True)
+            if bytes(reader.format()).lower() in (b"svg", b"svgz"):
+                continue
             raw = reader.size()
             if not raw.isValid() or raw.width() <= 0 or raw.height() <= 0:
                 continue

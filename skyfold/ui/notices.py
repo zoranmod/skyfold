@@ -129,29 +129,57 @@ class BellButton(QToolButton):
         p.end()
 
 
+def short_time(ts: str) -> str:
+    """The time on a row, short as in the panel's activity: "5 min ago", today's "14:32", else the date."""
+    try:
+        dt = datetime.fromisoformat(ts).astimezone()
+    except (TypeError, ValueError):
+        return fmt_time(ts)
+    now = datetime.now().astimezone()
+    if (now - dt).total_seconds() < 3600 or dt.date() != now.date():
+        if dt.date() != now.date():
+            from PySide6.QtCore import QDate, QLocale
+
+            return QLocale.system().toString(QDate(dt.year, dt.month, dt.day), QLocale.ShortFormat)
+        return fmt_time(ts)
+    from PySide6.QtCore import QLocale, QTime
+
+    return QLocale.system().toString(QTime(dt.hour, dt.minute), QLocale.ShortFormat)
+
+
+def _is_today(ts: str) -> bool:
+    try:
+        return datetime.fromisoformat(ts).astimezone().date() == datetime.now().astimezone().date()
+    except (TypeError, ValueError):
+        return True
+
+
 class NoticeRow(QFrame):
-    """One notification in the list: the tile in its colour, title, time, text and its buttons."""
+    """One notification in the list, as the panel's activity rows: a 32 px tile tinted with its colour,
+    the title (600), the text (12.5 px), the short time in Cascadia Mono on the right, and the
+    buttons that still apply as quiet links."""
 
     def __init__(self, notice: Notice, palette: dict[str, str], resolve: Resolver) -> None:
         super().__init__()
         self.notice = notice
         self.setObjectName("NoticeRow")
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(2, 8, 2, 8)
-        lay.setSpacing(10)
+        lay.setContentsMargins(4, 7, 4, 7)
+        lay.setSpacing(12)
         self.tile = GlowTile(notice.icon, palette, notice_color(palette, notice.icon, notice.tone),
-                             size=28, icon=16, radius=8)
+                             size=32, icon=16, radius=9)
         lay.addWidget(self.tile, 0, Qt.AlignTop)
         col = QVBoxLayout()
         col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(2)
+        col.setSpacing(1)
         top = QHBoxLayout()
         top.setSpacing(8)
         self.title = QLabel(notice.title)
         self.title.setObjectName("RowTitle")
         self.title.setWordWrap(True)
-        self.when = QLabel(fmt_time(notice.ts))
-        self.when.setObjectName("Hint")
+        self.when = QLabel(short_time(notice.ts))
+        self.when.setObjectName("ActWhen")
+        self.when.setToolTip(fmt_time(notice.ts))
         top.addWidget(self.title, 1)
         top.addWidget(self.when, 0, Qt.AlignTop)
         col.addLayout(top)
@@ -174,7 +202,7 @@ class NoticeRow(QFrame):
                 continue
             label, fn, _ok = found
             b = QPushButton(label)
-            b.setObjectName("Link")
+            b.setObjectName("ListLink")
             b.setCursor(Qt.PointingHandCursor)
             b.setStyleSheet("min-height: 22px; max-height: 22px;")  # a compact row of links
             b.setAccessibleName(f"{label}: {notice.title}")
@@ -185,14 +213,16 @@ class NoticeRow(QFrame):
             row.addStretch(1)
             col.addLayout(row)
         lay.addLayout(col, 1)
-        self.setAccessibleName(", ".join((notice.title, notice.text, self.when.text())))
+        self.setAccessibleName(", ".join((notice.title, notice.text, fmt_time(notice.ts))))
 
     def refresh(self) -> None:
-        self.when.setText(fmt_time(self.notice.ts))
+        self.when.setText(short_time(self.notice.ts))
+        self.when.setToolTip(fmt_time(self.notice.ts))
 
 
 class NoticesPage(QWidget):
-    """The panel's notifications page: Back, the list (newest first) and Clear all."""
+    """The panel's notifications page: Back, the list (newest first, under "Today" and "Earlier")
+    and Clear."""
 
     back = Signal()
 
@@ -216,11 +246,12 @@ class NoticesPage(QWidget):
         self.back_button.setCursor(Qt.PointingHandCursor)
         self.back_button.clicked.connect(self.back)
         title = QLabel(t("Notifications"))
-        title.setObjectName("H2")
-        self.clear_button = QPushButton(t("Clear all"))
-        self.clear_button.setObjectName("Link")
+        title.setObjectName("PanelTitle")
+        self.clear_button = QPushButton(t("Clear"))
+        self.clear_button.setObjectName("ListLink")
         self.clear_button.setCursor(Qt.PointingHandCursor)
         self.clear_button.setToolTip(t("Empty this list. Nothing else changes."))
+        self.clear_button.setAccessibleName(t("Clear all"))
         self.clear_button.clicked.connect(log.clear)
         head.addWidget(self.back_button)
         head.addWidget(title, 1)
@@ -230,6 +261,7 @@ class NoticesPage(QWidget):
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setStyleSheet("QScrollBar:vertical { width: 6px; margin: 0; }")  # slim, as the panel's list
         box = QWidget()
         box.setObjectName("Root")
         self._rows = QVBoxLayout(box)
@@ -253,15 +285,27 @@ class NoticesPage(QWidget):
             self.rebuild()
 
     def rows(self) -> list[NoticeRow]:
+        return [w for w in self._widgets() if isinstance(w, NoticeRow)]
+
+    def _widgets(self) -> list[QWidget]:
         return [self._rows.itemAt(i).widget() for i in range(self._rows.count() - 1)]
 
     def rebuild(self) -> None:
-        """Rows for what the list holds now, with the buttons that still apply."""
-        for row in self.rows():
-            self._rows.removeWidget(row)
-            row.hide()  # gone at once (deleteLater alone leaves it painted until the event loop runs)
-            row.deleteLater()
+        """Rows for what the list holds now, with the buttons that still apply, under "Today" and
+        "Earlier" (the group labels, as the panel's "Recent activity")."""
+        for w in self._widgets():
+            self._rows.removeWidget(w)
+            w.hide()  # gone at once (deleteLater alone leaves it painted until the event loop runs)
+            w.deleteLater()
+        group = None
         for notice in self.log.items:
+            today = _is_today(notice.ts)
+            if today != group:
+                group = today
+                head = QLabel(t("Today") if today else t("Earlier"))
+                head.setObjectName("ListHead")
+                head.setContentsMargins(4, 8 if self._rows.count() > 1 else 2, 0, 4)
+                self._rows.insertWidget(self._rows.count() - 1, head)
             row = NoticeRow(notice, self.c, self.resolve)
             for b in row.buttons:
                 b.clicked.connect(self.back)  # (the action usually opens a window; the panel goes home)

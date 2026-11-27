@@ -723,6 +723,10 @@ BS: dict[str, str] = {
     "Skyfold {version} is available": "Dostupan je Skyfold {version}",
     "You have version {version}.": "Ti imaš verziju {version}.",
     "What's new": 'Šta je novo',
+    # the remaining windows in the 1.1 design (Drive folders, notifications list) ---------------
+    "iCloud Drive folders": "Folderi na iCloud Driveu",
+    "Today": "Danas",
+    "Earlier": "Ranije",
     "No description for this version.": "Nema opisa za ovu verziju.",
     "Skyfold downloads the new version, checks it, closes and starts again. Your settings and synced files stay as they are.": "Skyfold skine novu verziju, provjeri je, zatvori se i ponovo pokrene. Tvoje postavke i sinhronizovani fajlovi ostaju kakvi jesu.",
     "Download the new version from GitHub and replace your Skyfold folder with it (settings are kept).": "Skini novu verziju s GitHuba i njome zamijeni svoj Skyfold folder (postavke ostaju).",
@@ -925,6 +929,7 @@ BS: dict[str, str] = {
     "Your photos are in step with iCloud.": "Tvoje slike su usklađene sa iCloudom.",
     "Started": "Počelo",
     "now": "sada",
+    "This update can't be checked, so it wasn't installed.": "Ovo ažuriranje se ne može provjeriti, pa nije instalirano.",
     "Delete them on this PC too? They go to the Recycle Bin, where they can be restored.":
         "Obrisati ih i na ovom PC-u? Idu u Recycle Bin, odakle se mogu vratiti.",
     "Delete them in iCloud too? They go to Recently Deleted, where they stay for 30 days.":

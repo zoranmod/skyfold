@@ -85,12 +85,19 @@ def account_photo(api: Any) -> bytes | None:
         url = _card_photo_url(raw)
         if url is None:
             return None  # a card without a photo
-        r = api.session.get(url, timeout=30)
+        r = api.session.get(url, timeout=30, stream=True)
         if r.status_code != 200:
             log.info("Account picture: photo not downloaded (%s)", r.status_code)
             return None
-        data = r.content
-        return data if 0 < len(data) <= PHOTO_MAX else None
+        kind = str(getattr(r, "headers", {}).get("Content-Type", "image/")).lower()
+        if not kind.startswith("image/"):
+            return None  # (only a picture is ever kept)
+        data = bytearray()
+        for chunk in r.iter_content(64 * 1024):  # read at most PHOTO_MAX: a huge answer is never held
+            data += chunk
+            if len(data) > PHOTO_MAX:
+                return None
+        return bytes(data) or None
 
     tried: list[str] = []
     return _call(run)

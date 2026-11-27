@@ -115,6 +115,10 @@ def install() -> None:
 
         icloud = type(self).__name__ == "PyiCloudSession" or getattr(self, "_skyfold_icloud", False)
         check(request.url, apple=True, github=not icloud)
+        if kwargs.get("verify") is False:
+            # the server's certificate is always checked (a pyicloud session made without saying
+            # so defaults to not checking it; Skyfold's own pass verify=True, and this keeps it so)
+            kwargs["verify"] = True
         return netdiag.timed(original, self, request, kwargs)
 
     send._skyfold_policy = True  # type: ignore[attr-defined]
