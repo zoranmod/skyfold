@@ -1174,9 +1174,9 @@ class Flyout(QWidget):
         self.status_icon.setPixmap(pix)
         if icon == "sync" and animations_on():
             self._spin_base = pix
-            if not self._spin.isActive():
-                if not self._spin_clock.isValid():
-                    self._spin_clock.start()
+            if not self._spin_clock.isValid():
+                self._spin_clock.start()
+            if self.isVisible() and not self._spin.isActive():
                 self._spin.start()
         else:
             self._spin.stop()
@@ -1564,7 +1564,14 @@ class Flyout(QWidget):
         self._place()
         self._held = self.height() if self.isVisible() else None  # kept while the panel is open
 
+    def showEvent(self, e) -> None:  # noqa: N802
+        super().showEvent(e)
+        if self.state == "syncing":
+            self._status_line()
+            self._spin_tick()  # draw the current phase immediately, even after a long time hidden
+
     def hideEvent(self, e) -> None:  # noqa: N802
+        self._spin.stop()
         self._held = None  # opened again: its natural height
         self.show_home()  # opened again: the panel itself, not the notifications
         super().hideEvent(e)
