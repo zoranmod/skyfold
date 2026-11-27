@@ -243,3 +243,42 @@ def test_clean_subfolder_of_kept_folder_is_not_resurrected_empty(env25):
     for _ in range(3):
         s.run()
     assert "F/clean" not in d.items, (sorted(d.items), trashed)
+
+
+def test_forgetting_several_folders_is_all_or_nothing(tmp_path):
+    """A failure while forgetting the second folder leaves every row as it was (one transaction)."""
+    import sqlite3
+
+    st = de.DriveState(tmp_path / "d.db")
+    for path, is_dir in (("Orchard", True), ("Orchard/a.txt", False), ("Garden", True), ("Garden/Beds", True),
+                         ("Garden/Beds/b.txt", False), ("Shed", True), ("Shed/c.txt", False)):
+        st.put(de.Base(path, is_dir, "e", 1, 1.0, 1, False))
+    before = st.all()
+    real = st._db
+
+    class Failing:  # the real connection, except that the second folder's DELETE fails
+        deletes = 0
+
+        def execute(self, sql, *args):
+            if sql.startswith("DELETE"):
+                Failing.deletes += 1
+                if Failing.deletes == 2:
+                    raise sqlite3.OperationalError("disk I/O error")
+            return real.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def __enter__(self):
+            return real.__enter__()
+
+        def __exit__(self, *exc):
+            return real.__exit__(*exc)
+
+    st._db = Failing()
+    with pytest.raises(sqlite3.OperationalError):
+        st.drop_many(["Garden", "Shed"])
+    st._db = real
+    assert st.all() == before and not real.in_transaction
+    st.drop_many(["Garden", "Shed"])
+    assert sorted(st.all()) == ["Orchard", "Orchard/a.txt"]

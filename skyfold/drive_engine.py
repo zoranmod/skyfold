@@ -153,7 +153,9 @@ class DriveState:
                              (path, len(prefix), prefix))
 
     def drop_many(self, paths: list[str]) -> None:
-        with self._lock, self._db:
+        """Forget these rows and what is below them, all together or (on a failure) none of them.
+        (The connection autocommits, so `with self._db` alone would not make one transaction.)"""
+        with self.transaction():
             for path in paths:
                 prefix = path + "/"
                 self._db.execute("DELETE FROM drive_files WHERE path=? OR substr(path, 1, ?)=?",
