@@ -172,3 +172,32 @@ def test_menus_have_icons_and_take_a_new_theme(app):
     app.processEvents()
     assert m.actionGeometry(a).height() >= 30  # about 32 px
     m.close()
+
+
+def test_the_tray_menu_is_see_through_like_the_panel(app, monkeypatch):
+    """With Windows' transparency effects on, the menu has no fill of its own: Windows blurs the
+    desktop behind it with the theme's tint and draws its rounded edge and shadow."""
+    from skyfold.ui import backdrop, flyout
+    from skyfold.ui.menus import Menu
+
+    tints, rounded = [], []
+    monkeypatch.setattr(backdrop, "glass_supported", lambda: True)
+    monkeypatch.setattr(backdrop, "blur_behind", lambda w, tint=None: tints.append(tint.getRgb()) or True)
+    monkeypatch.setattr(flyout, "round_corners", lambda w: rounded.append(w))
+    m = Menu(theme.DARK)
+    m.add("sync", "Sync now")
+    m.popup(QPoint(10, 10))
+    app.processEvents()
+    try:
+        assert m.glass and "rgba(0, 0, 0, 2)" in m.styleSheet() and rounded == [m]
+        assert tints == [backdrop.rgba(backdrop.glass_colours(theme.DARK, True)["tint"]).getRgb()]
+        dialogs.refresh_palette(theme.OLED)  # (a new theme keeps it see-through)
+        assert "rgba(0, 0, 0, 2)" in m.styleSheet()
+    finally:
+        m.close()
+        dialogs.refresh_palette(theme.DARK)
+    monkeypatch.setattr(backdrop, "glass_supported", lambda: False)
+    m.popup(QPoint(10, 10))  # transparency effects switched off: the solid menu
+    app.processEvents()
+    assert not m.glass and "rgba(0, 0, 0, 2)" not in m.styleSheet()
+    m.close()
