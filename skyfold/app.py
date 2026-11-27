@@ -977,7 +977,13 @@ class Controller(QObject):
         elif not self.settings.apple_id:
             QTimer.singleShot(400, self.open_login)
         elif show:
-            QTimer.singleShot(300, lambda: self.flyout.show_at(self.tray.geometry()))
+            from shiboken6 import isValid
+
+            def show_panel() -> None:
+                if isValid(self.tray):
+                    self.flyout.show_at(self.tray.geometry())
+
+            QTimer.singleShot(300, self.flyout, show_panel)
         QTimer.singleShot(8000, self._warm_up)
 
     def _warm_up(self) -> None:
