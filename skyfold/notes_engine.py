@@ -1288,7 +1288,9 @@ class NotesSyncer:
         self.root = root
         self.theme = "system"
         self.cb = cb or Callbacks()
-        self.cancel_flag = threading.Event()  # this pass (cleared when the next one starts)
+        # Stop for the worker's whole round: the worker clears it when a new round begins. A pass never
+        # clears it itself (one starting after Photos ended threw away the user's Stop and wrote notes).
+        self.cancel_flag = threading.Event()
         self.closing = threading.Event()  # the app is quitting: never cleared
 
     def _check_root(self) -> None:
@@ -1615,9 +1617,8 @@ class NotesSyncer:
         return done
 
     def run(self, full: bool = False) -> NotesResult:
-        self.cancel_flag.clear()
-        if self.closing.is_set():
-            raise Cancelled()  # quitting: this pass never starts
+        if self.closing.is_set() or self.cancel_flag.is_set():
+            raise Cancelled()  # quitting, or Stop pressed in this round: this pass never starts
         res = NotesResult()
         events: list[tuple[str, str, str]] = []  # (what happened, page, old title) per exported note
         self._check_root()

@@ -14,9 +14,11 @@ import base64
 import html
 import json
 import logging
+import threading
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from .config import save_text
 from .engine import SyncError
@@ -35,6 +37,10 @@ SAFARI_FOLDERS = {"BookmarksBar": "Favorites", "BookmarksMenu": "Bookmarks Menu"
 
 class BookmarksUnavailable(SyncError):
     pass
+
+
+class NotCurrent(Exception):
+    """The account the bookmarks were read for signed out (or Skyfold is quitting): nothing written."""
 
 
 @dataclass
@@ -208,22 +214,41 @@ def as_json(nodes: list[Item]) -> list[dict]:
             else {"t": n.title or n.url, "u": n.url} for n in nodes]
 
 
-def save_cache(nodes: list[Item]) -> None:
-    """What the extension gets (see native_host): written after every complete read."""
+# The cache is written (worker) and removed (Sign out, UI thread) one at a time: a read that finishes
+# just as you sign out either writes before the removal or sees that the account is gone.
+CACHE_LOCK = threading.Lock()
+
+
+def save_cache(nodes: list[Item], current: Callable[[], bool] | None = None) -> None:
+    """What the extension gets (see native_host): written after every complete read.
+    current: is the account this was read for still signed in? (No: NotCurrent, nothing written.)"""
     from datetime import datetime, timezone
 
     from .native_host import cache_file
 
     path = cache_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    save_text(path, json.dumps({"updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                                "tree": as_json(nodes)}, ensure_ascii=False))
+    data = json.dumps({"updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                       "tree": as_json(nodes)}, ensure_ascii=False)
+    with CACHE_LOCK:
+        if current is not None and not current():
+            raise NotCurrent()  # signed out (or quitting) while the bookmarks were on their way
+        path.parent.mkdir(parents=True, exist_ok=True)
+        save_text(path, data)
 
 
-def export(api, folder: Path) -> tuple[Path, int, bool]:
-    """Read the bookmarks and write the file. Returns (file, number of bookmarks, changed?)."""
+def remove_cache() -> None:
+    """Sign out: the extension's copy goes (never while a read is writing it)."""
+    from .native_host import cache_file
+
+    with CACHE_LOCK:
+        cache_file().unlink(missing_ok=True)
+
+
+def export(api, folder: Path, current: Callable[[], bool] | None = None) -> tuple[Path, int, bool]:
+    """Read the bookmarks and write the file. Returns (file, number of bookmarks, changed?).
+    current: see save_cache; checked again before the file is written."""
     nodes = build(fetch(api))
-    save_cache(nodes)
+    save_cache(nodes, current)
     page = render(nodes, t("Safari Bookmarks"))
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / FILE_NAME
@@ -237,5 +262,7 @@ def export(api, folder: Path) -> tuple[Path, int, bool]:
                               "folder for Safari bookmarks.", name=str(target)))
         if head == page:
             return target, count(nodes), False
+    if current is not None and not current():
+        raise NotCurrent()
     save_text(target, page)
     return target, count(nodes), True

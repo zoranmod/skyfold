@@ -366,7 +366,7 @@ class StorageBar(QFrame):
         self.details.setVisible(not self.details.isVisible())
         top = self.window()
         if hasattr(top, "_size_list"):
-            QTimer.singleShot(0, top._size_list)
+            QTimer.singleShot(0, top, top._size_list)
 
     def mouseReleaseEvent(self, e) -> None:  # noqa: N802
         if e.button() == Qt.LeftButton:
@@ -433,7 +433,8 @@ class ServiceRow(QFrame):
             self.dot.setStyleSheet(f"background: {state_color(self.c, state)}; border-radius: 4px;")
 
     def mousePressEvent(self, e) -> None:  # noqa: N802
-        self.clicked.emit()
+        if e.button() == Qt.LeftButton:  # (a middle or right click opened the service too)
+            self.clicked.emit()
         super().mousePressEvent(e)
 
     def enterEvent(self, e) -> None:  # noqa: N802 - the tile glows while the row is under the pointer
@@ -699,6 +700,8 @@ class Flyout(QWidget):
         if self.glass:
             self.setAttribute(Qt.WA_TranslucentBackground)
         self.state = "idle"
+        self.state_text = ""  # the worker's own words for this state (the card may show progress instead)
+        self._progress_args: tuple | None = None  # the last progress shown for that state and text
         self.paused = False
 
         outer = QVBoxLayout(self)
@@ -990,16 +993,18 @@ class Flyout(QWidget):
             f"QFrame#Row:hover, QFrame#ActRow[link=\"true\"]:hover {{ background: {g['hover']}; }}"
             f"QToolButton#Bar {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
             # Stop: the same kind of button in red (the same text colour rule as the blue one: white in
-            # Light, dark in Dark and OLED, as on Windows 11), as see-through as the blue one
-            f"QToolButton#Bar[wide=\"true\"] {{ background: {accent_fill(self.c['stop'], 0.72)};"
-            f" {accent_edges(self.c['stop'], 0.8)} }}"
-            f"QToolButton#Bar[wide=\"true\"]:hover {{ background: {accent_fill(self.c['stop_hover'], 0.85)};"
-            f" {accent_edges(self.c['stop_hover'], 0.9)} }}"
-            # the main button: the accent, see-through enough for the blur to show in it
-            f"QToolButton#Bar[primary=\"true\"] {{ background: {accent_fill(self.c['btn'], 0.68)};"
-            f" {accent_edges(self.c['btn'], 0.75)} }}"
-            f"QToolButton#Bar[primary=\"true\"]:hover {{ background: {accent_fill(self.c['btn_hover'], 0.82)};"
-            f" {accent_edges(self.c['btn_hover'], 0.85)} }}"
+            # Light, dark in Dark and OLED, as on Windows 11), as see-through as the blue one.
+            # Both nearly solid: at 0.68-0.72 the desktop showing through took their text below 4.5:1
+            # in every theme (about 3.3-4.1:1); at 0.9 it stays above that over light and dark desktops.
+            f"QToolButton#Bar[wide=\"true\"] {{ background: {accent_fill(self.c['stop'], 0.9)};"
+            f" {accent_edges(self.c['stop'], 0.95)} }}"
+            f"QToolButton#Bar[wide=\"true\"]:hover {{ background: {accent_fill(self.c['stop_hover'], 0.95)};"
+            f" {accent_edges(self.c['stop_hover'], 1.0)} }}"
+            # the main button: the accent, with just a trace of the blur in it
+            f"QToolButton#Bar[primary=\"true\"] {{ background: {accent_fill(self.c['btn'], 0.9)};"
+            f" {accent_edges(self.c['btn'], 0.95)} }}"
+            f"QToolButton#Bar[primary=\"true\"]:hover {{ background: {accent_fill(self.c['btn_hover'], 0.95)};"
+            f" {accent_edges(self.c['btn_hover'], 1.0)} }}"
             f"QFrame#Sep {{ background: {g['stroke']}; }}")
 
     def paintEvent(self, e) -> None:  # noqa: N802
@@ -1052,7 +1057,7 @@ class Flyout(QWidget):
         self.storage_bar.apply_palette(palette)
         self._bar_icons()
         self.set_paused(self.paused)
-        self.set_state(self.state, self.status_text.text())
+        self.set_state(self.state, self.state_text)  # (redrawn as it was, progress description included)
         for w in self._activity_rows():
             w.apply_palette(palette)
         self.row_photos.apply_palette(palette)
@@ -1096,7 +1101,14 @@ class Flyout(QWidget):
             from datetime import datetime as _dt
 
             self._started = _dt.now().strftime("%H:%M")  # "Started at 09:42" in the footer
+        # The same state and words again (a new theme, a deletion question, Drive reporting while Photos
+        # syncs): drawn anew as they were, with the progress it showed ("Downloading photos" stayed
+        # "Syncing…" until the next progress report).
+        again = state == self.state and text == self.state_text
+        if not again or state != "syncing":
+            self._progress_args = None
         self.state = state
+        self.state_text = text
         if hasattr(self, "checked_label"):
             self._footer_time()
         self.dot.set_state(self._dot_state())
@@ -1133,6 +1145,8 @@ class Flyout(QWidget):
         self.sync_btn.setEnabled(True)  # paused: this button is the way to continue
         self._status_line()
         self._size_list()
+        if self._progress_args is not None:
+            self.set_progress(*self._progress_args)
 
     def _render_hero(self) -> None:
         """The status card: its badge, and a quiet second line when all is well."""
@@ -1148,6 +1162,13 @@ class Flyout(QWidget):
             self.status_title.setText(t("Deletion needs your OK"))
             self.status_text.setText(getattr(self, "_pending_short", "") or self._pending_text, self._pending_text)
             self.status_text.show()
+        elif self.state == "idle" and self._idle_note():
+            # The pass ended for a reason worth saying ("Sync stopped.", uploads waiting, more notes to
+            # come): said as it is, never the green "Up to date" (that read as done when it wasn't)
+            head, rest = self._idle_note_lines()
+            self.status_title.setText(head)
+            self.status_text.setText(rest)
+            self.status_text.setVisible(bool(rest))
         elif self.state == "idle":
             self.status_title.setText(t("Up to date"))  # (the line under the name says "in sync")
             s = getattr(self, "_stats", {}) or {}
@@ -1160,11 +1181,27 @@ class Flyout(QWidget):
                                            names=", ".join(names[:-1]), last=names[-1]))
             self.status_text.show()
 
+    def _idle_note(self) -> str:
+        """Idle with the worker's reason why the pass ended, when that isn't simply "all in sync"."""
+        text = (self.state_text or "").strip()
+        if self.state != "idle" or not text:
+            return ""
+        plain = {t("Everything is in sync.").rstrip(".…"), STATE_TITLES["idle"].rstrip(".…")}
+        return "" if text.rstrip(".…") in plain else text
+
+    def _idle_note_lines(self) -> tuple[str, str]:
+        """"Sync stopped." -> ("Sync stopped", ""); "Downloads are up to date. Uploads … are waiting." ->
+        the first sentence as the card's title, the rest below it."""
+        head, _, rest = self._idle_note().partition(". ")
+        return head.rstrip(".…"), short_text(rest.strip(), 110)
+
     def _status_line(self) -> None:
         state = self._dot_state()
         title = STATE_TITLES.get(self.state, self.state)
         if state == "attention":
             title = t("Waiting for your OK")
+        elif self._idle_note():
+            title = self._idle_note_lines()[0]  # (not "Everything is in sync" above a stopped pass)
         icon = {"idle": "check", "syncing": "sync", "paused": "pause", "error": "error", "auth": "error",
                 "offline": "cloud", "setup": "folder", "attention": "error"}.get(state, "check")
         color = state_color(self.c, state)
@@ -1212,6 +1249,7 @@ class Flyout(QWidget):
     def set_progress(self, done: int, total: int, text: str) -> None:
         if self.state != "syncing" or total <= 0:
             return
+        self._progress_args = (done, total, text)
         self.bar.setValue(int(1000 * min(done, total) / total))
         self._progress = min(done, total) / total
         self.badge.set_state("syncing", self._progress)
@@ -1229,7 +1267,7 @@ class Flyout(QWidget):
             self.status_text.setText(text)  # one line of text: the status line itself
             self.status_text.show()
             if self.isVisible() and self.status_text.heightForWidth(max(1, self.status_text.width())) != lines_before:
-                QTimer.singleShot(0, self._size_list)  # wraps to more or fewer lines: fit again
+                QTimer.singleShot(0, self, self._size_list)  # wraps to more or fewer lines: fit again
             self.dot.setToolTip(STATE_TITLES.get(self.state, self.state) + "\n" + text.replace(chr(0xA0), " "))
 
 
@@ -1322,6 +1360,8 @@ class Flyout(QWidget):
     def _dot_tip(self) -> None:
         if self._dot_state() == "attention":
             tip = self._pending_text
+        elif self._idle_note():
+            tip = self._idle_note()
         else:
             tip = STATE_TITLES.get(self.state, self.state)
             if self.status_text.text():
@@ -1363,7 +1403,7 @@ class Flyout(QWidget):
         rows = self._activity_rows()
         if rows and rows[0].same_as(kind, text, target):
             rows[0].bump(ts, target)
-            QTimer.singleShot(0, self._size_list)
+            QTimer.singleShot(0, self, self._size_list)
             return
         row = ActivityRow(ts, kind, text, self.c, target)
         row.errorClicked.connect(self._error_details)
@@ -1376,7 +1416,10 @@ class Flyout(QWidget):
         self.list.show()
         self.empty.hide()
         self.clear_btn.show()
-        QTimer.singleShot(0, self._size_list)  # after styles are applied, so heights are exact
+        # after styles are applied, so heights are exact. (Every deferred call here names the panel as its
+        # context: one still waiting when the panel was destroyed is dropped instead of raising
+        # "Internal C++ object (Flyout) already deleted" in whatever runs the event loop next.)
+        QTimer.singleShot(0, self, self._size_list)
 
     def _thumb_ready(self, target: str, img) -> None:
         for row in self._activity_rows():
@@ -1494,7 +1537,7 @@ class Flyout(QWidget):
         self.resize(self.WIDTH, min(self._needed_height(), limit))
         if self.isVisible():
             self._place()
-            QTimer.singleShot(0, self._place)  # again once Qt has applied the new size
+            QTimer.singleShot(0, self, self._place)  # again once Qt has applied the new size
 
     def _place(self, anchor: QRect | None = None) -> None:
         if anchor is not None:
@@ -1551,7 +1594,7 @@ class Flyout(QWidget):
         self.activateWindow()
         self.setFocus(Qt.OtherFocusReason)  # the panel itself, not its first button
         self._held = None
-        QTimer.singleShot(0, self._settle)  # final size known: keep it on screen
+        QTimer.singleShot(0, self, self._settle)  # final size known: keep it on screen
 
     def _settle(self) -> None:
         self._fit()
