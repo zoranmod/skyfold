@@ -879,12 +879,23 @@ class Controller(QObject):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(LOG_FILE.parent)))
 
     def open_find_my(self) -> None:
+        from shiboken6 import isValid
+
+        old = self._dialogs.get("findmy")
+        if old is not None and isValid(old) and old.isVisible():
+            self._show_dialog("findmy", old)
+            return
         dlg = FindMyDialog(self.c, lambda: getattr(self, "_login_api", None) or self.worker.api)
 
         def again() -> None:
             self._find_my_after_login = True
             QTimer.singleShot(150, self.open_login)
 
+        def gone(*_args) -> None:
+            if self._dialogs.get("findmy") is dlg:
+                self._dialogs.pop("findmy", None)
+
+        dlg.finished.connect(gone)
         dlg.signInAgain.connect(again)
         self._show_dialog("findmy", dlg)
 

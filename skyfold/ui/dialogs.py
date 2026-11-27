@@ -2693,6 +2693,8 @@ class DeviceRow(SoftCard):
         QDesktopServices.openUrl(QUrl(f"https://www.google.com/maps/search/?api=1&query={d.lat},{d.lon}"))
 
     def _sound(self) -> None:
+        from shiboken6 import isValid
+
         from .. import extras
 
         api = self.get_api()
@@ -2702,14 +2704,18 @@ class DeviceRow(SoftCard):
         self.sound_btn.setText(t("Sending…"))
 
         def done(_r) -> None:
-            self.sound_btn.setText(t("Sound sent ✓"))
+            if isValid(self) and self.isVisible():
+                self.sound_btn.setText(t("Sound sent ✓"))
 
         def fail(msg: str) -> None:
+            if not isValid(self) or not self.isVisible():
+                return
             self.sound_btn.setEnabled(True)
             self.sound_btn.setText(t("Play sound"))
             warn(self, t("Find My"), msg)
 
-        self._task = run_async(lambda: extras.play_sound(api, self.dev.id), done, fail)
+        device_id = self.dev.id
+        self._task = run_async(lambda: extras.play_sound(api, device_id), done, fail)
 
 
 class _Progress(QObject):
@@ -2902,6 +2908,8 @@ class FindMyDialog(_Dialog):
 
     def __init__(self, palette: dict[str, str], get_api) -> None:
         super().__init__(t("Find My – {app}", app=APP_NAME))
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self._closed = False
         self.c, self.get_api = palette, get_api
         self.setMinimumWidth(560)
         outer = QVBoxLayout(self)
@@ -2965,6 +2973,10 @@ class FindMyDialog(_Dialog):
         self.signInAgain.emit()
         self.accept()
 
+    def done(self, result: int) -> None:
+        self._closed = True
+        super().done(result)
+
     def load(self) -> None:
         from .. import extras
 
@@ -2980,6 +2992,8 @@ class FindMyDialog(_Dialog):
         self.info.show()
 
         def done(devs) -> None:
+            if self._closed:
+                return  # a reply for the previous window or account
             self.refresh_btn.setEnabled(True)
             while self.rows.count():
                 w = self.rows.takeAt(0).widget()
@@ -2994,6 +3008,8 @@ class FindMyDialog(_Dialog):
             self.adjustSize()
 
         def fail(msg: str) -> None:
+            if self._closed:
+                return
             self.refresh_btn.setEnabled(True)
             self.info.setText(msg)
             self.info.show()
