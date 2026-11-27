@@ -1180,6 +1180,7 @@ class NotesWindow(LibraryDialog):
         self.split = QSplitter(Qt.Horizontal)
         self.split.setHandleWidth(4)
         self.folders = _FolderTree()
+        self.folders.setProperty("tipForClippedItems", True)
         self.folders.setHeaderHidden(True)
         self.folders.setIndentation(0)  # the delegate indents; the highlight spans the whole row
         self.folders.setRootIsDecorated(False)
@@ -1446,7 +1447,10 @@ class NotesWindow(LibraryDialog):
             it.setData(0, FOLDER_COUNT, counts[path])
             it.setIcon(0, folder_icon)
             full = path.replace("/", " › ")
-            it.setData(0, Qt.ToolTipRole, full)
+            from .safe_text import plain_tip
+
+            if parent_path:
+                it.setData(0, Qt.ToolTipRole, plain_tip(full) if "<" in full else full)
             it.setData(0, Qt.AccessibleDescriptionRole, full)
             it.setData(0, Qt.AccessibleTextRole, t("{name}, {n} notes", name=name, n=counts[path]))
             parent = items.get(parent_path) if parent_path else None
@@ -1606,9 +1610,6 @@ class NotesWindow(LibraryDialog):
         when = _long_when(row.modified) if row.modified else ""
         folder = row.folder.replace("/", " \u203a ")
         self.meta.setText(" \u00b7 ".join(x for x in (folder, when) if x))  # "Home \u00b7 24 November 2026, 07:15"
-        from .safe_text import plain_tip
-
-        self.meta.setToolTip(plain_tip(self.meta.text()))
         self._note_failed = 0.0
         if row.locked:
             self.reader.clear_note()

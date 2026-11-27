@@ -45,6 +45,7 @@ from ..i18n import LANGUAGES, language, t
 from ..safelog import brief, describe
 from .icons import app_icon, draw_logo, glyph
 from .panel_parts import SoftCard
+from .safe_text import plain_tip
 
 log = logging.getLogger(__name__)
 
@@ -2139,7 +2140,7 @@ class PendingDialog(_Dialog):
                     continue
                 shot = QLabel()
                 shot.setFixedSize(56, 56)
-                shot.setToolTip(name)
+                shot.setToolTip(plain_tip(name))
                 shot.hide()  # shown once its picture is read
                 strip.addWidget(shot)
                 self._strips[path] = shot
@@ -2165,8 +2166,8 @@ class PendingDialog(_Dialog):
         lst.setTextElideMode(Qt.ElideMiddle)
         lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         lst.setMinimumHeight(120)
-        for k in range(lst.count()):
-            lst.item(k).setToolTip(lst.item(k).text())
+        # The global help handler offers the full name only when this list elides it.
+        lst.setProperty("tipForClippedItems", True)
         lst.hide()
         toggle = QPushButton(t("Show the list"))
         toggle.setObjectName("Link")
@@ -2278,7 +2279,6 @@ class LayoutOption(QFrame):
         name = _label(title, "OptionTitle", True)
         col.addWidget(name)
         ex = _label(example, "Mono")
-        ex.setToolTip(example)
         col.addWidget(ex)
         self.dot = QLabel()  # (kept for older callers; the card's border shows the choice)
         self.dot.hide()

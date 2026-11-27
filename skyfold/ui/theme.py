@@ -361,7 +361,6 @@ QMenu::item {{ padding: 7px 28px 7px 12px; border-radius: 4px; }}
 QMenu::item:selected {{ background: {c['hover']}; }}
 QMenu::item:disabled {{ color: {c['muted']}; }}
 QMenu::separator {{ height: 1px; background: {c['border']}; margin: 4px 8px; }}
-QToolTip {{ background: {c['surface']}; color: {c['text']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 5px 9px; }}
 """ + (f"""
 QDialog QFrame#Card {{ border-color: transparent; background: {c['group']}; }}
 SoftCard {{ qproperty-stroke: transparent; }}

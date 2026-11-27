@@ -1112,6 +1112,10 @@ def main() -> int:
             log.info("Start cancelled: the earlier database is tried again next time")
             return 0
 
+    from .ui.tooltips import ToolTips
+
+    tooltips = ToolTips(app)
+    app.aboutToQuit.connect(tooltips.dismiss)
     ctl = Controller(app)
     ctl.server = server
 

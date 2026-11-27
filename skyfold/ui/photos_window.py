@@ -655,7 +655,12 @@ class PhotoModel(QAbstractListModel):
             return it
         if role in (Qt.AccessibleTextRole, Qt.ToolTipRole):
             kind = t("Video") if it.is_video else t("Live Photo") if it.live else t("Photo")
-            return f"{kind}, {_day(it.date)} {it.date:%H:%M}, {it.name}"
+            text = f"{kind}, {_day(it.date)} {it.date:%H:%M}, {it.name}"
+            if role == Qt.ToolTipRole:
+                from .safe_text import plain_tip
+
+                return plain_tip(text)
+            return text
         return None
 
 
@@ -2769,7 +2774,9 @@ class PhotosWindow(LibraryDialog):
         self._viewer_opened_at = time.monotonic()
         label = t("Search results") if self.query else self._set_name()
         self.back.setText(self.back.fontMetrics().elidedText(label, Qt.ElideRight, 132))
-        self.back.setToolTip(label)
+        from .safe_text import plain_tip
+
+        self.back.setToolTip(plain_tip(label) if self.back.text() != label else "")
         self.back.setAccessibleName(label)
         self.pages.setCurrentWidget(self.viewer)
         self._set_bare(False)

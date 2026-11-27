@@ -508,7 +508,6 @@ class ActivityRow(QFrame):
         if target or kind == "error":
             self.setProperty("link", True)
             self.setCursor(Qt.PointingHandCursor)
-            self.setToolTip(target or t("Click for details"))
         lay = QHBoxLayout(self)
         lay.setContentsMargins(4, 5, 4, 5)
         lay.setSpacing(12)
@@ -564,12 +563,18 @@ class ActivityRow(QFrame):
         if self.detail_text:
             self.detail.ensurePolished()
             self.detail.setText(QFontMetrics(self.detail.font()).elidedText(self.detail_text, Qt.ElideMiddle, 236))
-        tip = [title] + ([self.detail_text] if self.detail_text else []) + ([self.target] if self.target else [])
+        # The action comes first. A summary without a recorded target must not invent a path.
+        action = self.detail_text.split(" · ", 1)[0] if self.detail_text and self.target else self.message
+        tip = [action + (f"  (x{self.count})" if self.count > 1 else "")]
+        if self.target:
+            tip.append(self.target)
         if self.kind == "error" and not self.target:
             tip.append(t("Click for details"))
         from .safe_text import plain_tip
 
-        self.setToolTip(plain_tip(chr(10).join(tip)))
+        useful = self.target or self.detail_text or self.kind == "error" or self.text.text() != title
+        self.setToolTip(plain_tip("\n".join(tip)) if useful else "")
+        self.setAccessibleDescription("\n".join(x for x in (self.message, self.target, fmt_time(self.ts)) if x))
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette
@@ -611,7 +616,8 @@ class ActivityRow(QFrame):
 
     def refresh(self) -> None:
         self.when.setText(_short_time(self.ts))
-        self.when.setToolTip(fmt_time(self.ts))
+        self.when.setAccessibleDescription(fmt_time(self.ts))
+        self.when.setToolTip("" if self.toolTip() else fmt_time(self.ts))
         self.setAccessibleName(", ".join(x for x in (self.title_text, self.detail_text, self.when.text()) if x))
 
     def _activate(self) -> None:
@@ -1072,15 +1078,15 @@ class Flyout(QWidget):
 
         text = apple_id or t("Not signed in")
         self.account.setText(QFontMetrics(self.account.font()).elidedText(text, Qt.ElideMiddle, 170))
-        self.account.setToolTip(apple_id)
-        self._app_title.setToolTip(apple_id or text)
+        from .safe_text import plain_tip
+
+        self._app_title.setToolTip(plain_tip(apple_id or text))
 
     def set_paused(self, paused: bool) -> None:
         self.paused = paused
         self.pause_btn.setIcon(glyph("play" if paused else "pause", self.c["muted"]))
         self.pause_btn.setText(t("Resume") if paused else t("Pause"))
-        self.pause_btn.setToolTip(t("Resume syncing") if paused else t("Pause syncing"))
-        self.pause_btn.setAccessibleName(self.pause_btn.toolTip())
+        self.pause_btn.setAccessibleName(t("Resume syncing") if paused else t("Pause syncing"))
 
     def _dot_state(self) -> str:
         return "attention" if self.state == "idle" and getattr(self, "_pending_text", "") else self.state
@@ -1115,9 +1121,7 @@ class Flyout(QWidget):
                        "auth": ("cloud", t("Sign in")), "paused": ("play", t("Resume"))}.get(
             state, ("sync", t("Sync now")))
         self.sync_btn.setText(label)
-        self._main_tip = t("Resume syncing") if state == "paused" else label
-        self.sync_btn.setAccessibleName(self._main_tip)  # (screen readers always get the name)
-        self._sync_main_tip()
+        self.sync_btn.setAccessibleName(t("Resume syncing") if state == "paused" else label)
         quiet = state == "syncing"  # Stop is the red button in the same place; the rest is the accent
         if bool(self.sync_btn.property("wide")) != quiet:
             self.sync_btn.setProperty("primary", not quiet)
@@ -1142,10 +1146,7 @@ class Flyout(QWidget):
         self.review_btn.setVisible(pending)
         if pending:
             self.status_title.setText(t("Deletion needs your OK"))
-            self.status_text.setText(getattr(self, "_pending_short", "") or self._pending_text)
-            from .safe_text import plain_tip
-
-            self.status_text.setToolTip(plain_tip(self._pending_text))
+            self.status_text.setText(getattr(self, "_pending_short", "") or self._pending_text, self._pending_text)
             self.status_text.show()
         elif self.state == "idle":
             self.status_title.setText(t("Up to date"))  # (the line under the name says "in sync")
@@ -1314,7 +1315,6 @@ class Flyout(QWidget):
         ts = getattr(self, "_last_sync_ts", None)
         self.last_sync.setText(t("Last check: {when}", when=fmt_time(ts)) if ts else "")
         self._footer_time()
-        self.checked_label.setToolTip(self.last_sync.text())
         if self.state == "idle":
             self._render_hero()
         self._render_services()
@@ -1475,14 +1475,8 @@ class Flyout(QWidget):
         if w != self.WIDTH or self.width() != w:
             self.WIDTH = w
             self.setFixedWidth(w)
-            # a very narrow screen: the primary button keeps its icon only (its tooltip says the rest)
+            # A very narrow screen keeps the icon and the accessible name.
             self.sync_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon if w >= 300 else Qt.ToolButtonIconOnly)
-            self._sync_main_tip()
-
-    def _sync_main_tip(self) -> None:
-        """The main button shows its words: no tooltip repeating them (only when it is down to its icon)."""
-        icon_only = self.sync_btn.toolButtonStyle() == Qt.ToolButtonIconOnly
-        self.sync_btn.setToolTip(getattr(self, "_main_tip", "") if icon_only else "")
 
     def _needed_height(self) -> int:
         lay = self._body.layout()

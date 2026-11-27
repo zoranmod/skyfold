@@ -207,11 +207,9 @@ class TwoLineLabel(QLabel):
     def text(self) -> str:  # noqa: D102 - the whole text, as set
         return self._full
 
-    def setText(self, text: str) -> None:  # noqa: N802
-        from .safe_text import plain_tip
-
+    def setText(self, text: str, extra: str = "") -> None:  # noqa: N802
         self._full = text or ""
-        self.setToolTip(plain_tip(self._full))
+        self._extra = extra
         self._render()
 
     def resizeEvent(self, e) -> None:  # noqa: N802
@@ -235,7 +233,12 @@ class TwoLineLabel(QLabel):
                 cur = " ".join([w] + words[i + 1:])
                 break
         lines.append(fm.elidedText(cur, Qt.ElideRight, width) if len(lines) == self._lines - 1 else cur)
-        super().setText("\n".join(x for x in lines if x))
+        shown = "\n".join(x for x in lines if x)
+        super().setText(shown)
+        from .safe_text import plain_tip
+
+        clipped = shown.split() != self._full.split() or any(fm.horizontalAdvance(x) > width for x in lines)
+        self.setToolTip(plain_tip(self._extra or (self._full if clipped else "")))
 
     def sizeHint(self) -> QSize:  # noqa: N802
         fm = QFontMetrics(self.font())
