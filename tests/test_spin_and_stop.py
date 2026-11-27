@@ -62,3 +62,22 @@ def test_drive_counts_as_syncing_from_the_moment_it_is_started(qapp, monkeypatch
     w._drive_thread.join(5)
     qapp.processEvents()  # (the state comes from Drive's thread)
     assert shown[-1] == "idle"  # Drive's thread ended: the panel is told
+
+
+def test_the_main_button_has_no_tooltip_repeating_its_words(qapp):  # noqa: F811
+    f = flyout.Flyout(theme.DARK)
+    try:
+        for state in ("idle", "syncing", "paused"):
+            f.set_state(state, "")
+            assert f.sync_btn.toolTip() == "" and f.sync_btn.accessibleName()
+    finally:
+        f.close()
+
+
+def test_the_footer_buttons_have_names_but_no_tooltips(qapp):  # noqa: F811
+    f = flyout.Flyout(theme.DARK)
+    try:
+        for b in (f.open_btn, f.folder_btn, f.more_btn):
+            assert b.toolTip() == "" and b.accessibleName()
+    finally:
+        f.close()

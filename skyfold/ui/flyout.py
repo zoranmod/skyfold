@@ -935,8 +935,7 @@ class Flyout(QWidget):
             b.setToolButtonStyle(Qt.ToolButtonIconOnly)
             b.setIconSize(QSize(18, 18))
             b.setText(text)
-            b.setToolTip(tip or text)
-            b.setAccessibleName(tip or text)
+            b.setAccessibleName(tip or text)  # (no tooltip: the footer stays quiet under the mouse)
             b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(slot)
             bl.addWidget(b)
@@ -1116,8 +1115,9 @@ class Flyout(QWidget):
                        "auth": ("cloud", t("Sign in")), "paused": ("play", t("Resume"))}.get(
             state, ("sync", t("Sync now")))
         self.sync_btn.setText(label)
-        self.sync_btn.setToolTip(t("Resume syncing") if state == "paused" else label)
-        self.sync_btn.setAccessibleName(self.sync_btn.toolTip())
+        self._main_tip = t("Resume syncing") if state == "paused" else label
+        self.sync_btn.setAccessibleName(self._main_tip)  # (screen readers always get the name)
+        self._sync_main_tip()
         quiet = state == "syncing"  # Stop is the red button in the same place; the rest is the accent
         if bool(self.sync_btn.property("wide")) != quiet:
             self.sync_btn.setProperty("primary", not quiet)
@@ -1477,6 +1477,12 @@ class Flyout(QWidget):
             self.setFixedWidth(w)
             # a very narrow screen: the primary button keeps its icon only (its tooltip says the rest)
             self.sync_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon if w >= 300 else Qt.ToolButtonIconOnly)
+            self._sync_main_tip()
+
+    def _sync_main_tip(self) -> None:
+        """The main button shows its words: no tooltip repeating them (only when it is down to its icon)."""
+        icon_only = self.sync_btn.toolButtonStyle() == Qt.ToolButtonIconOnly
+        self.sync_btn.setToolTip(getattr(self, "_main_tip", "") if icon_only else "")
 
     def _needed_height(self) -> int:
         lay = self._body.layout()
