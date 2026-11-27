@@ -30,6 +30,7 @@ LIGHT = {
     "border": "#e2e5ea", "border_strong": "#8a93a0",
     "text": "#1a1c21", "muted": "#566070", "muted2": "#5f6773", "disabled": "#959daa",
     "accent": ACCENT, "accent_hover": "#1667d9", "accent_pressed": "#0b4fae",
+    "stop": "#c42b1c", "stop_hover": "#d23a2a", "stop_pressed": "#a72417", "stop_text": "#ffffff",
     "btn": ACCENT, "btn_hover": "#1667d9", "btn_pressed": "#0b4fae", "focus": ACCENT, "focus_ring": ACCENT,
     "accent_fg": ACCENT,  # accent used as text or thin icon on a light background
     "accent_text": "#ffffff", "accent_soft": "#e6effc", "accent_soft_border": "#c9dbf7",
@@ -47,6 +48,7 @@ DARK = {
     "border": "#33383f", "border_strong": "#7a8492",
     "text": "#f3f5f8", "muted": "#b3bbc6", "muted2": "#959ca6", "disabled": "#6e7682",
     "accent": "#7db0ff", "accent_hover": "#97c0ff", "accent_pressed": "#679ff0",
+    "stop": "#f25f55", "stop_hover": "#f5736a", "stop_pressed": "#e2534a", "stop_text": "#250605",
     "btn": "#4a90ff", "btn_hover": "#5c9bff", "btn_pressed": "#3f82ea", "focus": "#97c0ff", "focus_ring": "#97c0ff",
     "accent_fg": "#97c0ff",
     "accent_text": "#06142b", "accent_soft": "#283a55", "accent_soft_border": "#35507a",
@@ -167,9 +169,6 @@ def _rgba(c: QColor, alpha: float) -> str:
     return f"rgba({c.red()}, {c.green()}, {c.blue()}, {max(0, min(255, int(alpha * 255)))})"
 
 
-STOP, STOP_HOVER, STOP_PRESSED = "#c42b1c", "#d23a2a", "#a72417"  # Stop: Windows' own red, white on it
-
-
 def accent_fill(colour: str, alpha: float = 1.0) -> str:
     """The main buttons' fill: the accent with a little light at the top, as on Windows 11's accent
     buttons (alpha < 1: see-through over Windows' blur)."""
@@ -227,9 +226,9 @@ QToolButton#Bar::menu-indicator {{ image: none; width: 0; }}
 QToolButton#Bar[primary="true"], QToolButton#Bar[wide="true"] {{ font-size: 9.75pt; font-weight: 600;
     padding: 0 12px; min-width: 106px; max-width: 106px; }}
 QToolButton#Bar[primary="true"] {{ background: {accent_fill(c['btn'])}; color: {c['accent_text']}; {accent_edges(c['btn'])} }}
-QToolButton#Bar[wide="true"] {{ color: #ffffff; background: {accent_fill(STOP)}; {accent_edges(STOP)} }}
-QToolButton#Bar[wide="true"]:hover {{ background: {accent_fill(STOP_HOVER)}; {accent_edges(STOP_HOVER)} color: #ffffff; }}
-QToolButton#Bar[wide="true"]:pressed {{ background: {STOP_PRESSED}; color: #ffffff; }}
+QToolButton#Bar[wide="true"] {{ color: {c['stop_text']}; background: {accent_fill(c['stop'])}; {accent_edges(c['stop'])} }}
+QToolButton#Bar[wide="true"]:hover {{ background: {accent_fill(c['stop_hover'])}; {accent_edges(c['stop_hover'])} color: {c['stop_text']}; }}
+QToolButton#Bar[wide="true"]:pressed {{ background: {c['stop_pressed']}; color: {c['stop_text']}; }}
 QToolButton#Bar[wide="true"]:focus {{ border: 2px solid {c['text']}; }}
 QToolButton#Bar[primary="true"]:hover {{ background: {accent_fill(c['btn_hover'])}; {accent_edges(c['btn_hover'])} color: {c['accent_text']}; }}
 QToolButton#Bar[primary="true"]:pressed {{ background: {c['btn_pressed']}; color: {c['accent_text']}; }}
@@ -274,6 +273,8 @@ QLabel#Big {{ font-family: "Segoe UI Variable Display","Segoe UI"; font-size: 15
 QLabel#Section {{ font-size: 7.75pt; font-weight: 600; color: {c['muted']}; }}
 QLabel#Small {{ font-size: 9pt; }}
 QLabel#Legend {{ font-size: 9pt; color: {c['muted']}; }}
+QLabel#FootCap {{ font-size: 8.25pt; color: {c['muted']}; }}
+QLabel#FootVal {{ font-size: 9.5pt; font-weight: 600; color: {c['text']}; }}
 QFrame#ActRow {{ background: transparent; border: none; border-radius: 6px; }}
 QFrame#ActRow[link="true"]:hover {{ background: {c['hover']}; }}
 QFrame#ActRow:focus {{ border: 2px solid {c['focus_ring']}; }}

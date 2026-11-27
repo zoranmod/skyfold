@@ -159,6 +159,37 @@ def thumb_size() -> QSize:
     return QSize(32, 32)
 
 
+class FootTime(QWidget):
+    """Beside the panel's main button: a small caption over its value ("Last checked" over
+    "just now", "Started" over "22:04"), left-aligned and centred on the buttons' height."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        from PySide6.QtWidgets import QVBoxLayout
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.caption, self.value = QLabel(), QLabel()
+        self.caption.setObjectName("FootCap")
+        self.value.setObjectName("FootVal")
+        lay.addStretch(1)
+        for lbl in (self.caption, self.value):
+            lbl.setTextFormat(Qt.PlainText)
+            lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            lay.addWidget(lbl)
+        lay.addStretch(1)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - "caption\nvalue", as the label it replaces
+        cap, _, val = (text or "").partition("\n")
+        self.caption.setText(cap)
+        self.value.setText(val)
+        self.value.setVisible(bool(val))
+
+    def text(self) -> str:
+        return self.caption.text() + ("\n" + self.value.text() if self.value.text() else "")
+
+
 class TwoLineLabel(QLabel):
     """A label that shows at most two lines and ends the second with "…"; text() is still the
     whole text, which is also its tooltip. The status card keeps one height this way."""
@@ -226,19 +257,25 @@ class CenteredButton(QToolButton):
         opt.icon = QIcon()
         sp.drawComplexControl(QStyle.CC_ToolButton, opt)  # the background and border from the style sheet
         colour = self.palette().buttonText().color()
-        fm = QFontMetrics(self.font())
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QFontMetricsF
+
+        fm = QFontMetricsF(self.font())
         icon = 16 if self.icon_name else 0
-        gap = 8 if icon else 0
+        gap = 7 if icon else 0
         w = icon + gap + fm.horizontalAdvance(self.text())
         x = (self.width() - w) / 2
+        mid = self.height() / 2
         if icon:
             from .svgicons import pixmap
 
             pm = pixmap(self.icon_name, colour.name(), icon, max(1.0, self.devicePixelRatioF()), stroke=1.8)
-            sp.drawPixmap(int(round(x)), int(round((self.height() - icon) / 2)), pm)
+            sp.drawPixmap(QPointF(round(x), mid - icon / 2), pm)
         sp.setPen(colour)
         sp.setFont(self.font())
-        sp.drawText(QRectF(x + icon + gap, 0, w, self.height()), Qt.AlignVCenter | Qt.AlignLeft, self.text())
+        # the capitals centred on the button's middle, like the icon (centring the whole line, with
+        # room for descenders, put a word like "Stop" a pixel above its icon)
+        sp.drawText(QPointF(round(x) + icon + gap, round(mid + fm.capHeight() / 2)), self.text())
 
     icon_name = ""
 

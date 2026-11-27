@@ -942,8 +942,9 @@ class Flyout(QWidget):
             bl.addWidget(b)
             return b
 
-        self.checked_label = QLabel("")  # "Last checked / 14:32"
-        self.checked_label.setObjectName("Legend")
+        from .panel_parts import FootTime
+
+        self.checked_label = FootTime()  # "Last checked" over "just now"; "Started" over "22:04"
         self.checked_label.setMinimumWidth(0)
         self.checked_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         bl.addWidget(self.checked_label, 1)
@@ -972,7 +973,7 @@ class Flyout(QWidget):
             self.setStyleSheet("")
             return
         from .backdrop import glass_colours
-        from .theme import STOP, STOP_HOVER, accent_edges, accent_fill
+        from .theme import accent_edges, accent_fill
 
         g = glass_colours(self.c, QColor(self.c["bg"]).lightness() < 128)
         self.setStyleSheet(
@@ -983,10 +984,12 @@ class Flyout(QWidget):
             f"QFrame#BottomBar {{ background: {g['foot']}; border-top: 1px solid {g['stroke']}; }}"
             f"QFrame#Row:hover, QFrame#ActRow[link=\"true\"]:hover {{ background: {g['hover']}; }}"
             f"QToolButton#Bar {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
-            # Stop: the same kind of button in red, as see-through as the blue one
-            f"QToolButton#Bar[wide=\"true\"] {{ background: {accent_fill(STOP, 0.72)}; {accent_edges(STOP, 0.8)} }}"
-            f"QToolButton#Bar[wide=\"true\"]:hover {{ background: {accent_fill(STOP_HOVER, 0.85)};"
-            f" {accent_edges(STOP_HOVER, 0.9)} }}"
+            # Stop: the same kind of button in red (the same text colour rule as the blue one: white in
+            # Light, dark in Dark and OLED, as on Windows 11), as see-through as the blue one
+            f"QToolButton#Bar[wide=\"true\"] {{ background: {accent_fill(self.c['stop'], 0.72)};"
+            f" {accent_edges(self.c['stop'], 0.8)} }}"
+            f"QToolButton#Bar[wide=\"true\"]:hover {{ background: {accent_fill(self.c['stop_hover'], 0.85)};"
+            f" {accent_edges(self.c['stop_hover'], 0.9)} }}"
             # the main button: the accent, see-through enough for the blur to show in it
             f"QToolButton#Bar[primary=\"true\"] {{ background: {accent_fill(self.c['btn'], 0.68)};"
             f" {accent_edges(self.c['btn'], 0.75)} }}"
@@ -1121,7 +1124,7 @@ class Flyout(QWidget):
             self.sync_btn.setProperty("wide", quiet)
             self.sync_btn.style().unpolish(self.sync_btn)
             self.sync_btn.style().polish(self.sync_btn)
-        self.sync_btn.setIcon(glyph("stop" if quiet else name, "#ffffff" if quiet else self.c["accent_text"]))
+        self.sync_btn.setIcon(glyph("stop" if quiet else name, self.c["stop_text"] if quiet else self.c["accent_text"]))
         self.sync_btn.set_glyph("stop" if quiet else name)  # drawn centred with the text, in its colour
         self.sync_btn.setEnabled(True)  # paused: this button is the way to continue
         self._status_line()
@@ -1303,7 +1306,7 @@ class Flyout(QWidget):
         ts = getattr(self, "_last_sync_ts", None)
         started = getattr(self, "_started", None)
         if self.state == "syncing" and started:
-            self.checked_label.setText(t("Started") + "\n" + t("at {time}", time=started))
+            self.checked_label.setText(t("Started") + "\n" + started)
         else:
             self.checked_label.setText(t("Last checked") + "\n" + fmt_time(ts) if ts else "")
 

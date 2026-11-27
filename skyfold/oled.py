@@ -5,6 +5,7 @@ OLED = {
     "group": "#1C1C1E", "tile": "#2C2C2E", "border": "#38383A", "border_strong": "#828288",
     "text": "#FFFFFF", "muted": "#C0C0C6", "muted2": "#A6A6AC", "disabled": "#A6A6AC",
     "accent": "#0A84FF", "accent_hover": "#409CFF", "accent_pressed": "#087EFA",
+    "stop": "#FF453A", "stop_hover": "#FF6961", "stop_pressed": "#E63B31", "stop_text": "#000000",
     "btn": "#0A84FF", "btn_hover": "#409CFF", "btn_pressed": "#087EFA",
     "focus": "#64B5FF", "focus_ring": "#64B5FF",
     # Lighter blue for small text over raised greys; black ink on solid system blue.

@@ -41,7 +41,7 @@ def test_stop_is_the_red_button_with_a_white_stop_mark(qapp):  # noqa: F811
             assert f.sync_btn.text() and f.sync_btn.icon_name == "stop"
             img = f.sync_btn.grab().toImage()
             mid = QColor(img.pixelColor(img.width() // 5, img.height() // 2))
-            assert mid.red() > 150 and mid.green() < 90 and mid.blue() < 90, mid.name()
+            assert mid.red() > 150 and mid.red() > mid.green() + 80 and mid.red() > mid.blue() + 80, mid.name()
             f.set_state("idle", "")
             assert f.sync_btn.icon_name == "sync"
         finally:
