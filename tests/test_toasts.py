@@ -614,3 +614,25 @@ def test_list_buttons_apply_only_while_they_make_sense(controller):
     ctl._release = SimpleNamespace(version="99.0.0")
     ctl.settings.drive_enabled = True
     assert applies("review") and applies("sign_in") and applies("update") and applies("folder_drive")
+
+
+def test_card_buttons_share_the_whole_width_equally(qapp):
+    """As in Windows 11's own notifications: the buttons are one row across the card, all the same
+    width, lined up with the tile's left edge and the text's right edge."""
+    card = ToastCard("Photos synced", "Downloaded: 2", theme.DARK, "photo", None,
+                     [("Open", lambda: None), ("Show in folder", lambda: None)])
+    try:
+        card.show()
+        qapp.processEvents()
+        a, b = card.buttons
+        assert a.width() == b.width() and a.y() == b.y() and a.height() == 32
+        assert a.x() == card._tile.x()  # the row starts where the tile does
+        assert b.x() + b.width() == card._text.x() + card._text.width()  # and ends with the text
+        single = ToastCard("Confirmation needed", "x", theme.DARK, "trash", "warn", [("Review", lambda: None)])
+        single.show()
+        qapp.processEvents()
+        (r,) = single.buttons
+        assert r.x() == single._tile.x() and r.x() + r.width() == single._text.x() + single._text.width()
+        single.close()
+    finally:
+        card.close()

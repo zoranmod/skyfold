@@ -166,9 +166,11 @@ class _CardButton(QAbstractButton):
             self.setFixedSize(24, 24)
             self.setToolTip(text)
         else:
-            self.setFixedHeight(28)
-            w = self.fontMetrics().horizontalAdvance(text) + 28
-            self.setMinimumWidth(max(72, w))
+            self.setFixedHeight(32)
+            self.setMinimumWidth(0)  # equal shares of the row, whatever the words (longer ones are elided)
+            from PySide6.QtWidgets import QSizePolicy
+
+            self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)  # (the row shares its width out)
 
     def enterEvent(self, e) -> None:  # noqa: N802 - Qt naming
         self.update()
@@ -229,20 +231,29 @@ class ToastCard(QWidget):
         self._hover_close = False
 
         m = self.SHADOW
-        outer = QHBoxLayout(self)
-        outer.setContentsMargins(m + self.PAD, m + 14, m + 8, m + self.PAD + 2)
-        outer.setSpacing(12)
+        # Three rows, as Windows 11 lays out its own notifications: Skyfold's name across the top (the
+        # cross at its end), then the tile beside the title and text, then the buttons across the
+        # whole card, all the same width. Every row lines up with the same left and right edge.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(m + self.PAD, m + 10, m + 8, m + self.PAD)
+        outer.setSpacing(0)
+        inset = self.PAD - 8  # the rows below the cross keep the card's own right margin
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(6)
+        outer.addLayout(head)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 8, inset, 0)
+        body.setSpacing(12)
+        outer.addLayout(body)
         self._tile = QWidget()  # the service tile is painted in its place
         self._tile.setFixedSize(self.TILE, self.TILE)
-        outer.addWidget(self._tile, 0, Qt.AlignTop)
+        body.addWidget(self._tile, 0, Qt.AlignTop)
         words = QVBoxLayout()
         words.setContentsMargins(0, 0, 0, 0)
         words.setSpacing(2)
-        outer.addLayout(words, 1)
+        body.addLayout(words, 1)
 
-        head = QHBoxLayout()
-        head.setContentsMargins(0, 0, 0, 2)
-        head.setSpacing(6)
         self._logo = QWidget()  # the mark is painted in its place
         self._logo.setFixedSize(14, 14)
         self._app = QLabel(APP_NAME + " · " + self._context(icon, tone) + " · " + t("now"))
@@ -251,7 +262,6 @@ class ToastCard(QWidget):
         head.addWidget(self._logo, 0, Qt.AlignVCenter)
         head.addWidget(self._app, 1, Qt.AlignVCenter)
         head.addWidget(self.close_button, 0, Qt.AlignVCenter)
-        words.addLayout(head)
         self._title = QLabel(title)
         self._text = QLabel(_short(text))
         for lbl in (self._app, self._title, self._text):
@@ -288,15 +298,14 @@ class ToastCard(QWidget):
         self.buttons: list[_CardButton] = []
         if actions:
             row = QHBoxLayout()
-            row.setContentsMargins(0, 8, 4, 0)
+            row.setContentsMargins(0, 12, inset, 0)
             row.setSpacing(8)
             for i, (label, fn) in enumerate(actions):
                 b = _CardButton(self, label, "primary" if i == 0 else "secondary")
                 b.clicked.connect(fn)
                 self.buttons.append(b)
-                row.addWidget(b)
-            row.addStretch(1)
-            words.addLayout(row)
+                row.addWidget(b, 1)  # (equal shares: the buttons are the same width)
+            outer.addLayout(row)
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -492,7 +501,8 @@ class ToastCard(QWidget):
         p.drawRoundedRect(r, 6, 6)
         p.setPen(fg)
         p.setFont(b.font())
-        p.drawText(r, Qt.AlignCenter, b.text())
+        text = b.fontMetrics().elidedText(b.text(), Qt.ElideRight, int(r.width()) - 16)
+        p.drawText(r, Qt.AlignCenter, text)
 
     # behaviour ------------------------------------------------------------------------------------
     def start_timer(self, ms: int | None = None) -> None:
