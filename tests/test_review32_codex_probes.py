@@ -442,3 +442,10 @@ def test_local_quick_change_escalates_without_releasing_pending_children(drive_e
     assert cloud.items[new]["data"] == b"NEW"
     assert set(paths).isdisjoint(cloud.items)
     assert all((root / p).read_bytes() == b"ORIGINAL" for p in paths)
+
+
+def test_tests_never_write_the_real_crash_log():
+    """conftest keeps every test's crash.log in its own temporary folder (not the user's)."""
+    from skyfold import app, config
+
+    assert app.LOG_FILE != config.LOG_FILE and app.LOG_FILE.parent != config.PRIVATE_DIR
