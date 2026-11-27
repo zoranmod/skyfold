@@ -19,7 +19,7 @@ from .i18n import set_language, t
 
 APP_NAME = "Skyfold"
 APP_ID = "Skyfold"
-VERSION = "1.0.31"
+VERSION = "1.1.0"
 
 
 def app_dir() -> Path:
@@ -421,11 +421,13 @@ class Settings:
     include_live_video: bool = True
     albums_as_folders: bool = True
     photos_upload: bool = False  # new photos/videos put in the photos folder go up to iCloud Photos
+    photos_window: bool = True  # a click on Photos opens the Photos window; off: the photos folder in Explorer
     delete_pc_to_cloud: bool = True
     delete_cloud_to_pc: bool = True
     delete_threshold: int = 5  # more deletions than this at once are asked about first
     instant_local_deletes: bool = True
     notifications: bool = True
+    notification_style: str = "skyfold"  # skyfold (its own cards) | windows; notifications=False: off
     start_with_windows: bool = False
     check_updates: bool = True  # ask GitHub once a day whether a newer Skyfold is out
     update_told: str = ""  # the newest version already announced (told once per version)
@@ -462,6 +464,8 @@ class Settings:
                     clean[f.name] = v
         if clean.get("folder_structure") not in FOLDER_STRUCTURES:
             clean.pop("folder_structure", None)
+        if clean.get("notification_style") not in ("skyfold", "windows"):
+            clean.pop("notification_style", None)
         if "poll_minutes" in clean:  # hand-edited values: keep timers in a sane range
             clean["poll_minutes"] = min(max(1, clean["poll_minutes"]), 24 * 60)
         if "delete_threshold" in clean:

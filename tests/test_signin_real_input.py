@@ -239,13 +239,19 @@ def test_settings_signout_requires_its_confirmation(ui):
     d = dialogs.SettingsDialog(c.settings, c.c); seen=[]; answered=[]
     d.signOut.connect(lambda: seen.append(1)); d.show(); d.activateWindow(); app.processEvents()
     out = next(b for b in d.findChildren(QPushButton) if b.text() == dialogs.t('Sign out'))
+    tries = []
+
     def dismiss():
         box = app.activeModalWidget()
         if isinstance(box, QMessageBox):
             answered.append(box.windowTitle())
             QTest.keyClick(box, Qt.Key_Escape)
-    QTimer.singleShot(30, dismiss)
-    tab_to(app, out); key(app, Qt.Key_Return)
+        elif len(tries) < 200:  # not open yet: look again (never leave a question open: the run would hang)
+            tries.append(1)
+            QTimer.singleShot(30, dismiss)
+    tab_to(app, out)
+    QTimer.singleShot(30, dismiss)  # (after the Tabs: on a slow machine it fired before the question opened)
+    key(app, Qt.Key_Return)
     assert answered and not seen and d.isVisible()
     d.close()
 
@@ -269,11 +275,12 @@ def test_settings_field_enter_starts_nothing(ui, tmp_path):
     d.accepted.connect(lambda: saved.append(True))
     d.signOut.connect(lambda: signed_out.append(True))
     d.show(); d.activateWindow(); app.processEvents()
-    # Select Photos with a real mouse click, then Enter in its unchanged folder field.
-    rect=d.nav.visualItemRect(d.nav.item(1))
+    # Select Syncing with a real mouse click, then Enter in its unchanged number field (1.1: folders
+    # are shown on cards and changed with Change…, so the fields left are numbers like this one).
+    rect=d.nav.visualItemRect(d.nav.item(d.PAGES.index("general")))
     QTest.mouseClick(d.nav.viewport(), Qt.LeftButton, pos=rect.center())
-    QTest.mouseClick(d.dir, Qt.LeftButton)
-    assert app.focusWidget() is d.dir
+    QTest.mouseClick(d.threshold, Qt.LeftButton)
+    assert app.focusWidget() is d.threshold
     key(app, Qt.Key_Return)
     assert not saved and not signed_out and d.isVisible()
     d.reject()

@@ -254,6 +254,9 @@ MAX_UNPACKED = 2 * 1024 * 1024 * 1024
 def download(rel: Release, app_dir: Path = APP_DIR, progress: Callable[[int, int], None] | None = None,
              get=_get, cancelled: Callable[[], bool] = lambda: False,
              verify: Callable[[str, str, Callable], None] | None = None) -> Path:
+    if verify is None and getattr(sys, "frozen", False):
+        # the installed app never unpacks a release whose origin wasn't checked (build attestation)
+        raise UpdateError(t("This update can't be checked, so it wasn't installed."))
     """The release unpacked beside the app, after its checksum matched. Returns the new Skyfold folder.
     Each attempt gets a folder of its own (nothing already there is ever touched); on any failure or
     cancel it is removed again."""

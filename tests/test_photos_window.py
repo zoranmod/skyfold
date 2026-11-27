@@ -567,7 +567,7 @@ def test_the_wheel_glides_and_a_notch_after_another_adds_up(qapp, made_up, monke
         wheel(-120)
         assert smooth.target is None and bar.value() == min(bar.maximum(), bar.minimum() + notch)
     finally:
-        pw.PhotosWindow.zoom_level = 2
+        pw.PhotosWindow.zoom_level = 1  # (the default since 1.1: five columns)
         w.close()
 
 
@@ -665,7 +665,7 @@ def test_the_same_photos_stay_in_view_when_the_window_is_maximized(qapp, made_up
                 assert len(xs) == min(want, max(2, vp // 60)), (level, width, len(xs))
                 assert vp - len(xs) * w.tile < 40, (level, width)
     finally:
-        pw.PhotosWindow.zoom_level = 2
+        pw.PhotosWindow.zoom_level = 1  # (the default since 1.1: five columns)
         w.close()
 
 
@@ -955,5 +955,52 @@ def test_a_photo_put_back_from_the_recycle_bin_shows_again(qapp, made_up):
         w.reload()
         assert pump(qapp, lambda: not w._loading and "A5" not in w._gone)
         assert "A5" in w.by_id
+    finally:
+        w.close()
+
+
+def test_a_click_on_photos_opens_the_folder_when_the_window_is_switched_off(monkeypatch):
+    from skyfold import app as app_mod
+    from skyfold.config import Settings
+
+    calls = []
+    s = Settings(apple_id="someone@example.com")
+    fake = SimpleNamespace(settings=s, open_photos=lambda: calls.append("window"),
+                           open_folder=lambda which="photos": calls.append(f"folder:{which}"),
+                           open_notes=lambda: calls.append("notes"), open_settings=lambda page=0: calls.append("settings"))
+    monkeypatch.setattr(app_mod.auth, "signed_out", lambda: False)
+    assert s.photos_window  # on by default
+    app_mod.Controller._on_service(fake, "photos")
+    app_mod.Controller.open_photos_or_folder(fake)
+    s.photos_window = False
+    app_mod.Controller._on_service(fake, "photos")
+    app_mod.Controller.open_photos_or_folder(fake)
+    assert calls == ["window", "window", "folder:photos", "folder:photos"]
+
+
+def test_viewer_commands_follow_current_photo_and_live_theme(qapp, made_up, monkeypatch):
+    from skyfold.ui import theme
+
+    w = window(qapp, made_up)
+    try:
+        w.resize(760, 550)
+        w.open_viewer(0)
+        qapp.processEvents()
+        assert w.v_more.isVisible() and not w.v_open.isVisible()
+        opened = []
+        monkeypatch.setattr(w, "open_file", opened.append)
+        w.step(1)
+        item = w.viewer_items[w.viewer_row]
+        w.v_more.menu().actions()[0].trigger()
+        assert opened == [item.path]
+        for c in (theme.LIGHT, theme.OLED, theme.DARK):
+            w.apply_palette(c)
+            assert w.pages.currentWidget() is w.viewer
+            assert w.viewer_items[w.viewer_row] is item
+            assert w.v_fav.accessibleName() == w.v_fav.toolTip()
+            assert not w.v_fav.icon().isNull()
+        w.resize(1450, 820)
+        qapp.processEvents()
+        assert w.v_open.isVisible() and w.v_show.isVisible() and not w.v_more.isVisible()
     finally:
         w.close()

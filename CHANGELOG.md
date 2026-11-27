@@ -2,7 +2,21 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] - 2026-11-27
+
+### Added
+- **A new look, everywhere.** Skyfold 1.1 is redesigned in the style of Windows 11: the tray panel, the notification cards, Settings, first run and signing in, the Photos and Notes windows, the deletion question, every window and message. Windows are see-through (Windows' acrylic: the desktop behind shows through, blurred) with light layers on top, smooth rounded edges, new line icons, Segoe UI Variable for text and Cascadia Mono for numbers and times. Light, Dark and OLED all follow it; OLED is a nearly black glass of its own. With Windows' *Transparency effects* off (or on Windows 10) the same layout appears on plain theme colours.
+- **The tray panel:** a status card with a check, or a ring that fills with the percentage while syncing and the numbers below (done, speed, time left); the services on one card with their colours; iCloud storage as "74 / 200 GB"; recent activity with small photos and short times; the turning arrows while syncing; one steady height, and the activity list scrolls one whole row per wheel notch.
+- **Settings as cards:** your Apple ID with your picture at the top (the photo on your own card in Contacts, as iCloud.com shows it; kept only on this PC and removed when you sign out), a large page title, and every option on its own card with an icon, a line that explains it and its control on the right.
+- **First run in three short steps:** where the photos go (the layout as three pictures), the plain-language agreement, then signing in.
+- **The deletion question** is compact: what was deleted where, your limit, the photos themselves as small pictures, the whole list on request. Keeping them stays the highlighted answer.
+- **Notification cards** show the new photos as small pictures and a line that counts down while the card is shown.
+- **The Photos window can be switched off.** *Settings → Photos → Open the Photos window when I click Photos* is on by default; switched off, a click on *Photos* in the panel or the tray menu opens the photos folder in File Explorer, as before the Photos window.
+- **Skyfold's own notifications.** Instead of Windows' grey balloons, a small card slides in beside the tray in Skyfold's theme (light, dark or OLED), with the service's colour (Photos pink, iCloud Drive blue) and buttons that do the next thing: *Open* and *Show in folder* after a sync, *Sign in*, *Review* for deletions waiting for your OK, *What's new* for an update. A card goes after about six seconds, stays while the mouse is on it, and up to three stack above each other. It never takes the keyboard from the program you're typing in, and it stays away while Windows' *Do Not Disturb* is on or a game, film or presentation runs full screen. With Windows' animation effects off, cards appear and go without moving.
+- **A notification that went away can be found again.** The bell beside the gear in the tray panel counts the new ones; click it to see this session's notifications (the last 30, newest first) with their buttons, as long as they still apply (*Review* goes once the deletions were reviewed). *Clear all* empties the list, *Back* (or `Esc`) returns to the panel. Notifications held back by *Do Not Disturb* or a full-screen program, and those shown by Windows, are in the list too. The list is kept only while Skyfold runs.
+- **Notes:** the note reads like the design (a larger title, rounded checkboxes with ticked items struck through, tables as cards); zoom moved into the **…** menu (`Ctrl` + wheel and `Ctrl +` / `Ctrl -` / `Ctrl 0` still work).
+- **Photos:** the viewer stays on the window's glass, with a centred film strip and square buttons; the photos scroll under the title.
+- **Settings → General → Notifications** chooses *Skyfold's own* (the default), *Windows' own* or *Off* (sign-in and deletions waiting for your OK are still shown). If you had switched notifications off, they stay off.
 
 ## [1.0.31] - 2026-11-25
 

@@ -18,14 +18,17 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QFont, QImage, QImageIOHandler, QImageReader,
-                           QKeySequence, QPainter, QPalette, QPen, QShortcut, QTextCharFormat, QTextCursor,
-                           QTextDocument)
-from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QMenu, QPushButton, QSizePolicy, QSplitter, QStyle, QStyledItemDelegate,
+from PySide6.QtCore import (QDateTime, QEasingCurve, QLocale, QObject, QPoint, QPointF, QPropertyAnimation, QRectF,
+                            QSize, Qt, QTimer, QUrl, Signal)
+from PySide6.QtGui import (QAction, QActionGroup, QColor, QCursor, QDesktopServices, QFont, QFontMetricsF, QImage,
+                           QImageIOHandler, QImageReader, QKeySequence, QPainter, QPainterPath, QPalette, QPen,
+                           QShortcut, QTextCharFormat, QTextCursor, QTextBlockFormat, QTextDocument,
+                           QTextFormat, QTextFrameFormat, QTextLayout, QTextTable)
+from PySide6.QtWidgets import (QApplication, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QListWidgetItem, QMenu, QSizePolicy, QSplitter, QStyle, QStyledItemDelegate,
                                QTextBrowser, QTextEdit, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                                QWidget)
 
@@ -34,7 +37,10 @@ from shiboken6 import isValid
 from ..i18n import t
 from ..notes_engine import local_datetime
 from .. import notes_view as nv
-from .dialogs import Combo, _Dialog
+from .dialogs import Combo
+from .library_frame import LibraryDialog, SearchField, count_font
+from .panel_parts import SoftCard
+from .settings_parts import ElidedLabel
 from .icons import glyph
 from .theme import service_color
 
@@ -44,14 +50,18 @@ ROW_ID = Qt.UserRole
 ROW_SNIPPET = Qt.UserRole + 1
 FOLDER_PATH = Qt.UserRole
 OPENABLE = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".heic", ".heif", ".tif", ".tiff", ".webp", ".bmp",
-            ".m4a", ".mp3", ".wav", ".aac", ".caf", ".mov", ".mp4", ".m4v", ".txt", ".csv", ".rtf",
-            ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".pages", ".numbers", ".key", ".vcf"}
+            ".m4a", ".mp3", ".wav", ".aac", ".caf", ".mov", ".mp4", ".m4v", ".txt", ".csv",
+            ".docx", ".xlsx", ".pptx", ".pages", ".numbers", ".key", ".vcf"}  # (no macro-capable .doc/.xls/.ppt/.rtf)
 HIGHLIGHTS = ("#ba55d3", "#ff5252", "#ffb74d", "#80cbc4", "#64b5f6")  # Apple's five highlight colours
 MAX_MARKS = 300  # search words marked in one note
 IMAGE_BUDGET = 400_000_000  # bytes of decoded pictures for the open note (then less sharp, then a note)
 SHARP_SHARE = 0.4  # pictures are decoded for this screen's sharpness until this share of it is used
 RETRY_INDEX = 30.0  # seconds before pages that couldn't be read are tried again
 RETRY_NOTE = 5.0
+DOC_SIDE = 40  # the note's padding left and right (the design: 26 above, 40 at the sides)
+DOC_LEFT = DOC_SIDE - 4  # (on the left, 4 px of it are the room to grab the line between list and note)
+HEAD_MARK = "#010203"  # a table's head cells carry this background from the style sheet until polished
+MAX_TABLES = 200  # tables of one note drawn as cards (any further ones: text only)
 
 
 def _blend(a: str, b: str, f: float) -> str:
@@ -93,20 +103,119 @@ def contrast_colors() -> dict[str, QColor] | None:
     return out
 
 
+def _alpha(colour: str, a: float) -> QColor:
+    q = QColor(colour)
+    q.setAlphaF(a)
+    return q
+
+
+def _rgba(q: QColor) -> str:
+    return f"rgba({q.red()}, {q.green()}, {q.blue()}, {q.alpha()})"
+
+
+def _layers(c: dict[str, str]) -> dict[str, QColor]:
+    """The design's layers (1.1 mockup: layer-2, hover, stroke, stroke-2, accent-soft, text-2/3).
+    Partly see-through, the same over the window's material and over a plain colour, so the
+    selected rows and fields never cover the material with a solid colour (OLED included)."""
+    if QColor(c["bg"]).lightness() < 128:
+        return {"layer2": QColor(255, 255, 255, 20), "hover": QColor(255, 255, 255, 18),
+                "stroke": QColor(255, 255, 255, 18), "stroke2": QColor(255, 255, 255, 31),
+                "sel": _alpha(c["accent"], 0.16), "sel_hover": _alpha(c["accent"], 0.22),
+                "text": QColor(c["text"]), "text2": QColor(c["muted"]), "text3": QColor(c["muted2"])}
+    return {"layer2": QColor(255, 255, 255, 235), "hover": QColor(0, 0, 0, 10),
+            "stroke": QColor(0, 0, 0, 15), "stroke2": QColor(0, 0, 0, 28),
+            "sel": _alpha(c["accent"], 0.10), "sel_hover": _alpha(c["accent"], 0.14),
+            "text": QColor(c["text"]), "text2": QColor(c["muted"]), "text3": QColor(c["muted2"])}
+
+
+def _px_font(base: QFont, px: float, weight=None, families: list[str] | None = None) -> QFont:
+    """A font of the design's size in pixels (fractions kept: 12.5, 13.5)."""
+    f = QFont(base)
+    if families:
+        f.setFamilies(families)
+    f.setPointSizeF(px * 0.75)
+    if weight is not None:
+        f.setWeight(weight)
+    return f
+
+
+MONO = ["Cascadia Mono", "Consolas"]
+DISPLAY = ["Segoe UI Variable Display", "Segoe UI"]
+
+
 def _row_colors(c: dict[str, str]) -> dict:
     """Colours of a row in the folder and note lists. With a contrast theme: its own colours, and a
     highlighted row (hovered or chosen) always pairs the highlight with the highlighted text."""
     hc = contrast_colors()
     if hc is not None:
         return {"bg": hc["window"], "text": hc["text"], "muted": hc["text"], "sel": hc["high"],
-                "hover": hc["high"], "on": hc["high_text"], "focus": hc["high_text"]}
-    return {"bg": None, "text": QColor(c["text"]), "muted": QColor(c["muted"]), "sel": QColor(c["accent_soft"]),
-            "hover": QColor(c["hover"]), "on": None, "focus": QColor(c["focus_ring"])}
+                "sel_hover": hc["high"], "hover": hc["high"], "on": hc["high_text"], "focus": hc["high_text"],
+                "layer2": hc["high"], "bar": hc["high_text"]}
+    k = _layers(c)
+    return {"bg": None, "text": k["text"], "muted": k["text3"], "sel": k["sel"], "sel_hover": k["sel_hover"],
+            "hover": k["hover"], "on": None, "focus": QColor(c["focus_ring"]), "layer2": k["layer2"],
+            "bar": QColor(c["accent"])}
+
+
+def _long_when(iso: str) -> str:
+    """'24 November 2026, 07:15' in the app's language (the note's meta line, as in the design)."""
+    from PySide6.QtCore import QDateTime
+
+    from ..i18n import language
+
+    stamp = QDateTime.fromString(iso, Qt.ISODate)
+    if not stamp.isValid():
+        return local_datetime(iso)
+    if language() == "bs":
+        loc = QLocale(QLocale.Bosnian, QLocale.BosniaAndHerzegowina)
+    else:
+        loc = QLocale(QLocale.English, QLocale.UnitedKingdom)
+    return loc.toString(stamp.toLocalTime(), "d MMMM yyyy, HH:mm")
 
 
 def _key(r: nv.Row) -> tuple:
     return (r.rel, r.modified)
 
+
+
+BOX_SCHEME = "sfbox"
+BOX, BOX_GAP = 18, 10  # the design's checklist: an 18 px box, 10 px before the text
+# (one picture: the box and the gap after it, so the text starts at the same place on every line)
+def _box_img(on: bool, zoom: float = 1.0) -> str:
+    return (f'<img src="{BOX_SCHEME}:{"on" if on else "off"}" width="{round((BOX + BOX_GAP) * zoom)}"'
+            f' height="{round(BOX * zoom)}" align="middle">')
+
+
+CHECK_ON_IMG, CHECK_OFF_IMG = _box_img(True), _box_img(False)
+
+
+def _check_box(c: dict, on: bool, dpr: float, zoom: float = 1.0):
+    """A checklist box as in the design: 18 px, corners of 5, a 1.5 px quiet border; when done,
+    filled with the accent and a tick. Drawn at the note's zoom (the text grows, the box too)."""
+    size, gap = BOX * zoom, BOX_GAP * zoom
+    img = QImage(max(1, round((size + gap) * dpr)), max(1, round(size * dpr)), QImage.Format_ARGB32_Premultiplied)
+    img.setDevicePixelRatio(dpr)
+    img.fill(Qt.transparent)
+    p = QPainter(img)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.scale(zoom, zoom)
+    box = QRectF(0.75, 0.75, BOX - 1.5, BOX - 1.5)
+    if on:
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(c["btn"]))
+        p.drawRoundedRect(QRectF(0, 0, BOX, BOX), 5, 5)
+        tick = QPainterPath(QPointF(5.0, 9.4))
+        tick.lineTo(QPointF(7.8, 12.1))
+        tick.lineTo(QPointF(13.0, 6.3))
+        p.setPen(QPen(QColor(c["accent_text"]), 1.7, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(tick)
+    else:
+        p.setPen(QPen(QColor(c["muted2"]), 1.5))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(box, 4.4, 4.4)
+    p.end()
+    return img
 
 class _Indexer(QObject):
     """Reads the note pages in the background for search and the first lines in the list. Results
@@ -158,61 +267,141 @@ class _Indexer(QObject):
         self.gen += 1
 
 
+def _list_date(value: str, now: datetime | None = None) -> str:
+    """The date in the list, short as in the design: the time today, the day this week ("Sat"),
+    the day and month this year ("18 Nov"), else the date. Names in the app's language; the time
+    and the full date as Windows is set."""
+    from ..i18n import language
+
+    try:
+        when = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    if when.tzinfo is not None:
+        when = when.astimezone()
+    today = (now or datetime.now()).date()
+    stamp = QDateTime(when)
+    system = QLocale.system()
+    if language() == "bs":
+        names = QLocale(QLocale.Bosnian, QLocale.BosniaAndHerzegowina)
+    else:
+        names = QLocale(QLocale.English, QLocale.UnitedStates)  # "Sep", not "Sept"
+    days = (today - when.date()).days
+    if days == 0:
+        return system.toString(stamp.time(), QLocale.ShortFormat)
+    if 0 < days < 6:  # (the design: "Sat" two days ago, "18 Nov" six days ago)
+        return names.toString(stamp.date(), "ddd")
+    if when.year == today.year:
+        return names.toString(stamp.date(), "d MMM")
+    return system.toString(stamp.date(), QLocale.ShortFormat)
+
+
+def _match_ranges(text: str, terms: list[str], limit: int) -> list[tuple[int, int]]:
+    """Qt text offsets for accent-insensitive matches, including supplementary characters."""
+    folded = nv.fold(text)
+    spans = []
+    for term in terms:
+        i = folded.find(term)
+        while i >= 0 and len(spans) < limit:
+            spans.append((i, i + len(term)))
+            i = folded.find(term, i + len(term))
+    offsets = nv.fold_positions(text, [n for span in spans for n in span]) if spans else []
+    return list(zip(offsets[::2], offsets[1::2]))
+
+
+def _list_line(p: QPainter, rect: QRectF, text: str, terms: list[str], mark: QTextCharFormat | None) -> None:
+    text = p.fontMetrics().elidedText(text, Qt.ElideRight, max(0, int(rect.width())))
+    spans = _match_ranges(text, terms, MAX_MARKS) if terms else []
+    if not spans:
+        p.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, text)
+        return
+    layout = QTextLayout(text, p.font(), p.device())
+    ranges = []
+    for start, end in spans:
+        fmt = QTextLayout.FormatRange()
+        fmt.start, fmt.length, fmt.format = start, end - start, mark
+        ranges.append(fmt)
+    layout.setFormats(ranges)
+    layout.beginLayout()
+    line = layout.createLine()
+    line.setLineWidth(rect.width())
+    layout.endLayout()
+    layout.draw(p, QPointF(rect.left(), rect.center().y() - line.height() / 2))
+
+
+ROW_COMPACT = Qt.UserRole + 2  # a note known to have no text after its title: a one-line row
+NOTE_PAD_V, NOTE_PAD_H, NOTE_GAP = 10, 12, 2  # the design's note row: padding 10/12, 2 px between rows
+
+
 class _NoteDelegate(QStyledItemDelegate):
+    """A note in the list as in the design: the title (600) with the date on the right (mono, quiet),
+    the first line of the text under it (12.5 px, quiet); the chosen note on a soft accent layer."""
+
     def __init__(self, win: "NotesWindow") -> None:
         super().__init__(win)
         self.win = win
+        self._fonts_for: tuple | None = None
+
+    def fonts(self, base: QFont) -> tuple[QFont, QFont, QFont, float, float]:
+        key = (base.key(), NotesWindow.zoom)
+        if self._fonts_for != key:
+            title = _px_font(base, 14, QFont.DemiBold)
+            snip = _px_font(base, 12.5)
+            date = _px_font(base, 11.5, families=MONO)
+            line = max(QFontMetricsF(title).height(), 14 * 1.45)  # the design's line: 1.45 of 14 px
+            self._fonts = (title, snip, date, line, max(QFontMetricsF(snip).height(), line))
+            self._fonts_for = key
+        return self._fonts
 
     def sizeHint(self, opt, idx) -> QSize:  # noqa: N802
-        fm = opt.fontMetrics
-        return QSize(160, 2 * fm.height() + 24)
+        _t, _s, _d, h1, h2 = self.fonts(opt.font)
+        body = h1 if idx.data(ROW_COMPACT) else h1 + h2
+        return QSize(160, round(2 * NOTE_PAD_V + body + NOTE_GAP))
 
     def paint(self, p: QPainter, opt, idx) -> None:
         row: nv.Row | None = self.win.row_by_id.get(idx.data(ROW_ID))
         if row is None:
             return
         k = _row_colors(self.win.c)
-        text, muted, sel, hover, focus = k["text"], k["muted"], k["sel"], k["hover"], k["focus"]
+        text, muted, focus = k["text"], k["muted"], k["focus"]
         p.save()
         p.setRenderHint(QPainter.Antialiasing)
         if k["bg"] is not None:
             p.fillRect(opt.rect, k["bg"])
-        r = QRectF(opt.rect).adjusted(4, 2, -4, -2)
+        r = QRectF(opt.rect).adjusted(0, 0, 0, -NOTE_GAP)
         selected = bool(opt.state & QStyle.State_Selected)
-        lit = selected or bool(opt.state & QStyle.State_MouseOver)
-        if lit:
+        hovered = bool(opt.state & QStyle.State_MouseOver)
+        if selected or hovered:
             p.setPen(Qt.NoPen)
-            p.setBrush(sel if selected else hover)
-            p.drawRoundedRect(r, 8, 8)
-        if lit and k["on"] is not None:
+            p.setBrush((k["sel_hover"] if hovered else k["sel"]) if selected else k["hover"])
+            p.drawRoundedRect(r, 6, 6)
+        if (selected or hovered) and k["on"] is not None:
             text = muted = k["on"]
-        if selected and self.win.notes.hasFocus():
+        if selected and self.win.notes.hasFocus() and getattr(self.win, "keyboard_used", False):
             p.setPen(QPen(focus, 2))
             p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 8, 8)
-        fm = opt.fontMetrics
-        x, w = r.left() + 12, r.width() - 24
-        line = fm.height()
-        top = r.top() + (r.height() - 2 * line - 4) / 2
-        when = local_datetime(row.modified) if row.modified else ""
-        f = QFont(opt.font)
-        p.setFont(f)
-        dw = fm.horizontalAdvance(when) + 8 if when else 0
-        p.setPen(muted)
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 6, 6)
+        title_f, snip_f, date_f, h1, h2 = self.fonts(opt.font)
+        x, w = r.left() + NOTE_PAD_H, r.width() - 2 * NOTE_PAD_H
+        top = r.top() + NOTE_PAD_V
+        when = _list_date(row.modified) if row.modified else ""
+        p.setFont(date_f)
+        dw = min(p.fontMetrics().horizontalAdvance(when) + 10, int(w * 0.46)) if when else 0
         if when:
-            p.drawText(QRectF(x + w - dw, top, dw, line), Qt.AlignRight | Qt.AlignVCenter, when)
-        bold = QFont(opt.font)
-        bold.setWeight(QFont.DemiBold)
-        p.setFont(bold)
+            p.setPen(muted)
+            p.drawText(QRectF(x + w - dw, top, dw, h1), Qt.AlignRight | Qt.AlignVCenter,
+                       p.fontMetrics().elidedText(when, Qt.ElideRight, max(0, dw - 4)))
+        p.setFont(title_f)
         p.setPen(text)
         title = row.title or t("Untitled")
-        p.drawText(QRectF(x, top, max(0, w - dw), line), Qt.AlignLeft | Qt.AlignVCenter,
-                   p.fontMetrics().elidedText(title, Qt.ElideRight, int(max(0, w - dw))))
-        p.setFont(f)
-        p.setPen(muted)
+        terms = self.win._terms()
+        mark = self.win._match_format() if terms else None
+        _list_line(p, QRectF(x, top, max(0, w - dw), h1), title, terms, mark)
         second = ("\U0001F512 " + t("Locked note")) if row.locked else (idx.data(ROW_SNIPPET) or "")
-        p.drawText(QRectF(x, top + line + 4, w, line), Qt.AlignLeft | Qt.AlignVCenter,
-                   fm.elidedText(second, Qt.ElideRight, int(max(0, w))))
+        if second and not idx.data(ROW_COMPACT):
+            p.setFont(snip_f)
+            p.setPen(muted)
+            _list_line(p, QRectF(x, top + h1, w, h2), second, terms, mark)
         p.restore()
 
 
@@ -221,12 +410,30 @@ FOLDER_KIND = Qt.UserRole + 2  # "all" | "trash" | "folder"
 CHEVRON = 26  # px at the right end of a folder row that has subfolders: click to fold it
 
 
+FOLDER_ROW = 34  # the design's sidebar row
+GROUP_LABEL = 32  # room for the "iCloud" label above the folders (margin 14, 12 px text, margin 6)
+
+
+def _labelled(idx) -> bool:
+    """The first folder after "All notes" carries the "iCloud" label above it."""
+    return not idx.parent().isValid() and idx.row() == 1
+
+
 class _FolderTree(QTreeWidget):
     """Folders as in Apple Notes: one rounded highlight over the whole row (no separate box for
     the indent), the count on the right, a chevron on the right for folders with subfolders."""
 
+    def _on_label(self, it, y: float) -> bool:
+        if it is None:
+            return False
+        idx = self.indexFromItem(it)
+        return _labelled(idx) and y < self.visualRect(idx).top() + GROUP_LABEL
+
     def mousePressEvent(self, e) -> None:  # noqa: N802
         it = self.itemAt(e.position().toPoint())
+        if self._on_label(it, e.position().y()):
+            e.accept()  # the label is not a part of the folder under it
+            return
         if (it is not None and it.childCount() and e.button() == Qt.LeftButton
                 and e.position().x() >= self.viewport().width() - CHEVRON - 6):
             it.setExpanded(not it.isExpanded())
@@ -234,19 +441,33 @@ class _FolderTree(QTreeWidget):
             return
         super().mousePressEvent(e)
 
+    def mouseDoubleClickEvent(self, e) -> None:  # noqa: N802
+        if self._on_label(self.itemAt(e.position().toPoint()), e.position().y()):
+            e.accept()
+            return
+        super().mouseDoubleClickEvent(e)
+
+    def mouseMoveEvent(self, e) -> None:  # noqa: N802
+        super().mouseMoveEvent(e)
+        self.viewport().update()  # (the hover highlight leaves the label's room at once)
+
 
 class _FolderDelegate(QStyledItemDelegate):
+    """A sidebar row as in the design: 34 px, the Notes-amber icon, the name, the count in mono on
+    the right; the chosen folder on a lighter layer with a 3 px accent bar."""
+
     def __init__(self, win: "NotesWindow") -> None:
         super().__init__(win)
         self.win = win
 
     def sizeHint(self, opt, idx) -> QSize:  # noqa: N802
-        return QSize(120, opt.fontMetrics.height() + 16)
+        row = max(FOLDER_ROW, round(QFontMetricsF(opt.font).height()) + 14)
+        return QSize(120, row + (GROUP_LABEL if _labelled(idx) else 0))
 
     def paint(self, p: QPainter, opt, idx) -> None:
         tree = self.win.folders
         k = _row_colors(self.win.c)
-        text, muted, sel, hover, focus = k["text"], k["muted"], k["sel"], k["hover"], k["focus"]
+        text, muted, hover, focus = k["text"], k["muted"], k["hover"], k["focus"]
         depth, parent = 0, idx.parent()
         while parent.isValid():
             depth, parent = depth + 1, parent.parent()
@@ -255,22 +476,35 @@ class _FolderDelegate(QStyledItemDelegate):
         full = QRectF(0, opt.rect.top(), tree.viewport().width(), opt.rect.height())
         if k["bg"] is not None:
             p.fillRect(full, k["bg"])
-        r = full.adjusted(4, 2, -4, -2)
+        r = QRectF(full)
+        if _labelled(idx):
+            label = QRectF(full.left() + 10, full.top() + 10, full.width() - 20, 20)
+            p.setFont(_px_font(opt.font, 12, QFont.DemiBold))
+            p.setPen(k["muted"])
+            p.drawText(label, Qt.AlignLeft | Qt.AlignVCenter, "iCloud")
+            r.setTop(full.top() + GROUP_LABEL)
         selected = bool(opt.state & QStyle.State_Selected)
-        lit = selected or bool(opt.state & QStyle.State_MouseOver)
+        hovered = bool(opt.state & QStyle.State_MouseOver)
+        if hovered and _labelled(idx):
+            hovered = tree.viewport().mapFromGlobal(QCursor.pos()).y() >= r.top()
+        lit = selected or hovered
         if lit:
             p.setPen(Qt.NoPen)
-            p.setBrush(sel if selected else hover)
-            p.drawRoundedRect(r, 8, 8)
+            p.setBrush(k["layer2"] if selected else hover)
+            p.drawRoundedRect(r, 6, 6)
+        if selected:
+            p.setPen(Qt.NoPen)
+            p.setBrush(k["bar"])
+            p.drawRoundedRect(QRectF(r.left(), r.top() + 9, 3, r.height() - 18), 1.5, 1.5)
         if lit and k["on"] is not None:
             text = muted = k["on"]
-        if selected and tree.hasFocus():
+        if selected and tree.hasFocus() and getattr(self.win, "keyboard_used", False):
             p.setPen(QPen(focus, 2))
             p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 8, 8)
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 6, 6)
         fm = opt.fontMetrics
-        right = r.right() - 8
-        room_for_indent = max(0.0, r.width() - 10 - 8 - CHEVRON - 26 - 70)  # a name keeps at least ~70 px
+        right = r.right() - 10
+        room_for_indent = max(0.0, r.width() - 10 - 10 - CHEVRON - 28 - 70)  # a name keeps at least ~70 px
         x = r.left() + 10 + min(depth * 18, room_for_indent)
         has_kids = idx.model().hasChildren(idx)
         if has_kids:  # chevron: down when open, right when folded
@@ -287,14 +521,14 @@ class _FolderDelegate(QStyledItemDelegate):
         icon = idx.data(Qt.DecorationRole)
         if icon is not None:
             icon.paint(p, int(x), int(r.center().y() - 9), 18, 18)
-            x += 26
+            x += 28
         count = idx.data(FOLDER_COUNT)
         cw = 0
         if count is not None:
             label = str(count)
-            cw = fm.horizontalAdvance(label) + 6
+            p.setFont(count_font(opt.font))
+            cw = p.fontMetrics().horizontalAdvance(label) + 6
             p.setPen(muted)
-            p.setFont(opt.font)
             p.drawText(QRectF(right - cw, r.top(), cw, r.height()), Qt.AlignRight | Qt.AlignVCenter, label)
         p.setPen(text)
         p.setFont(opt.font)
@@ -302,6 +536,23 @@ class _FolderDelegate(QStyledItemDelegate):
         p.drawText(QRectF(x, r.top(), room, r.height()), Qt.AlignLeft | Qt.AlignVCenter,
                    fm.elidedText(idx.data(Qt.DisplayRole) or "", Qt.ElideRight, int(room)))
         p.restore()
+
+
+def _restyle(doc: QTextDocument, block, fmt: QTextCharFormat) -> None:
+    """Give a block's text these properties. Qt's own size step for h1-h6 (a size adjustment)
+    would win over any size given, so it is taken off first, piece by piece."""
+    it = block.begin()
+    while not it.atEnd():
+        frag = it.fragment()
+        if frag.isValid():
+            cf = frag.charFormat()
+            cf.clearProperty(QTextFormat.FontSizeAdjustment)
+            cf.merge(fmt)
+            cur = QTextCursor(doc)
+            cur.setPosition(frag.position())
+            cur.setPosition(frag.position() + frag.length(), QTextCursor.KeepAnchor)
+            cur.setCharFormat(cf)
+        it += 1
 
 
 class _Reader(QTextBrowser):
@@ -328,29 +579,239 @@ class _Reader(QTextBrowser):
         self._cache.clear()
         self._bytes = 0
 
-    def _new_document(self, css: str = "", font: QFont | None = None, body: str = "") -> None:
+    def _new_document(self, css: str = "", font: QFont | None = None, body: str = "", title: str = "") -> None:
         """Every note gets a document of its own. The old one is never emptied in place: Qt may still
         be laying it out, painting it or answering a screen reader about it, so it is let go and
         deleted once Qt is done with whatever it was doing (emptying it in place crashed Qt)."""
         self.setExtraSelections([])
+        self.table_heads = {}
         doc = QTextDocument(self)  # its pictures are asked from this viewer (loadResource)
         if css:
             doc.setDefaultStyleSheet(css)
         if font is not None:
             doc.setDefaultFont(font)
-        doc.setHtml(body)
+        zoom = NotesWindow.zoom
+        doc.setHtml(body.replace(nv.CHECK_ON, _box_img(True, zoom)).replace(nv.CHECK_OFF, _box_img(False, zoom)))
+        if title and font is not None:
+            cur = QTextCursor(doc)
+            if cur.block().text().strip() != title.strip():
+                # Some exports begin with the body instead of the note title. Insert literal text
+                # while keeping the first original block's formatting and its links intact.
+                original = cur.blockFormat()
+                cur.insertText(title, QTextCharFormat())
+                cur.insertBlock(original)
+                cur.movePosition(QTextCursor.Start)
+                cur.setBlockFormat(QTextBlockFormat())
+            heading = QTextCharFormat()  # the design's title: 600, 26 px, Segoe UI Variable Display
+            heading.setFontFamilies(DISPLAY)
+            heading.setFontPointSize(font.pointSizeF() * 26 / 14)
+            heading.setFontWeight(QFont.DemiBold)
+            heading.setForeground(QColor(self.win.c["text"]))
+            _restyle(doc, cur.block(), heading)
+            block = cur.blockFormat()
+            block.setHeadingLevel(1)
+            block.setTopMargin(6 * zoom)
+            block.setBottomMargin(12 * zoom)
+            block.setLineHeight(92, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)  # (26 px, 1.2)
+            cur.setBlockFormat(block)
+        if css:
+            self._polish(doc, zoom, bool(title and font is not None))
         old = self.document()
         self.setDocument(doc)
         if old is not None and old is not doc and isValid(old) and old.parent() is self:
             old.deleteLater()  # (Qt itself deletes the first, built-in one)
 
+    def _polish(self, doc: QTextDocument, zoom: float, title: bool) -> None:
+        """What CSS can't say to Qt: the note's padding, checklist rows (ticked ones struck through
+        and dimmed) and tables as the design's cards (only lines between rows, the head row on a
+        lighter layer; the rounded card itself is painted by paintEvent)."""
+        k = _layers(self.win.c)
+        root = doc.rootFrame()
+        fmt = root.frameFormat()
+        fmt.setLeftMargin(DOC_LEFT)
+        fmt.setRightMargin(DOC_SIDE)
+        fmt.setTopMargin(0)
+        fmt.setBottomMargin(26)
+        root.setFrameFormat(fmt)
+        # checklists: 28 px rows (8 px between items), a ticked item struck through in the quiet colour
+        done = QTextCharFormat()
+        done.setFontStrikeOut(True)
+        done.setForeground(k["text3"])
+        item = QTextCharFormat()
+        item.setForeground(k["text"])
+        sizes = {1: 20, 2: 17}  # the note's own headings (its title is the first block, set apart)
+        block = doc.begin().next() if title else doc.begin()
+        while block.isValid():
+            level = block.blockFormat().headingLevel()
+            if level:  # Qt adds its own size step to h1-h6: the design's sizes, set here
+                head = QTextCharFormat()
+                head.setFontPointSize(sizes.get(level, 14) * 0.75 * zoom)
+                head.setFontWeight(QFont.DemiBold)
+                _restyle(doc, block, head)
+            block = block.next()
+        block = doc.begin()
+        while block.isValid():
+            text = block.text()
+            if text[:1] == "\ufffc":  # (a picture first: a checklist box?)
+                it = block.begin()
+                first = it.fragment() if not it.atEnd() else None
+                name = first.charFormat().toImageFormat().name() if first is not None and first.isValid() else ""
+                if name.startswith(BOX_SCHEME + ":"):
+                    cur = QTextCursor(block)
+                    bf = cur.blockFormat()
+                    bf.setTopMargin(4 * zoom)
+                    bf.setBottomMargin(4 * zoom)
+                    cur.setBlockFormat(bf)
+                    cur.setPosition(block.position() + 1)
+                    cur.setPosition(block.position() + block.length() - 1, QTextCursor.KeepAnchor)
+                    cur.mergeCharFormat(done if name == BOX_SCHEME + ":on" else item)
+            block = block.next()
+        for table in self._tables(doc):
+            tf = table.format()
+            tf.setBorder(0)
+            tf.setBorderStyle(QTextFrameFormat.BorderStyle_None)
+            tf.setCellSpacing(0)
+            tf.setCellPadding(0)
+            tf.setMargin(0)
+            tf.setTopMargin(2 * zoom)
+            tf.setBottomMargin(14 * zoom)
+            tf.setLeftMargin(1)
+            table.setFormat(tf)
+            heads = 0
+            for r in range(table.rows()):
+                head_row = True
+                for col in range(table.columns()):
+                    cell = table.cellAt(r, col)
+                    cf = cell.format().toTableCellFormat()
+                    is_head = cf.background().color() == QColor(HEAD_MARK)
+                    if cell.row() == r and cell.column() == col:
+                        if is_head:
+                            self._clear_marks(doc, cell)
+                        cf.clearBackground()
+                        cf.setBorder(0)
+                        cf.setTopPadding(7 * zoom)
+                        cf.setBottomPadding(7 * zoom)
+                        cf.setLeftPadding(14 * zoom)
+                        cf.setRightPadding(14 * zoom)
+                        cf.setVerticalAlignment(QTextCharFormat.AlignTop)
+                        cell.setFormat(cf)
+                    head_row = head_row and is_head
+                if head_row and heads == r:
+                    heads += 1
+            self.table_heads[table.firstPosition()] = heads
+
+    @staticmethod
+    def _clear_marks(doc: QTextDocument, cell) -> None:
+        """The head cell's marker colour reached its text too: taken off again."""
+        start, end = cell.firstCursorPosition().position(), cell.lastCursorPosition().position()
+        block = doc.findBlock(start)
+        while block.isValid() and block.position() <= end:
+            it = block.begin()
+            while not it.atEnd():
+                frag = it.fragment()
+                if frag.isValid() and frag.charFormat().background().color() == QColor(HEAD_MARK):
+                    fmt = frag.charFormat()
+                    fmt.clearBackground()
+                    cur = QTextCursor(doc)
+                    cur.setPosition(frag.position())
+                    cur.setPosition(frag.position() + frag.length(), QTextCursor.KeepAnchor)
+                    cur.setCharFormat(fmt)
+                it += 1
+            block = block.next()
+
+    @staticmethod
+    def _tables(doc: QTextDocument, limit: int | None = None) -> list[QTextTable]:
+        out, stack = [], [doc.rootFrame()]
+        while stack and (limit is None or len(out) < limit):
+            frame = stack.pop()
+            for child in frame.childFrames():
+                if isinstance(child, QTextTable):
+                    out.append(child)
+                stack.append(child)
+        return out
+
+    def _table_cards(self) -> list[tuple[QRectF, list[float], float]]:
+        """Each table on screen: its box, where the lines between rows go, and where its head row
+        ends (in viewport coordinates)."""
+        doc = self.document()
+        heads = getattr(self, "table_heads", {})
+        if not heads:
+            return []
+        layout = doc.documentLayout()
+        dx, dy = -self.horizontalScrollBar().value(), -self.verticalScrollBar().value()
+        view = QRectF(self.viewport().rect())
+        out = []
+        for table in self._tables(doc, MAX_TABLES):
+            if table.firstPosition() not in heads or not table.rows() or not table.columns():
+                continue
+            box = layout.frameBoundingRect(table)
+            tops = []
+            for r in range(table.rows()):
+                ys = []
+                for col in range(table.columns()):
+                    cell = table.cellAt(r, col)
+                    if cell.row() == r and cell.column() == col:
+                        b = layout.blockBoundingRect(cell.firstCursorPosition().block())
+                        ys.append(b.top() - cell.format().toTableCellFormat().topPadding())
+                tops.append(min(ys) if ys else None)
+            first = table.cellAt(0, 0)
+            b0 = layout.blockBoundingRect(first.firstCursorPosition().block())
+            left = b0.left() - first.format().toTableCellFormat().leftPadding()
+            top = tops[0] if tops[0] is not None else box.top()
+            bottom = top
+            for r in range(table.rows()):
+                for col in range(table.columns()):
+                    cell = table.cellAt(r, col)
+                    if cell.row() == r and cell.column() == col:
+                        b = layout.blockBoundingRect(cell.lastCursorPosition().block())
+                        bottom = max(bottom, b.bottom() + cell.format().toTableCellFormat().bottomPadding())
+            # (Qt places the box at the first cell's text: its width is right, its place is not)
+            rect = QRectF(left, top, box.width(), bottom - top).translated(dx, dy)
+            if not rect.intersects(view):
+                continue
+            lines = [y + dy for y in tops[1:] if y is not None]
+            n = heads[table.firstPosition()]
+            head = (tops[n] + dy) if 0 < n < len(tops) and tops[n] is not None else (rect.bottom() if n else rect.top())
+            out.append((rect, lines, head))
+        return out
+
+    def paintEvent(self, e) -> None:  # noqa: N802
+        cards = self._table_cards()
+        if cards:  # the head rows' layer, under the text
+            k = _layers(self.win.c)
+            p = QPainter(self.viewport())
+            p.setRenderHint(QPainter.Antialiasing)
+            for rect, _lines, head in cards:
+                if head > rect.top():
+                    path = QPainterPath()
+                    path.addRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 8, 8)
+                    band = QPainterPath()
+                    band.addRect(QRectF(rect.left(), rect.top(), rect.width(), head - rect.top()))
+                    p.fillPath(path.intersected(band), k["layer2"])
+            p.end()
+        super().paintEvent(e)
+        if cards:  # the card's hairline and the lines between rows, over it
+            k = _layers(self.win.c)
+            p = QPainter(self.viewport())
+            p.setRenderHint(QPainter.Antialiasing)
+            for rect, lines, _head in cards:
+                p.setPen(QPen(k["stroke"], 1))
+                for y in lines:
+                    yy = round(y) - 0.5
+                    p.drawLine(QPointF(rect.left() + 1, yy), QPointF(rect.right() - 1, yy))
+                p.setPen(QPen(k["stroke2"], 1))
+                p.setBrush(Qt.NoBrush)
+                p.drawRoundedRect(QRectF(round(rect.left()) + 0.5, round(rect.top()) + 0.5,
+                                         round(rect.width()) - 1, round(rect.height()) - 1), 8, 8)
+            p.end()
+
     def show_page(self, page: Path, clean: nv.Page, keep_pictures: bool, css: str = "",
-                  font: QFont | None = None) -> None:
+                  font: QFont | None = None, title: str = "") -> None:
         if self.page != page or not keep_pictures:
             self._drop_cache()
         self.page = page
         self.images = list(clean.images)
-        self._new_document(css, font, clean.body)
+        self._new_document(css, font, clean.body, title)
 
     def clear_note(self) -> None:
         self.page = None
@@ -368,6 +829,8 @@ class _Reader(QTextBrowser):
         super().wheelEvent(e)
 
     def loadResource(self, kind: int, url: QUrl):  # noqa: N802
+        if kind == QTextDocument.ImageResource and url.scheme() == BOX_SCHEME:
+            return _check_box(self.win.c, url.path() == "on", self.devicePixelRatioF() or 1.0, NotesWindow.zoom)
         if kind != QTextDocument.ImageResource or self.page is None or self.win.root is None:
             return None
         if url.scheme() != nv.IMAGE_SCHEME or not url.path().isdigit():
@@ -376,7 +839,7 @@ class _Reader(QTextBrowser):
         if n >= len(self.images):
             return None
         dpr = self.devicePixelRatioF() or 1.0
-        room = max(200, self.viewport().width() - 48)
+        room = max(200, self.viewport().width() - DOC_LEFT - DOC_SIDE)
         zoom = NotesWindow.zoom
         geometry = (int(room * dpr), zoom)
         if geometry != self._geometry:  # pictures decoded for another width or zoom aren't shown again
@@ -394,6 +857,8 @@ class _Reader(QTextBrowser):
             return self._cache[key]
         reader = QImageReader(str(f))
         reader.setAutoTransform(True)
+        if bytes(reader.format()).lower() in (b"svg", b"svgz"):
+            return None  # (a drawing that can load other things: only real pictures are shown)
         raw = reader.size()  # as stored (a photo taken upright may be stored sideways)
         disp = raw.transposed() if reader.transformation() & QImageIOHandler.TransformationRotate90 else raw
         if raw.isValid() and disp.width() > 0:
@@ -445,7 +910,211 @@ class _Reader(QTextBrowser):
         return img
 
 
-class NotesWindow(_Dialog):
+class _Pane(SoftCard):
+    """The one raised layer holding the list and the note: corners of 8, the bottom right one 12
+    (it follows the window's own corner), a hairline around it."""
+
+    def card_path(self) -> QPainterPath:
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -1.5)
+        tl = tr = bl = 8.0
+        br = 12.0
+        path = QPainterPath(QPointF(r.left() + tl, r.top()))
+        path.lineTo(r.right() - tr, r.top())
+        path.arcTo(QRectF(r.right() - 2 * tr, r.top(), 2 * tr, 2 * tr), 90, -90)
+        path.lineTo(r.right(), r.bottom() - br)
+        path.arcTo(QRectF(r.right() - 2 * br, r.bottom() - 2 * br, 2 * br, 2 * br), 0, -90)
+        path.lineTo(r.left() + bl, r.bottom())
+        path.arcTo(QRectF(r.left(), r.bottom() - 2 * bl, 2 * bl, 2 * bl), 270, -90)
+        path.lineTo(r.left(), r.top() + tl)
+        path.arcTo(QRectF(r.left(), r.top(), 2 * tl, 2 * tl), 180, -90)
+        path.closeSubpath()
+        return path
+
+
+def _focus_ring(p: QPainter, rect: QRectF, colour: QColor, radius: float = 6) -> None:
+    p.setPen(QPen(colour, 2))
+    p.setBrush(Qt.NoBrush)
+    p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), radius, radius)
+
+
+def _by_keyboard(e) -> bool:
+    return e.reason() in (Qt.TabFocusReason, Qt.BacktabFocusReason, Qt.ShortcutFocusReason)
+
+
+class _QuietButton(QToolButton):
+    """The "more" button over the note: only its icon in the quiet colour, a soft rounded layer
+    under the pointer (painted smoothly; a style sheet's rounded corners are jagged)."""
+
+    def __init__(self, win: "NotesWindow") -> None:
+        super().__init__()
+        self.win = win
+        self.setFixedSize(32, 32)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_Hover)
+        self.setFocusPolicy(Qt.TabFocus)
+        self._keyboard = False
+
+    def focusInEvent(self, e) -> None:  # noqa: N802
+        self._keyboard = _by_keyboard(e)
+        super().focusInEvent(e)
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        k = _layers(self.win.c)
+        hc = contrast_colors()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect())
+        on = self.isDown() or self.underMouse()
+        if on:
+            p.setPen(Qt.NoPen)
+            p.setBrush(hc["high"] if hc else k["layer2"] if self.isDown() else k["hover"])
+            p.drawRoundedRect(r, 6, 6)
+        colour = (hc["high_text"] if on else hc["text"]) if hc else (k["text"] if on else k["text2"])
+        glyph("more", colour.name(), 20).paint(p, self.rect().adjusted(6, 6, -6, -6))
+        if self.hasFocus() and self._keyboard:
+            _focus_ring(p, r, QColor(self.win.c["focus_ring"]))
+        p.end()
+
+
+class _QuietCombo(Combo):
+    """The order of the list, at its foot: quiet text with a small chevron, a soft layer under
+    the pointer; the same list of choices as any Skyfold combo box."""
+
+    def __init__(self, win: "NotesWindow") -> None:
+        super().__init__()
+        self.win = win
+        self.setFixedHeight(28)
+        self.setAttribute(Qt.WA_Hover)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self._keyboard = False
+
+    def _font(self) -> QFont:
+        return _px_font(self.font(), 12)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        fm = QFontMetricsF(self._font())
+        widest = max((fm.horizontalAdvance(self.itemText(i)) for i in range(self.count())), default=60)
+        return QSize(round(widest) + 8 + 6 + 10 + 8, 28)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return self.sizeHint()
+
+    def focusInEvent(self, e) -> None:  # noqa: N802
+        self._keyboard = _by_keyboard(e)
+        super().focusInEvent(e)
+
+    def showPopup(self) -> None:  # noqa: N802
+        super().showPopup()
+        pop = self.view().window()
+        screen = self.screen().availableGeometry() if self.screen() else None
+        if screen is not None and pop.geometry().bottom() > screen.bottom():  # at the foot: open upwards
+            pop.move(pop.x(), self.mapToGlobal(QPoint(0, 0)).y() - pop.height() - 4)
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        k = _layers(self.win.c)
+        hc = contrast_colors()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect())
+        on = self.underMouse() or self.view().isVisible()
+        if on:
+            p.setPen(Qt.NoPen)
+            p.setBrush(hc["high"] if hc else k["hover"])
+            p.drawRoundedRect(r, 6, 6)
+        colour = (hc["high_text"] if on else hc["text"]) if hc else (k["text2"] if on else k["text3"])
+        p.setFont(self._font())
+        p.setPen(colour)
+        text_rect = r.adjusted(8, 0, -24, 0)
+        p.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter,
+                   p.fontMetrics().elidedText(self.currentText(), Qt.ElideRight, int(text_rect.width())))
+        cx, cy = r.right() - 14, r.center().y()
+        pen = QPen(colour, 1.4)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.drawPolyline([QPointF(cx - 3.5, cy - 1.75), QPointF(cx, cy + 1.75), QPointF(cx + 3.5, cy - 1.75)])
+        if self.hasFocus() and self._keyboard:
+            _focus_ring(p, r, QColor(self.win.c["focus_ring"]))
+        p.end()
+
+
+class _StatusLabel(ElidedLabel):
+    """How many notes were found, quiet at the right of the list's foot."""
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setFont(self.font())
+        group = QPalette.Active if self.isEnabled() else QPalette.Disabled
+        p.setPen(self.palette().color(group, QPalette.WindowText))
+        r = self.contentsRect()
+        p.drawText(r, Qt.AlignRight | Qt.AlignVCenter, self.fontMetrics().elidedText(self.text(), self.mode, r.width()))
+
+
+class _ZoomHint(QWidget):
+    """The note's text size, shown for a moment while it changes ("110%"), then it fades away."""
+
+    SHOWN_MS = 1300
+
+    def __init__(self, win: "NotesWindow") -> None:
+        super().__init__()
+        self.win = win
+        self._text = ""
+        self.setFixedHeight(24)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.effect = QGraphicsOpacityEffect(self)
+        self.effect.setOpacity(1.0)
+        self.setGraphicsEffect(self.effect)
+        self.fade = QPropertyAnimation(self.effect, b"opacity", self)
+        self.fade.setDuration(220)
+        self.fade.setEasingCurve(QEasingCurve.OutCubic)
+        self.fade.finished.connect(self._faded)
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self._fade_out)
+        self.hide()
+
+    def text(self) -> str:
+        return self._text
+
+    def _font(self) -> QFont:
+        return _px_font(self.font(), 12, families=MONO)
+
+    def flash(self, text: str) -> None:
+        self._text = text
+        self.setAccessibleName(text)
+        self.setFixedWidth(round(QFontMetricsF(self._font()).horizontalAdvance(text)) + 20)
+        self.fade.stop()
+        self.effect.setOpacity(1.0)
+        self.show()
+        self.update()
+        self.timer.start(self.SHOWN_MS)
+
+    def _fade_out(self) -> None:
+        self.fade.stop()
+        self.fade.setStartValue(self.effect.opacity())
+        self.fade.setEndValue(0.0)
+        self.fade.start()
+
+    def _faded(self) -> None:
+        if self.fade.endValue() == 0.0:
+            self.hide()
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        k = _layers(self.win.c)
+        hc = contrast_colors()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(hc["text"] if hc else k["stroke2"], 1))
+        p.setBrush(hc["window"] if hc else k["layer2"])
+        p.drawRoundedRect(r, 6, 6)
+        p.setFont(self._font())
+        p.setPen(hc["text"] if hc else k["text2"])
+        p.drawText(r, Qt.AlignCenter, self._text)
+        p.end()
+
+
+class NotesWindow(LibraryDialog):
     """source() gives (Notes database, Notes folder), or None when Notes isn't set up or nobody
     is signed in."""
 
@@ -491,27 +1160,25 @@ class NotesWindow(_Dialog):
         self.indexer.batch.connect(self._on_batch)
         self.indexer.done.connect(self._on_index_done)
 
+        # the design's frame: the sidebar on the window's material, the content on one raised layer
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 12, 12, 12)
-        lay.setSpacing(10)
-        top = QHBoxLayout()
+        lay.setContentsMargins(0, 0, 8, 8)
+        lay.setSpacing(0)
         self.search = QLineEdit()
-        self.search.setPlaceholderText(t("Search notes (Ctrl+K)"))
+        self.search.setPlaceholderText(t("Search notes"))
+        self.search.setToolTip(t("Search notes (Ctrl+K)"))
         self.search.setClearButtonEnabled(True)
         self.search.setAccessibleName(t("Search notes"))
-        self.search.setMinimumWidth(160)
+        self.search.setMinimumWidth(120)
         self.search.returnPressed.connect(lambda: self.notes.setFocus())
-        top.addWidget(self.search, 1)
-        self.status = QLabel("")
-        self.status.setObjectName("Hint")
-        self.status.setMaximumWidth(380)
-        self.status.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        self.search_field = SearchField(self.search, palette)
+        self.status = _StatusLabel("", Qt.ElideRight)
+        self.status.setObjectName("NoteStatus")
+        self.status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.status.setMinimumWidth(0)
-        top.addWidget(self.status)
-        lay.addLayout(top)
 
         self.split = QSplitter(Qt.Horizontal)
-        self.split.setHandleWidth(10)
+        self.split.setHandleWidth(4)
         self.folders = _FolderTree()
         self.folders.setHeaderHidden(True)
         self.folders.setIndentation(0)  # the delegate indents; the highlight spans the whole row
@@ -522,55 +1189,70 @@ class NotesWindow(_Dialog):
         self.folders.itemCollapsed.connect(self._on_fold)
         self.folders.setAccessibleName(t("Folders"))
         self.folders.setMinimumWidth(110)
+        sidebar = QWidget()
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(8, 4, 4, 0)  # (with the splitter's 4 px: the design's 8 px either side)
+        side.setSpacing(0)
+        side.addWidget(self.folders, 1)
         self.notes = QListWidget()
         self.notes.setAccessibleName(t("Notes"))
         self.notes.setItemDelegate(_NoteDelegate(self))
         self.notes.setMouseTracking(True)
-        self.notes.setUniformItemSizes(True)
+        self.notes.setUniformItemSizes(False)  # a note without text gets a one-line row
         self.notes.setVerticalScrollMode(QListWidget.ScrollPerPixel)
 
         middle = QWidget()
         middle.setMinimumWidth(190)
         ml = QVBoxLayout(middle)
-        ml.setContentsMargins(0, 0, 0, 0)
-        ml.setSpacing(6)
-        self.sorter = Combo()
+        ml.setContentsMargins(10, 10, 10, 6)
+        ml.setSpacing(10)
+        ml.addWidget(self.search_field)
+        self.sorter = _QuietCombo(self)
         self.sorter.setAccessibleName(t("Sort notes"))
-        self.sorter.setSizeAdjustPolicy(Combo.AdjustToMinimumContentsLengthWithIcon)
-        self.sorter.setMinimumContentsLength(8)
+        self.sorter.setToolTip(t("Sort notes"))
         for key, label in (("new", t("Newest first")), ("old", t("Oldest first")), ("title", t("Title A–Z"))):
             self.sorter.addItem(label, key)
         self.sorter.setCurrentIndex(max(0, self.sorter.findData(NotesWindow.sort)))
         self.sorter.currentIndexChanged.connect(self._on_sort)
-        ml.addWidget(self.sorter)
         ml.addWidget(self.notes, 1)
+        foot = QHBoxLayout()  # quiet: the order of the list, and how many were found
+        foot.setContentsMargins(0, 0, 2, 0)
+        foot.setSpacing(8)
+        foot.addWidget(self.sorter)
+        foot.addWidget(self.status, 1)
+        ml.addLayout(foot)
 
         right = QWidget()
         right.setMinimumWidth(260)
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
-        rl.setSpacing(6)
+        rl.setSpacing(0)
         bar = QHBoxLayout()
-        self.meta = QLabel("")
-        self.meta.setObjectName("Hint")
+        bar.setContentsMargins(DOC_LEFT, 19, 10, 0)  # the meta line 26 px from the top, as the design
+        bar.setSpacing(8)
+        self.meta = ElidedLabel("", Qt.ElideMiddle)
+        self.meta.setTextFormat(Qt.PlainText)
+        self.meta.setObjectName("NoteMeta")
         self.meta.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)  # long folder paths never widen the window
         bar.addWidget(self.meta, 1)
-        self.zoom_out = self._bar_button("\u2212", t("Smaller text (Ctrl \u2212)"), lambda: self.set_zoom(-1))
-        self.zoom_reset = self._bar_button(f"{round(NotesWindow.zoom * 100)}%", t("Back to normal size (Ctrl 0)"),
-                                           lambda: self.set_zoom(0))
-        self.zoom_in = self._bar_button("+", t("Larger text (Ctrl +)"), lambda: self.set_zoom(1))
-        for b in (self.zoom_out, self.zoom_reset, self.zoom_in):
-            bar.addWidget(b)
-        # the rest in one menu, so the window fits small screens
-        self.more = QToolButton()
-        self.more.setText("\u22ef")
+        # the text size: Ctrl + wheel, Ctrl +/−/0 and the menu; a quiet "110%" shows while it changes
+        self.zoom_hint = _ZoomHint(self)
+        bar.addWidget(self.zoom_hint)
+        # the rest in one menu, so the window fits small screens and the note stays clean
+        self.more = _QuietButton(self)
         self.more.setToolTip(t("More"))
         self.more.setAccessibleName(t("More"))
         self.more.setPopupMode(QToolButton.InstantPopup)
-        self.more.setCursor(Qt.PointingHandCursor)
-        self.more.setAutoRaise(True)
         menu = QMenu(self.more)
         self.act_browser = menu.addAction(t("Open in browser"), self._open_in_browser)
+        menu.addSeparator()
+        self.zoom_in = menu.addAction(t("Larger text"), lambda: self.set_zoom(1))
+        self.zoom_out = menu.addAction(t("Smaller text"), lambda: self.set_zoom(-1))
+        self.zoom_reset = menu.addAction("", lambda: self.set_zoom(0))
+        for act, keys in ((self.zoom_in, "Ctrl++"), (self.zoom_out, "Ctrl+-"), (self.zoom_reset, "Ctrl+0")):
+            act.setShortcut(QKeySequence(keys))  # shown in the menu; the keys themselves are handled below
+            act.setShortcutContext(Qt.WidgetShortcut)
+        menu.addSeparator()
         self.act_full = menu.addAction(t("Full screen"), self.toggle_full_screen)
         self.act_full.setShortcut(QKeySequence("F11"))
         self.act_full.setShortcutContext(Qt.WidgetShortcut)  # F11 itself is handled below (once)
@@ -584,7 +1266,7 @@ class NotesWindow(_Dialog):
             self.theme_actions[key] = act
         self.theme_actions[NotesWindow.own_theme].setChecked(True)
         self.more.setMenu(menu)
-        bar.addSpacing(6)
+        self._zoom_labels()
         bar.addWidget(self.more)
         rl.addLayout(bar)
         self.reader = _Reader(self)
@@ -595,24 +1277,44 @@ class NotesWindow(_Dialog):
         self.empty.setObjectName("Muted")
         self.empty.setAlignment(Qt.AlignCenter)
         self.empty.setWordWrap(True)
+        self.empty.setContentsMargins(DOC_LEFT, 0, DOC_SIDE, 0)
         self.empty.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         rl.addWidget(self.empty, 1)
 
-        for w in (self.folders, middle, right):
-            self.split.addWidget(w)
-        self.split.setCollapsible(0, True)  # the folders give way first on a small screen
+        self.split.addWidget(sidebar)
+        pane = _Pane()
+        pane.setObjectName("LibraryPane")
+        content = QHBoxLayout(pane)
+        content.setContentsMargins(1, 1, 1, 2)
+        columns = QSplitter(Qt.Horizontal)
+        columns.setObjectName("NoteColumns")
+        columns.setChildrenCollapsible(False)
+        columns.setHandleWidth(5)  # (a hairline at its left; a little room to grab it)
+        columns.addWidget(middle)
+        columns.addWidget(right)
+        columns.setStretchFactor(0, 0)
+        columns.setStretchFactor(1, 1)
+        columns.setSizes([289, 590])
+        content.addWidget(columns)
+        self.split.addWidget(pane)
+        self.split.setCollapsible(0, True)
         self.split.setCollapsible(1, False)
-        self.split.setCollapsible(2, False)
         self.split.setStretchFactor(0, 0)
-        self.split.setStretchFactor(1, 0)
-        self.split.setStretchFactor(2, 1)
-        self.split.setSizes([200, 300, 620])
+        self.split.setStretchFactor(1, 1)
+        self.split.setSizes([220, 884])
+        QWidget.setTabOrder(self.folders, self.search)
+        QWidget.setTabOrder(self.search, self.notes)
+        QWidget.setTabOrder(self.notes, self.sorter)
         lay.addWidget(self.split, 1)
         self.resize(1120, 720)
 
         self.folders.currentItemChanged.connect(self._on_folder)
         self.notes.currentItemChanged.connect(lambda *_: self._show_current())
         self.notes.itemActivated.connect(lambda *_: self._focus_reader())
+        self.keyboard_used = False  # the focus ring shows once the keyboard is used, not on a click
+        self._watched = (self.notes, self.folders, self.notes.viewport(), self.folders.viewport())
+        for w in self._watched:  # (clicks arrive at the viewports)
+            w.installEventFilter(self)
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(180)
@@ -831,13 +1533,16 @@ class NotesWindow(_Dialog):
             it.setData(ROW_ID, r.id)
             snip = self._snippet(r)
             it.setData(ROW_SNIPPET, snip)
+            it.setData(ROW_COMPACT, self._compact(r, snip))
             when = local_datetime(r.modified) if r.modified else ""
             folder = r.folder.replace("/", " \u203a ")
             text = ", ".join(x for x in (r.title or t("Untitled"), when, folder,
                                           t("Locked note") if r.locked else "") if x)
             it.setData(Qt.AccessibleTextRole, text)
             it.setData(Qt.AccessibleDescriptionRole, snip)
-            it.setToolTip(r.title or t("Untitled"))
+            from .safe_text import plain_tip
+
+            it.setToolTip(plain_tip(text))  # (a shared note's title is anyone's text: never HTML)
             self.notes.addItem(it)
             if r.id == keep:
                 select = it
@@ -855,7 +1560,13 @@ class NotesWindow(_Dialog):
             self.status.setText("")
         self._show_current()
 
+    def _compact(self, r: nv.Row, snip: str) -> bool:
+        """A note read and found to have nothing after its title: one line in the list, not an
+        empty second one (until it is read, a note keeps room for its first line)."""
+        return not snip and not r.locked and r.id in self.texts
+
     def _refresh_snippets(self) -> None:
+        changed = False
         for i in range(self.notes.count()):
             it = self.notes.item(i)
             r = self.row_by_id.get(it.data(ROW_ID))
@@ -863,6 +1574,12 @@ class NotesWindow(_Dialog):
                 snip = self._snippet(r)
                 it.setData(ROW_SNIPPET, snip)
                 it.setData(Qt.AccessibleDescriptionRole, snip)
+                compact = self._compact(r, snip)
+                if bool(it.data(ROW_COMPACT)) != compact:
+                    it.setData(ROW_COMPACT, compact)
+                    changed = True
+        if changed:
+            self.notes.doItemsLayout()  # (rows of another height)
 
     # --- the note -----------------------------------------------------------------------------
     def _show_current(self) -> None:
@@ -886,10 +1603,12 @@ class NotesWindow(_Dialog):
         if not same_note:
             self.shown_pages = {}
         self.current, self.current_key = row.id, key
-        when = local_datetime(row.modified) if row.modified else ""
+        when = _long_when(row.modified) if row.modified else ""
         folder = row.folder.replace("/", " \u203a ")
-        self.meta.setText("  \u00b7  ".join(x for x in (folder, when) if x))
-        self.meta.setToolTip(self.meta.text())
+        self.meta.setText(" \u00b7 ".join(x for x in (folder, when) if x))  # "Home \u00b7 24 November 2026, 07:15"
+        from .safe_text import plain_tip
+
+        self.meta.setToolTip(plain_tip(self.meta.text()))
         self._note_failed = 0.0
         if row.locked:
             self.reader.clear_note()
@@ -919,7 +1638,8 @@ class NotesWindow(_Dialog):
             self._empty(t("This note can't be read right now. Skyfold tries again in a moment."))
             return
         clean = nv.note_html(text, self.shown_pages)
-        clean.body = self._sized(page, clean)
+        clean.body = self._sized(page, clean).replace(
+            '<ul style="list-style-type:none">', '<ul style="list-style-type:none;-qt-list-indent:0">')
         # the same note shown again (zoom, a wider window, more pages): it stays at the same text,
         # not the same number of pixels; a reopened window: back where it was closed
         anchor = self._top_position() if (same_note and self.reader.page == page) else None
@@ -928,10 +1648,11 @@ class NotesWindow(_Dialog):
         self._resume_pos = None
         if self._resume_id == row.id:
             self._resume_id = None
-        font = QFont(QApplication.font())
-        base = font.pointSizeF() if font.pointSizeF() > 0 else 10.0
-        font.setPointSizeF(base * 1.1 * NotesWindow.zoom)
-        self.reader.show_page(page, clean, keep_pictures=same_note, css=self._css(), font=font)
+        font = QFont(QApplication.font())  # the design's body text: 14 px Segoe UI Variable
+        font.setFamilies(["Segoe UI Variable Text", "Segoe UI"])
+        font.setPointSizeF(10.5 * NotesWindow.zoom)
+        self.reader.show_page(page, clean, keep_pictures=same_note, css=self._css(), font=font,
+                              title=row.title or t("Untitled"))
         self._fitted_width = self.reader.viewport().width()
         self._pending_anchor = anchor if (anchor and not self.isVisible()) else None
         self._scroll_to_position(anchor or 0)
@@ -984,7 +1705,7 @@ class NotesWindow(_Dialog):
         asks for a picture only when it is drawn (a scan with dozens of pages opens quickly)."""
         if not clean.images or self.root is None:
             return clean.body
-        room = max(200, self.reader.viewport().width() - 48)
+        room = max(200, self.reader.viewport().width() - DOC_LEFT - DOC_SIDE)
         body = clean.body
         for n, ref in enumerate(clean.images):
             f = nv.resolve_asset(self.root, page, ref)
@@ -992,6 +1713,8 @@ class NotesWindow(_Dialog):
                 continue
             reader = QImageReader(str(f))
             reader.setAutoTransform(True)
+            if bytes(reader.format()).lower() in (b"svg", b"svgz"):
+                continue
             raw = reader.size()
             if not raw.isValid() or raw.width() <= 0 or raw.height() <= 0:
                 continue
@@ -1010,38 +1733,36 @@ class NotesWindow(_Dialog):
         if not self.current:
             self.meta.setText("")
 
+    def _match_format(self) -> QTextCharFormat:
+        fmt = QTextCharFormat()
+        hc = contrast_colors()
+        fmt.setBackground(hc["high"] if hc else _alpha(self.c["warn"], 0.35))  # (the design's mark)
+        fmt.setForeground(hc["high_text"] if hc else QColor(self.c["text"]))
+        if hc:
+            fmt.setFontUnderline(True)
+        return fmt
+
     def _highlight(self, jump: bool) -> None:
         """Mark the searched words in the open note (without changing the note); with jump, scroll
         to the first one. Positions are counted the way Qt counts them (an emoji is two)."""
         self._hl_query = self.search.text()
         terms = self._terms()
         sels = []
-        fmt = QTextCharFormat()
-        fmt.setBackground(QColor(_blend(self.c["bg"], service_color(self.c, "note"), 0.45)))
-        fmt.setForeground(QColor(self.c["text"]))
+        fmt = self._match_format()
         first = None
         doc = self.reader.document()
         block = doc.begin()
         while terms and block.isValid() and len(sels) < MAX_MARKS:
             text = block.text()
-            folded = nv.fold(text)
-            spans = []  # (start, end) in the folded text; positions in the block looked up only for these
-            for w in terms:
-                i = folded.find(w)
-                while i >= 0 and len(spans) + len(sels) < MAX_MARKS:
-                    spans.append((i, i + len(w)))
-                    i = folded.find(w, i + len(w))
-            if spans:
-                pos = nv.fold_positions(text, [x for span in spans for x in span])
-                for k in range(len(spans)):
-                    a, b = block.position() + pos[2 * k], block.position() + pos[2 * k + 1]
-                    cur = QTextCursor(doc)
-                    cur.setPosition(a)
-                    cur.setPosition(b, QTextCursor.KeepAnchor)
-                    sel = QTextEdit.ExtraSelection()
-                    sel.cursor, sel.format = cur, fmt
-                    sels.append(sel)
-                    first = a if first is None else min(first, a)
+            for start, end in _match_ranges(text, terms, MAX_MARKS - len(sels)):
+                a, b = block.position() + start, block.position() + end
+                cur = QTextCursor(doc)
+                cur.setPosition(a)
+                cur.setPosition(b, QTextCursor.KeepAnchor)
+                sel = QTextEdit.ExtraSelection()
+                sel.cursor, sel.format = cur, fmt
+                sels.append(sel)
+                first = a if first is None else min(first, a)
             block = block.next()
         self.reader.setExtraSelections(sels)
         if first is not None and jump:
@@ -1051,17 +1772,33 @@ class NotesWindow(_Dialog):
             self.reader.ensureCursorVisible()
 
     def _css(self) -> str:
-        c = self.c
+        """The note as in the design: body text 14 px in the secondary colour, headings 600 in the
+        text colour, paragraphs 14 px apart; sizes follow the zoom."""
+        c, z = self.c, NotesWindow.zoom
+        k = _layers(c)
+        text2, text3 = _rgba(k["text2"]), _rgba(k["text3"])
+
+        def pt(px: float) -> str:
+            return f"{px * 0.75 * z:.2f}pt"
+
+        def px(n: float) -> str:
+            return f"{round(n * z)}px"
+
         hl = "".join(f".hl{i + 1}{{background-color:{_blend(c['bg'], col, 0.35)}}}"
                      for i, col in enumerate(HIGHLIGHTS))
-        return (f"body{{color:{c['text']}}} a{{color:{c['accent_fg']}}}"
-                f"h1{{font-size:x-large;font-weight:600}} h2{{font-size:large;font-weight:600}}"
-                f"h3{{font-size:medium;font-weight:600}}"
-                f"pre,code{{background-color:{c['group']}}}"
-                f"th{{background-color:{c['group']}}} table{{border-color:{c['border']}}}"
-                f"blockquote{{color:{c['muted']}}} .sf-file{{color:{c['muted']}}}"
-                f".sf-box{{font-family:'Segoe UI Symbol';font-size:large;color:{c['muted']}}}"
-                f".sf-done{{color:{c['accent_fg']}}}" + hl)
+        return (f"body{{color:{text2}}} a{{color:{c['accent_fg']}}}"
+                f"p{{margin-top:0;margin-bottom:{px(14)}}}"
+                f"h1{{font-size:{pt(20)};font-weight:600;color:{c['text']};margin-top:{px(18)};margin-bottom:{px(8)}}}"
+                f"h2{{font-size:{pt(17)};font-weight:600;color:{c['text']};margin-top:{px(16)};margin-bottom:{px(6)}}}"
+                f"h3,h4,h5,h6{{font-size:{pt(14)};font-weight:600;color:{c['text']};"
+                f"margin-top:{px(14)};margin-bottom:{px(4)}}}"
+                f"pre,code{{background-color:{_rgba(k['layer2'])};font-family:'Cascadia Mono','Consolas'}}"
+                f"table{{border:none}}"
+                f"td,th{{font-size:{pt(13)};color:{c['text']};text-align:left}}"
+                f"th{{background-color:{HEAD_MARK};font-weight:600}}"
+                f"blockquote{{color:{text3}}} .sf-file{{color:{text3}}}"
+                f".sf-box{{font-family:'Segoe UI Symbol';font-size:large;color:{text3}}}"
+                f".sf-done{{background-color:{c['btn']};color:{c['accent_text']}}}" + hl)
 
     # --- links --------------------------------------------------------------------------------
     def _on_link(self, url: QUrl) -> None:
@@ -1099,23 +1836,20 @@ class NotesWindow(_Dialog):
         if it is not None:
             self.notes.scrollToItem(it)
 
-    def _bar_button(self, text: str, tip: str, fn) -> QPushButton:
-        b = QPushButton(text)
-        b.setObjectName("Link")
-        b.setCursor(Qt.PointingHandCursor)
-        b.setToolTip(tip)
-        b.setAccessibleName(tip)
-        b.setAutoDefault(False)  # Enter in the search box never presses it
-        b.setDefault(False)
-        b.clicked.connect(fn)
-        return b
+    def _zoom_labels(self) -> None:
+        pct = round(NotesWindow.zoom * 100)
+        self.zoom_reset.setText(t("Normal size (now {n}%)", n=pct))
+        self.zoom_reset.setEnabled(pct != 100)
+        self.zoom_in.setEnabled(NotesWindow.zoom < NotesWindow.ZOOMS[-1])
+        self.zoom_out.setEnabled(NotesWindow.zoom > NotesWindow.ZOOMS[0])
 
     def set_zoom(self, step: int) -> None:
         """Text of the note larger (1), smaller (-1) or back to normal (0)."""
         zooms = NotesWindow.ZOOMS
         now = min(range(len(zooms)), key=lambda i: abs(zooms[i] - NotesWindow.zoom))
         NotesWindow.zoom = 1.0 if step == 0 else zooms[max(0, min(len(zooms) - 1, now + step))]
-        self.zoom_reset.setText(f"{round(NotesWindow.zoom * 100)}%")
+        self._zoom_labels()
+        self.zoom_hint.flash(f"{round(NotesWindow.zoom * 100)}%")
         self.current_key = None  # same note: its pictures are kept, only the text changes size
         self._show_current()
 
@@ -1150,11 +1884,22 @@ class NotesWindow(_Dialog):
 
     def _cycle(self, step: int) -> None:
         order = [w for w in (self.search, self.folders, self.notes, self.reader)
-                 if w.isVisible() and w.isEnabled() and w.width() > 0]
+                 if w.isEnabled() and not w.visibleRegion().isEmpty()]
         now = next((i for i, w in enumerate(order) if w.hasFocus() or w.isAncestorOf(QApplication.focusWidget())),
                    -1)
         if order:
             order[(now + step) % len(order)].setFocus()
+
+    def eventFilter(self, obj, e) -> bool:  # noqa: N802
+        from PySide6.QtCore import QEvent
+
+        if e.type() in (QEvent.KeyPress, QEvent.MouseButtonPress) and obj in getattr(self, "_watched", ()):
+            used = e.type() == QEvent.KeyPress
+            if used != self.keyboard_used:
+                self.keyboard_used = used
+                self.notes.viewport().update()
+                self.folders.viewport().update()
+        return super().eventFilter(obj, e)
 
     def keyPressEvent(self, e) -> None:  # noqa: N802
         if e.key() == Qt.Key_Escape and self.search.text():
@@ -1187,28 +1932,39 @@ class NotesWindow(_Dialog):
 
         self.app_c = palette
         own = NotesWindow.own_theme
-        if own is None:
-            self.setStyleSheet("")
-            self.setPalette(QApplication.palette())
-        else:
+        if own is not None:
             palette = theme.palette(own)
-            self.setStyleSheet(theme.stylesheet(palette))
-            self.setPalette(theme.qpalette(palette))
+        self.c = palette
+        self.setPalette(theme.qpalette(palette) if own else QApplication.palette())
+        k = _layers(palette)
+        self.setStyleSheet((theme.stylesheet(palette) if own else "") + self.frame_style() +
+                           # the design's search field: a lighter layer, a stronger hairline, 13.5 px
+                           f"SoftCard#LibrarySearch {{ qproperty-fill:{_rgba(k['layer2'])};"
+                           f" qproperty-stroke:{_rgba(k['stroke2'])}; }}"
+                           "SoftCard#LibrarySearch QLineEdit { font-size:10.125pt; }"
+                           f"QSplitter#NoteColumns::handle {{ border-left:1px solid {_rgba(k['stroke'])};"
+                           " background:transparent; }"
+                           f"QLabel#NoteMeta {{ font-size:9pt; color:{palette['muted2']}; }}"
+                           f"QLabel#NoteStatus {{ font-size:9pt; color:{palette['muted2']}; }}")
+        pal = self.search.palette()
+        pal.setColor(QPalette.PlaceholderText, QColor(palette["muted2"]))
+        self.search.setPalette(pal)
+        if self.glass and self.isVisible():
+            self._material()
         self._apply(palette)
 
     def _apply(self, palette: dict[str, str]) -> None:
         c = self.c = palette
-        self.notes.setStyleSheet(f"QListWidget{{background:{c['surface']};border:1px solid {c['border']};"
-                                 f"border-radius:8px;padding:4px;outline:0}}"
-                                 f"QListWidget::item{{border:none;background:transparent}}")
-        self.reader.setStyleSheet(f"QTextBrowser{{background:{c['surface']};border:1px solid {c['border']};"
-                                  f"border-radius:8px;padding:12px 18px;selection-background-color:{c['accent']};"
-                                  f"selection-color:{c['accent_text']}}}")
-        self.folders.setStyleSheet(f"QTreeView{{background:{c['surface']};border:1px solid {c['border']};"
-                                   f"border-radius:8px;padding:4px;outline:0;show-decoration-selected:0}}"
-                                   f"QTreeView::item,QTreeView::branch{{border:none;background:transparent}}")
-        self.more.setStyleSheet(f"QToolButton{{border:none;color:{c['accent_fg']};font-size:16px;padding:0 6px}}"
-                                f"QToolButton::menu-indicator{{image:none}}")
+        self.search_field.apply_palette(c)
+        self.notes.setStyleSheet("QListWidget{background:transparent;border:none;outline:0}"
+                                 "QListWidget::item{border:none;background:transparent}")
+        self.reader.setStyleSheet(f"QTextBrowser{{background:transparent;border:none;padding:0;"
+                                  f"selection-background-color:{c['btn']};selection-color:{c['accent_text']}}}")
+        self.folders.setStyleSheet("QTreeView{background:transparent;border:none;padding:0;outline:0;"
+                                   "show-decoration-selected:0} QTreeView::item,QTreeView::branch"
+                                   "{border:none;background:transparent}")
+        for w in (self.more, self.sorter, self.zoom_hint):
+            w.update()
         if not self.closed:
             self._fill_folders()
             self.current_key = None

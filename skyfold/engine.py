@@ -460,9 +460,25 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _safe_name(name: str) -> str:
+# What a photo or video file may be called on this PC. A name from iCloud with any other ending
+# (".hta", ".js", ".lnk"... added by someone in a shared library) gets ".bin" added, so opening it
+# can never run it.
+MEDIA_EXTS = frozenset({
+    ".jpg", ".jpeg", ".heic", ".heif", ".heics", ".hif", ".png", ".gif", ".tif", ".tiff", ".webp", ".bmp",
+    ".avif", ".jxl", ".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2", ".srw", ".pef",
+    ".mov", ".mp4", ".m4v", ".avi", ".3gp", ".mkv", ".aae"})
+_RESERVED = frozenset({"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+                       *(f"LPT{i}" for i in range(1, 10))})
+
+
+def _safe_name(name: str, media: bool = True) -> str:
     name = UNSAFE.sub("_", PurePosixPath(name.replace("\\", "/")).name).strip(" .")
-    return name or "foto"
+    name = name or "foto"
+    if name.split(".")[0].strip().upper() in _RESERVED:
+        name = "_" + name  # "CON.jpg", "NUL": names Windows keeps for devices (a file that isn't one)
+    if media and PurePosixPath(name).suffix.lower() not in MEDIA_EXTS:
+        name += ".bin"
+    return name
 
 
 class Syncer:
@@ -1857,7 +1873,7 @@ class Syncer:
         wanted: dict[str, str] = {}
         source: dict[str, str] = {}
         for album, ids in self.remote.albums():
-            folder = "/".join(_safe_name(part) for part in album.split("/") if part.strip()) or "Album"
+            folder = "/".join(_safe_name(part, media=False) for part in album.split("/") if part.strip()) or "Album"
             for aid in ids:
                 for r in by_asset.get(aid, []):
                     name = PurePosixPath(r.rel_path)

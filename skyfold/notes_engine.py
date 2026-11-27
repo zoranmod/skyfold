@@ -870,7 +870,9 @@ def heic_to_jpeg(src: Path, folder: Path) -> Path | None:
     os.close(fd)
     tmp_path = Path(tmp)
     try:
-        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        ps = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "WindowsPowerShell", "v1.0",
+                          "powershell.exe")  # (by its full path: never a powershell.exe planted elsewhere)
+        r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                             "-Command", _HEIC_SCRIPT],
                            env={**os.environ, "SKYFOLD_HEIC_IN": str(src), "SKYFOLD_HEIC_OUT": str(tmp_path)},
                            capture_output=True, timeout=180, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

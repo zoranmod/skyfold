@@ -410,8 +410,52 @@ BS: dict[str, str] = {
     "Downloads again the photos deleted on this PC while deleting in iCloud was off.":
         "Ponovo preuzima slike koje su obrisane na PC-u dok je brisanje u iCloud-u bilo isključeno.",
     "SYSTEM": "SISTEM",
+    # 1.1 Settings: cards, sentence-case group titles
+    "Windows": "Windows",
+    "Account": "Nalog",
+    "Syncing": "Sinhronizacija",
+    "Checking and speed": "Provjera i brzina",
+    "Deleting": "Brisanje",
+    "Photos folder": "Folder sa slikama",
+    "Photos window": "Prozor Fotografije",
+    "Downloading": "Preuzimanje",
+    "Drive folder": "Folder za Drive",
+    "Good to know": "Dobro je znati",
+    "Notes folder": "Folder za bilješke",
+    "Bookmarks file": "Fajl s oznakama",
+    "Import it in your browser": "Uvezi ga u preglednik",
+    "Where your data is": "Gdje su tvoji podaci",
+    "Help": "Pomoć",
+    "Connection diagnostics": "Dijagnostika veze",
+    "On": "Uključeno",
+    "of {total} used": "od {total} zauzeto",
+    "{free} free": "{free} slobodno",
+    "{free} free on this drive": "{free} slobodno na ovom disku",
+    "iCloud · {size} plan": "iCloud · paket {size}",
+    "Skyfold waits quietly in the system tray.": "Skyfold tiho čeka u system trayu.",
+    "Follows Windows, or always light, dark or OLED.": "Prati Windows, ili je uvijek svijetla, tamna ili OLED.",
+    "Forgets this PC's sign-in to iCloud. Your files stay where they are.":
+        "Ovaj PC zaboravlja prijavu na iCloud. Tvoji fajlovi ostaju gdje jesu.",
+    "Larger deletions wait for your OK.": "Veća brisanja čekaju tvoju potvrdu.",
+    "Otherwise they are sent with the next check.": "Inače se šalju sa sljedećom provjerom.",
     "Start with Windows": "Pokreni sa Windows-om",
     "Show notifications": "Prikazuj obavještenja",
+    "Notifications": "Obavještenja",
+    "Skyfold's own": "Skyfold-ova",
+    "Windows' own": "Windows-ova",
+    "Off": "Isključeno",
+    "Skyfold's own notifications follow the app's theme and stay away while Do Not Disturb is on or a program "
+    "runs full screen.":
+        "Skyfold-ova obavještenja prate temu aplikacije i ne pojavljuju se dok je uključeno Ne ometaj ili dok neki "
+        "program radi preko cijelog ekrana.",
+    "Open": "Otvori",
+    "Show in folder": "Prikaži u folderu",
+    "Notifications, {n} new": "Obavještenja, novih: {n}",
+    "Back": "Nazad",
+    "Clear all": "Očisti sve",
+    "Empty this list. Nothing else changes.": "Isprazni ovu listu. Ništa drugo se ne mijenja.",
+    "No notifications yet. The ones Skyfold shows while it runs are kept here.":
+        "Još nema obavještenja. Ona koja Skyfold prikaže dok radi čuvaju se ovdje.",
     "Language": "Jezik",
     "Save": "Sačuvaj",
     "{app} {version} · settings are kept in the 'data' folder next to the app.":
@@ -679,6 +723,10 @@ BS: dict[str, str] = {
     "Skyfold {version} is available": "Dostupan je Skyfold {version}",
     "You have version {version}.": "Ti imaš verziju {version}.",
     "What's new": 'Šta je novo',
+    # the remaining windows in the 1.1 design (Drive folders, notifications list) ---------------
+    "iCloud Drive folders": "Folderi na iCloud Driveu",
+    "Today": "Danas",
+    "Earlier": "Ranije",
     "No description for this version.": "Nema opisa za ovu verziju.",
     "Skyfold downloads the new version, checks it, closes and starts again. Your settings and synced files stay as they are.": "Skyfold skine novu verziju, provjeri je, zatvori se i ponovo pokrene. Tvoje postavke i sinhronizovani fajlovi ostaju kakvi jesu.",
     "Download the new version from GitHub and replace your Skyfold folder with it (settings are kept).": "Skini novu verziju s GitHuba i njome zamijeni svoj Skyfold folder (postavke ostaju).",
@@ -725,6 +773,9 @@ BS: dict[str, str] = {
     "Smaller text (Ctrl \u2212)": "Manji tekst (Ctrl \u2212)",
     "Back to normal size (Ctrl 0)": "Normalna veličina (Ctrl 0)",
     "Larger text (Ctrl +)": "Veći tekst (Ctrl +)",
+    "Larger text": "Veći tekst",
+    "Smaller text": "Manji tekst",
+    "Normal size (now {n}%)": "Normalna veličina (sada {n}%)",
     "Full screen": "Cijeli ekran",
     "Exit full screen": "Izađi iz cijelog ekrana",
     "Sort notes": "Poredaj bilješke",
@@ -868,6 +919,44 @@ BS: dict[str, str] = {
     '{name} was moved or replaced since it was synced; it was left alone': '{name} je premješten ili zamijenjen nakon sinhronizacije, pa je ostavljen na miru',
     'Hidden in iCloud, kept on this PC: {name}': 'Sakriveno u iCloudu, ostaje na ovom PC-u: {name}',
     "Deleted in iCloud, kept on this PC (it can't go to the Recycle Bin there): {name}": 'Obrisano u iCloudu, ostaje na ovom PC-u (tamo ne može u Koš): {name}',
+    "PHOTOS WINDOW": "PROZOR FOTOGRAFIJE",
+    "Open the Photos window when I click Photos": "Otvori prozor Fotografije kad kliknem na Fotografije",
+    "Off: a click on Photos opens the photos folder in File Explorer instead.": "Isključeno: klik na Fotografije otvara folder sa slikama u File Exploreru.",
+    "Last checked": "Zadnja provjera",
+    "Deletion needs your OK": "Brisanje čeka tvoju potvrdu",
+    "Up to date": "Sve je ažurno",
+    "Everything matches iCloud.": "Sve je usklađeno sa iCloudom.",
+    "Your photos are in step with iCloud.": "Tvoje slike su usklađene sa iCloudom.",
+    "Started": "Počelo",
+    "now": "sada",
+    "This update can't be checked, so it wasn't installed.": "Ovo ažuriranje se ne može provjeriti, pa nije instalirano.",
+    "Delete them on this PC too? They go to the Recycle Bin, where they can be restored.":
+        "Obrisati ih i na ovom PC-u? Idu u Recycle Bin, odakle se mogu vratiti.",
+    "Delete them in iCloud too? They go to Recently Deleted, where they stay for 30 days.":
+        "Obrisati ih i u iCloudu? Idu u Nedavno obrisano, gdje ostaju 30 dana.",
+    "More than your limit ({n}) at once, so Skyfold asks first.":
+        "Više od tvoje granice ({n}) odjednom, pa Skyfold prvo pita.",
+    "More than your limit at once, so Skyfold asks first.": "Više od tvoje granice odjednom, pa Skyfold prvo pita.",
+    "Show the list": "Prikaži listu",
+    "Step {n} of {total}": "Korak {n} od {total}",
+    "Your password is only used to sign in, with Apple's two-factor code. It is never stored.":
+        "Lozinka se koristi samo za prijavu, uz Appleov kod za potvrdu. Nikad se ne čuva.",
+    "Browse…": "Pretraži…",
+    "One folder": "Jedan folder",
+    "Before you start": "Prije nego što počneš",
+    "Choose a folder on a drive with enough space. Skyfold keeps it in step with iCloud.":
+        "Izaberi folder na disku s dovoljno prostora. Skyfold ga drži usklađenim sa iCloudom.",
+    "Skyfold syncs both ways, deletions included.": "Skyfold sinhronizuje u oba smjera, uključujući brisanja.",
+    "Skyfold is free software without any warranty (GNU GPL v3). You use it at your own risk, and its authors are "
+    "not liable for lost or changed files. Keep your own backup of anything important.":
+        "Skyfold je besplatan program bez ikakve garancije (GNU GPL v3). Koristiš ga na vlastitu odgovornost, a "
+        "njegovi autori ne odgovaraju za izgubljene ili izmijenjene fajlove. Čuvaj vlastitu kopiju svega važnog.",
+    "Hide the list": "Sakrij listu",
+    "Needs your OK": "Čeka tvoju potvrdu",
+    "Needs attention": "Treba pažnju",
+    "New version": "Nova verzija",
+    "at {time}": "u {time}",
+    "{names} and {last} are in step with iCloud.": "{names} i {last} su usklađeni sa iCloudom.",
 }
 
 _CATALOGS = {"bs": BS}

@@ -15,6 +15,8 @@ def test_settings_open_without_scrolling(qapp, monkeypatch):  # noqa: F811
         dialog.show()
         qapp.processEvents()
         for i in range(dialog.stack.count()):
+            if dialog.PAGES[i] == "general":
+                continue  # (1.1: the Sync group is back on General, as in the design: that page may scroll)
             page = dialog.stack.widget(i)
             dialog.stack.setCurrentIndex(i)
             qapp.processEvents()
@@ -28,7 +30,7 @@ def test_download_limit_hint_follows_the_download_limit(qapp):  # noqa: F811
 
     dialog = dialogs.SettingsDialog(Settings(), theme.LIGHT)
     try:
-        body = dialog.stack.widget(0).widget()
+        body = dialog.stack.widget(dialog.PAGES.index("general")).widget()  # (1.1: the Sync group on General)
         texts = [w.text() for w in body.findChildren(QLabel)]
         limit = texts.index("Download speed limit")
         hint = next(i for i, x in enumerate(texts) if x.startswith("Keeps some of your connection free"))

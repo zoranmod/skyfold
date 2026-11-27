@@ -89,6 +89,13 @@ def answer(msg: dict) -> dict:
     if cmd != "bookmarks":
         return {"ok": False, "error": "unknown"}
     try:
+        from . import auth
+
+        if auth.signed_out():
+            return {"ok": False, "error": "no-bookmarks"}  # signed out: nobody's bookmarks are handed out
+    except Exception:  # noqa: BLE001 - (only a check; the copy is removed at sign-out too)
+        pass
+    try:
         data = json.loads(cache_file().read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {"ok": False, "error": "no-bookmarks"}  # Skyfold hasn't read them yet (or it's turned off)

@@ -6,7 +6,7 @@ import sys
 
 from PySide6.QtCore import QRect, QRectF, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen
-from PySide6.QtWidgets import QGraphicsDropShadowEffect, QWidget
+from PySide6.QtWidgets import QWidget
 
 from .icons import glyph
 from .theme import theme_kind
@@ -46,13 +46,8 @@ class GlowTile(QWidget):
         self._hover_self = hover_self
         self._level = 0.0
         self._hot = False
-        # The effect stays on with a fixed size; only its colour fades. Changing the blur radius or
-        # switching the effect on and off moves the tile by a device pixel at fractional display
-        # scaling, which looked like a jiggle.
-        self._shadow = QGraphicsDropShadowEffect(self)
-        self._shadow.setOffset(0, 0)
-        self._shadow.setBlurRadius(22)
-        self.setGraphicsEffect(self._shadow)
+        # (no graphics effect: Qt renders an effect's widget into an image at whole pixels, which made
+        # the tile and its icon soft and jagged at 125 % display scaling; hot only deepens the tint)
         self._anim = QVariantAnimation(self)
         self._anim.setDuration(180)
         self._anim.valueChanged.connect(self._set_level)
@@ -91,29 +86,16 @@ class GlowTile(QWidget):
 
     def _set_level(self, level) -> None:
         self._level = float(level)
-        glow = QColor(self.color)
-        glow.setAlpha(int((140 if self._light else 225) * self._level))
-        self._shadow.setColor(glow)
         self.update()
 
     def paintEvent(self, _e) -> None:  # noqa: N802 - Qt naming
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        top, bottom, edge = QColor(self.color), QColor(self.color), QColor(self.color)
-        if self._light:
-            top.setAlphaF(0.17 + 0.05 * self._level)
-            bottom.setAlphaF(0.06 + 0.03 * self._level)
-            edge.setAlphaF(0.28 + 0.2 * self._level)
-        else:
-            top.setAlphaF(0.26 + 0.08 * self._level)
-            bottom.setAlphaF(0.07 + 0.04 * self._level)
-            edge.setAlphaF(0.34 + 0.26 * self._level)
-        grad = QLinearGradient(r.topLeft(), r.bottomRight())
-        grad.setColorAt(0, top)
-        grad.setColorAt(1, bottom)
-        p.setBrush(grad)
-        p.setPen(QPen(edge, 1))
+        fill = QColor(self.color)  # a flat tint of the service colour, no outline (1.1 design)
+        fill.setAlphaF((0.13 if self._light else 0.17) + 0.07 * self._level)
+        p.setBrush(fill)
+        p.setPen(Qt.NoPen)
         p.drawRoundedRect(r, self.radius, self.radius)
         x = (self.width() - self.icon_size) // 2
         y = (self.height() - self.icon_size) // 2

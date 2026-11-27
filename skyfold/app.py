@@ -23,6 +23,8 @@ from .ui.dialogs import (FindMyDialog, FolderSetupDialog, LoginDialog, PendingDi
                          make_popup_round)
 from .ui.flyout import STATE_TITLES, Flyout
 from .ui.icons import app_icon, tray_icon
+from .ui.notices import Notice, NoticeLog
+from .ui.toast import Toasts
 from .worker import SyncWorker
 
 log = logging.getLogger("skyfold")
@@ -298,6 +300,9 @@ class Controller(QObject):
         self.tray.messageClicked.connect(self._on_message_clicked)
         self._build_menu()
         self.tray.show()
+        self.toasts = Toasts(self.c, anchor=self.tray.geometry)  # Skyfold's own notification cards
+        self.notices = NoticeLog()  # this session's notifications: the panel's bell lists them again
+        self.flyout.attach_notices(self.notices, self._notice_action)
 
         self.anim = QTimer()
         self.anim.setInterval(120)
@@ -356,30 +361,36 @@ class Controller(QObject):
 
     # plumbing ---------------------------------------------------------------
     def _build_menu(self) -> None:
-        m = QMenu()
-        make_popup_round(m)  # rounded like the rest of the app
-        self.m_status = QAction(t("Everything is in sync"))
+        from .ui.menus import Menu
+
+        # the 1.1 design: rounded, 32 px items with 16 px line icons, hairline separators; it takes a
+        # new theme by itself (refresh_palette reaches it: it is a window of its own)
+        m = Menu(self.c)
+        self.m_status = QAction(t("Everything is in sync"), m)
         self.m_status.setEnabled(False)
         m.addAction(self.m_status)
+        m.set_glyph(self.m_status, "cloud")
         m.addSeparator()
-        m.addAction(t("Show"), lambda: self.flyout.show_at(self.tray.geometry()))
-        m.addAction(t("Sync now"), lambda: self.req.syncNow.emit(True))
-        m.addAction(t("Full library check"), lambda: self.req.fullCheck.emit())
-        self.m_pause = m.addAction(t("Pause"), self.toggle_pause)
-        m.addAction(t("Photos"), self.open_photos)
-        m.addAction(t("Notes"), self.open_notes)
-        m.addAction(t("Find My devices…"), self.open_find_my)
+        m.add("window", t("Show"), lambda: self.flyout.show_at(self.tray.geometry()))
+        m.add("sync", t("Sync now"), lambda: self.req.syncNow.emit(True))
+        m.add("search", t("Full library check"), lambda: self.req.fullCheck.emit())
+        self.m_pause = m.add("pause", t("Pause"), self.toggle_pause)
+        m.add("photo", t("Photos"), self.open_photos_or_folder)
+        m.add("note", t("Notes"), self.open_notes)
+        m.add("pin", t("Find My devices…"), self.open_find_my)
         m.addSeparator()
-        m.addAction(t("Settings…"), self.open_settings)
-        m.addAction(t("Open log"), self.open_log)
+        m.add("gear", t("Settings…"), self.open_settings)
+        m.add("file", t("Open log"), self.open_log)
         m.addSeparator()
-        m.addAction(t("Quit"), self.quit)
+        m.add("power", t("Quit"), self.quit)
         self.menu = m
         self.tray.setContextMenu(m)
         self._sync_pause_label()
 
     def _sync_pause_label(self) -> None:
         self.m_pause.setText(t("Resume syncing") if self.settings.paused else t("Pause"))
+        if hasattr(self.menu, "set_glyph"):
+            self.menu.set_glyph(self.m_pause, "play" if self.settings.paused else "pause")
 
     # events -------------------------------------------------------------------
     def _on_tray(self, reason) -> None:
@@ -416,6 +427,7 @@ class Controller(QObject):
         self.app.setStyleSheet(theme.stylesheet(self.c))
         self.app.setPalette(theme.qpalette(self.c))
         self.flyout.apply_palette(self.c)
+        self.toasts.apply_palette(self.c)
         from .ui.dialogs import refresh_palette
 
         refresh_palette(self.c, skip=(self.flyout,))  # open Settings, Find My, … too
@@ -438,8 +450,51 @@ class Controller(QObject):
     def _notify(self, title: str, text: str) -> None:
         important = title in (t("Sign-in required"), t("Confirmation needed"))
         if self.settings.notifications or important:
-            self._last_msg = None
-            self.tray.showMessage(title, text, app_icon(), 6000)
+            self._show_notice(title, text, **self._notice_look(title))
+
+    def _notice_look(self, title: str) -> dict:
+        """The tile, colour and buttons (keys of _notice_action) of one of the worker's notifications."""
+        if title in (t("Photos synced"), t("Your photos are on this PC")):
+            return {"icon": "photo", "actions": ("open_photos", "folder_photos")}
+        if title in (t("iCloud Drive synced"), t("iCloud Drive is ready")):
+            return {"icon": "folder", "actions": ("folder_drive",)}
+        if title == t("Sign-in required"):
+            return {"icon": "error", "tone": "err", "actions": ("sign_in",)}
+        if title == t("Confirmation needed"):
+            return {"icon": "trash", "tone": "warn", "actions": ("review",)}
+        return {}
+
+    def _notice_action(self, key: str):
+        """A notification button: (label, what it does, whether it still applies now), or None."""
+        return {
+            "open_photos": (t("Open"), lambda: self._on_service("photos"), True),
+            "folder_photos": (t("Show in folder"), lambda: self.open_folder("photos"), True),
+            "folder_drive": (t("Show in folder"), lambda: self.open_folder("drive"), self.settings.drive_enabled),
+            "sign_in": (t("Sign in"), self.open_login, self.state == "auth"),
+            "review": (t("Review"), self.open_pending, bool(self._pending)),
+            "update": (t("What's new"), self.open_update, self._release is not None),
+        }.get(key)
+
+    def _show_notice(self, title: str, text: str, *, icon: str = "cloud", tone: str | None = None,
+                     actions: tuple[str, ...] = (), on_click=None, timeout: int = 6000,
+                     about: str | None = None) -> None:
+        """A notification in the style chosen in Settings: Skyfold's own card, or Windows' own. Either
+        way it is kept for the panel's bell (also when Windows asked for quiet and no card appeared).
+        actions: keys of _notice_action. about: what a click on Windows' notification opens
+        ("update"; None: what needs attention)."""
+        self._last_msg = about
+        self.notices.add(Notice(title, text, icon, tone, tuple(actions)))
+        if self.settings.notification_style == "windows":
+            self.tray.showMessage(title, text, app_icon(), timeout)
+            return
+        buttons = [(found[0], found[1]) for found in map(self._notice_action, actions) if found]
+        images: list[str] = []
+        if icon == "photo":  # the newest photos in the panel's activity, small, on the card
+            from .ui.panel_parts import Thumbs
+
+            images = [r.target for r in self.flyout._activity_rows() if r.target and Thumbs.wanted(r.target)][:3]
+        self.toasts.show(title, text, icon=icon, tone=tone, actions=buttons,
+                         on_click=on_click or self._on_message_clicked, timeout=timeout, images=images)
 
     # updates ------------------------------------------------------------------
     def check_updates(self, manual: bool = False) -> None:
@@ -464,10 +519,10 @@ class Controller(QObject):
             elif self.settings.update_told != rel.version:  # told once per version
                 self.settings.update_told = rel.version
                 self.settings.save()
-                self._last_msg = "update"
-                self.tray.showMessage(t("Update available"),
-                                      t("Skyfold {version} is available. Click to see what's new.", version=rel.version),
-                                      app_icon(), 8000)
+                self._show_notice(t("Update available"),
+                                  t("Skyfold {version} is available. Click to see what's new.", version=rel.version),
+                                  icon="download", actions=("update",),
+                                  on_click=self.open_update, timeout=8000, about="update")
 
         def fail(msg: str) -> None:
             log.info("Update check failed: %s", msg)
@@ -507,10 +562,10 @@ class Controller(QObject):
     def _on_service(self, which: str) -> None:
         """Click on a service row: open its folder, or Settings when the service is off."""
         if which == "drive" and not self.settings.drive_enabled:
-            self.open_settings(page=2)
+            self.open_settings(page="drive")
         elif which == "notes":
             self.open_notes()
-        elif which == "photos" and self.settings.apple_id and not auth.signed_out():
+        elif which == "photos" and self.settings.photos_window and self.settings.apple_id and not auth.signed_out():
             self.open_photos()
         else:
             self.open_folder(which)
@@ -531,7 +586,7 @@ class Controller(QObject):
         from shiboken6 import isValid
 
         if not self.settings.notes_enabled:
-            self.open_settings(page=3)
+            self.open_settings(page="notes")
             return
         if auth.signed_out():
             self.open_login()  # the notes of whoever signed out aren't shown until someone signs in
@@ -557,6 +612,13 @@ class Controller(QObject):
         if auth.signed_out() or not self.settings.apple_id:
             return None
         return self.worker.state, Path(self.settings.photos_dir)
+
+    def open_photos_or_folder(self) -> None:
+        """The tray menu's Photos: the Photos window, or the photos folder if it was switched off."""
+        if self.settings.photos_window:
+            self.open_photos()
+        else:
+            self.open_folder("photos")
 
     def open_photos(self) -> None:
         """The Photos window: the synced photos as on an iPad."""
@@ -717,10 +779,10 @@ class Controller(QObject):
         dlg._bring_forward()
         log.info("Sign-in window opened")
 
-    def open_settings(self, page: int = 0) -> None:
+    def open_settings(self, page: int | str = 0) -> None:
         dlg = SettingsDialog(self.settings, self.c, storage=getattr(self.worker, "_storage", None),
                              get_api=lambda: self.worker.api)
-        dlg.nav.setCurrentRow(page)
+        dlg.show_page(page)
         dlg.checkUpdates.connect(lambda: self.check_updates(True))
         opened_for = (self.settings.apple_id or "").lower()
 
@@ -790,6 +852,16 @@ class Controller(QObject):
         from . import netdiag
 
         netdiag.stop()  # connection diagnostics end with the account
+        from . import avatar
+
+        avatar.forget_all()  # the account picture leaves with the account
+        netdiag.delete()  # and the connection diagnostics file
+        try:  # and the copy of the Safari bookmarks the browser extension reads
+            from . import native_host
+
+            native_host.cache_file().unlink(missing_ok=True)
+        except OSError as exc:
+            log.info("Bookmarks copy not removed: %s", exc.__class__.__name__)
         self._login_api = None
         self.worker.cancel()  # stop the running pass now; the rest happens on the worker thread
         # Right now, not queued: a sign-in made while the worker is still busy must never be undone by it.
@@ -820,7 +892,9 @@ class Controller(QObject):
         if not self._pending:
             return
         shown = self._pending
-        dlg = PendingDialog(shown, self.c)
+        s = getattr(self, "settings", None)  # (the photos, small, from the photos folder; the limit asked about)
+        extra = {} if s is None else {"root": Path(s.photos_dir), "limit": s.delete_threshold}
+        dlg = PendingDialog(shown, self.c, **extra)
 
         def decided(d: str, ids: list) -> None:
             # which part of the question shown was answered: an answer only counts for that side
@@ -838,6 +912,9 @@ class Controller(QObject):
         stop_tasks()  # background requests still waiting for a free thread (Find My…) never start
         self.worker.cancel()
         self.worker._stop_watchers()
+        toasts = getattr(self, "toasts", None)  # (none yet when quitting during start-up)
+        if toasts is not None:
+            toasts.close_all()
         self.tray.hide()
         self.thread.quit()
         self.thread.wait(3000)
@@ -901,6 +978,19 @@ class Controller(QObject):
             QTimer.singleShot(400, self.open_login)
         elif show:
             QTimer.singleShot(300, lambda: self.flyout.show_at(self.tray.geometry()))
+        QTimer.singleShot(8000, self._warm_up)
+
+    def _warm_up(self) -> None:
+        """Build the Settings window once, unseen, a few seconds after start: Qt's first build of its
+        cards, icons and fonts made the first click on the gear noticeably slow."""
+        if self._dialogs.get("settings") is not None:
+            return
+        try:
+            dlg = SettingsDialog(self.settings, self.c, storage=getattr(self.worker, "_storage", None))
+            dlg.ensurePolished()
+            dlg.deleteLater()
+        except Exception:  # noqa: BLE001 - only a head start
+            log.info("Settings warm-up skipped", exc_info=True)
 
 
 def main() -> int:
@@ -920,17 +1010,21 @@ def main() -> int:
     app.setQuitOnLastWindowClosed(False)
     app.setStyle("Fusion")
 
-    # single instance: a second launch just pops the running one open
-    sock = QLocalSocket()
+    # single instance: a second launch just pops the running one open. The mutex (in this Windows
+    # session's own namespace) decides whether Skyfold runs; the pipe only carries "show". (Asking
+    # the pipe first let another user on this PC, who can create a pipe of that name, keep Skyfold
+    # from starting at all.)
     instance = _instance_name()
-    sock.connectToServer(instance)
-    if sock.waitForConnected(300):
-        sock.write(b"quit" if "--quit" in sys.argv else b"show")
-        sock.flush()
-        sock.waitForBytesWritten(300)
+
+    def _tell_running() -> int:
+        sock = QLocalSocket()
+        sock.connectToServer(instance)
+        if sock.waitForConnected(300):
+            sock.write(b"quit" if "--quit" in sys.argv else b"show")
+            sock.flush()
+            sock.waitForBytesWritten(300)
         return 0
-    if "--quit" in sys.argv:
-        return 0  # nothing running
+
     global _MUTEX
     if "--after" in sys.argv:  # started by a restart: the old copy must have ended first
         try:
@@ -940,9 +1034,19 @@ def main() -> int:
             pass
     _MUTEX = _single_instance_mutex(instance)
     if _MUTEX is False:
-        return 0  # another Skyfold of this user is just starting: it will show itself
+        return _tell_running()  # Skyfold already runs for this user: show it (or quit it)
+    if _MUTEX is None:  # (no mutex on this system: the pipe alone tells)
+        probe = QLocalSocket()
+        probe.connectToServer(instance)
+        if probe.waitForConnected(300):
+            probe.abort()
+            return _tell_running()
+    if "--quit" in sys.argv:
+        return 0  # nothing running
     QLocalServer.removeServer(instance)
     server = QLocalServer()
+    if hasattr(server, "setSocketOptions"):
+        server.setSocketOptions(QLocalServer.UserAccessOption)  # only this Windows user may talk to it
     listen_error = "" if server.listen(instance) else server.errorString()
 
     setup_logging()

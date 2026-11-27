@@ -3,7 +3,7 @@
 OLED = {
     "bg": "#000000", "surface": "#1C1C1E", "surface2": "#2C2C2E", "hover": "#3A3A3C",
     "group": "#1C1C1E", "tile": "#2C2C2E", "border": "#38383A", "border_strong": "#828288",
-    "text": "#FFFFFF", "muted": "#C0C0C6", "disabled": "#A6A6AC",
+    "text": "#FFFFFF", "muted": "#C0C0C6", "muted2": "#A6A6AC", "disabled": "#A6A6AC",
     "accent": "#0A84FF", "accent_hover": "#409CFF", "accent_pressed": "#087EFA",
     "btn": "#0A84FF", "btn_hover": "#409CFF", "btn_pressed": "#087EFA",
     "focus": "#64B5FF", "focus_ring": "#64B5FF",

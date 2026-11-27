@@ -9,7 +9,7 @@ import time
 import logging
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -27,6 +27,8 @@ from ..config import APP_NAME
 from ..i18n import t
 from ..worker import fmt_time
 from .icons import STATE_COLORS, glyph
+from .panel_parts import (CenteredButton, LogoTile, RowScroll, SoftCard, StateBadge, Thumbs, TintTile, TwoLineLabel,
+                          rounded, tint)
 from .glow import GlowTile, animations_on
 from .theme import OLED, service_color, state_color
 
@@ -146,6 +148,50 @@ def round_corners(widget: QWidget) -> None:
 BADGE = 32  # header badges (status, iCloud storage): small round buttons beside the gear
 
 
+def _short_time(ts: str) -> str:
+    """When an activity happened, short: now, 09:36 (today), Sat (this week), 18 Nov (earlier)."""
+    from datetime import datetime
+
+    from PySide6.QtCore import QDate, QLocale, QTime
+
+    from ..i18n import language
+
+    try:
+        dt = datetime.fromisoformat(ts).astimezone()
+    except (TypeError, ValueError):
+        return fmt_time(ts)
+    now = datetime.now().astimezone()
+    secs = (now - dt).total_seconds()
+    if secs < 60:
+        return t("now")
+    loc = QLocale(QLocale.Bosnian, QLocale.BosniaAndHerzegowina) if language() == "bs" else QLocale(
+        QLocale.English, QLocale.UnitedKingdom)
+    if dt.date() == now.date():
+        return loc.toString(QTime(dt.hour, dt.minute), "HH:mm")
+    day = QDate(dt.year, dt.month, dt.day)
+    if (now.date() - dt.date()).days < 7:
+        return loc.toString(day, "ddd")
+    return loc.toString(day, "d MMM" if dt.year == now.year else "d MMM yyyy")
+
+
+def _status_dot(color: str, dpr: float) -> QPixmap:
+    """A 7 px dot in the state's colour inside a soft halo of the same colour (13 px in all)."""
+    pm = QPixmap(round(13 * dpr), round(13 * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    halo = QColor(color)
+    halo.setAlphaF(0.22)
+    p.setBrush(halo)
+    p.drawEllipse(QRectF(1.5, 1.5, 10, 10))
+    p.setBrush(QColor(color))
+    p.drawEllipse(QRectF(3, 3, 7, 7))
+    p.end()
+    return pm
+
+
 class StatusDot(QWidget):
     """Filled circle in the state's colour with a white glyph: the whole sync status at a glance.
     Hover for the full text."""
@@ -209,9 +255,10 @@ class StorageBar(QFrame):
     """iCloud storage: "88 of 200 GB", one thin bar split into Photos / Drive / Other, and a legend.
     Click (or Enter) for the details line. The only place in the panel that uses category colours."""
 
-    def __init__(self, palette: dict[str, str]) -> None:
+    def __init__(self, palette: dict[str, str], large: bool = False) -> None:
         super().__init__()
         self.c = palette
+        self.large = large  # (Settings) "74 GB of 200 GB used" as a heading, the free space on the right
         self.parts: list[tuple[str, int, str]] = []  # (label, bytes, colour key)
         self.used = self.total = 0
         self.setObjectName("Storage")  # its focus frame is in the style sheet (room for it kept)
@@ -224,7 +271,7 @@ class StorageBar(QFrame):
         self.title = QLabel(t("iCloud storage"))
         self.title.setObjectName("Hint")
         self.amount = QLabel("")
-        self.amount.setObjectName("Hint")
+        self.amount.setObjectName("Amount")
         head.addWidget(self.title)
         head.addStretch(1)
         head.addWidget(self.amount)
@@ -242,6 +289,15 @@ class StorageBar(QFrame):
         self.details.setWordWrap(True)
         lay.addWidget(self.details)
         self.details.hide()
+        if large:
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(10)
+            self.title.setObjectName("StorageHead")
+            self.title.setTextFormat(Qt.RichText)
+            self.amount.setObjectName("SetSub")
+            self.bar.setFixedHeight(8)
+            self.setFocusPolicy(Qt.NoFocus)  # (nothing to open: everything is shown)
+            self.setCursor(Qt.ArrowCursor)
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette
@@ -259,13 +315,21 @@ class StorageBar(QFrame):
     def _render(self) -> None:
         size = storage_text
 
-        self.amount.setText(t("{used} of {total}", used=size(self.used), total=size(self.total)))
+        heard = t("{used} of {total}", used=size(self.used), total=size(self.total))
+        used, total = size(self.used), size(self.total)
+        if used.rpartition(" ")[2] == total.rpartition(" ")[2]:  # "74 / 200 GB": the unit once
+            used = used.rpartition(" ")[0]
+        self.amount.setText(f"{used} / {total}")
+        if self.large:
+            self.title.setText(f'<span style="font-size:15pt;font-weight:600">{size(self.used)}</span>&nbsp; '
+                               + t("of {total} used", total=size(self.total)))
+            self.amount.setText(t("{free} free", free=size(max(0, self.total - self.used))))
         self.legend.setText("&nbsp;&nbsp;&nbsp;&nbsp;".join(
-            f'<span style="color:{self.c[key]}">&#9679;</span>&nbsp;{label}&nbsp;<b>{size(n)}</b>'
+            f'<span style="color:{self.c[key]};font-size:10pt">&#9679;</span>&nbsp;{label}&nbsp;<b>{size(n)}</b>'
             for label, n, key in self.parts if n))
         pct = round(100 * self.used / self.total) if self.total else 0
         self.details.setText(t("{pct}% used · {free} available", pct=pct, free=size(max(0, self.total - self.used))))
-        text = t("iCloud storage") + ": " + self.amount.text() + ". " + ", ".join(
+        text = t("iCloud storage") + ": " + heard + ". " + ", ".join(
             f"{label} {size(n)}" for label, n, _ in self.parts if n)
         self.setAccessibleName(text)
         self.setToolTip(self.details.text())
@@ -282,15 +346,20 @@ class StorageBar(QFrame):
         p.setClipPath(clip)
         p.fillRect(QRectF(0, 0, w, h), QColor(self.c["track"]))
         x = 0.0
+        p.setClipping(False)
         for _label, n, key in self.parts:
             if not n or not self.total:
                 continue
-            seg = max(2.0, w * n / self.total)
-            p.fillRect(QRectF(x, 0, seg - 1, h), QColor(self.c[key]))  # 1 px gap in the surface colour
+            seg = max(h, w * n / self.total)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(self.c[key]))
+            p.drawRoundedRect(QRectF(x, 0, max(h, seg - 2), h), h / 2, h / 2)  # each part rounded, 2 px apart
             x += seg
         p.end()
 
     def _toggle(self) -> None:
+        if self.large:
+            return
         self.details.setVisible(not self.details.isVisible())
         top = self.window()
         if hasattr(top, "_size_list"):
@@ -320,11 +389,12 @@ class ServiceRow(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)  # Tab reaches it; Enter or Space opens it, like a button
         self.glyph_name = glyph_name
-        self.setMinimumHeight(52)
+        self.setMinimumHeight(58)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(11, 8, 9, 8)
-        lay.setSpacing(11)
-        self.icon = GlowTile(glyph_name, palette, service_color(palette, glyph_name) or palette["muted"])
+        lay.setContentsMargins(12, 9, 12, 9)
+        lay.setSpacing(12)
+        self.icon = GlowTile(glyph_name, palette, service_color(palette, glyph_name) or palette["muted"],
+                             size=32, icon=17, radius=9)
         col = QVBoxLayout()
         col.setSpacing(2)
         self.name = QLabel(name)
@@ -347,7 +417,7 @@ class ServiceRow(QFrame):
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.c = palette
         self.icon.set_palette(palette, service_color(palette, self.glyph_name) or palette["muted"])
-        self.chevron.setPixmap(glyph("chevron", palette["muted"], 14).pixmap(QSize(14, 14)))
+        self.chevron.setPixmap(glyph("chevron", palette.get("muted2", palette["muted"]), 14).pixmap(QSize(14, 14)))
 
     def set(self, detail: str, state: str | None, checked: str = "") -> None:
         """detail: the one quiet line; checked: when it was last checked (tooltip and screen readers)."""
@@ -386,6 +456,19 @@ class ServiceRow(QFrame):
         super().keyPressEvent(e)
 
 
+def _our_note_page(p) -> bool:
+    """A page Skyfold wrote for a note (in the Notes folder), not any .html file that came from
+    iCloud Drive: only those open in the browser; anything else is shown in File Explorer."""
+    try:
+        from ..config import Settings
+        from ..notes_engine import _is_our_page
+
+        notes = Settings.load().notes_dir
+        return bool(notes) and p.resolve().is_relative_to(type(p)(notes).resolve()) and _is_our_page(p)
+    except Exception:  # noqa: BLE001 - when in doubt, Explorer
+        return False
+
+
 def reveal(target: str) -> None:
     """Show what an activity entry is about: a note page opens in the browser, a file is selected
     in Explorer, a folder opens. If the file is gone, its folder opens instead."""
@@ -396,7 +479,7 @@ def reveal(target: str) -> None:
     from PySide6.QtGui import QDesktopServices
 
     p = Path(target)
-    if p.is_file() and p.suffix.lower() == ".html":
+    if p.is_file() and p.suffix.lower() == ".html" and _our_note_page(p):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
     elif p.is_file():
         subprocess.Popen([os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "explorer.exe"), "/select,", str(p)])
@@ -424,11 +507,11 @@ class ActivityRow(QFrame):
             self.setCursor(Qt.PointingHandCursor)
             self.setToolTip(target or t("Click for details"))
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(2, 5, 2, 5)
-        lay.setSpacing(9)
-        self.tile = QFrame()
+        lay.setContentsMargins(4, 5, 4, 5)
+        lay.setSpacing(12)
+        self.tile = TintTile(32, 9)  # drawn smoothly (a style sheet's rounded corners are jagged)
         self.tile.setObjectName("FileTile")
-        self.tile.setFixedSize(16, 16)
+        self.thumbed = False
         tl = QVBoxLayout(self.tile)
         tl.setContentsMargins(0, 0, 0, 0)
         self.icon = QLabel()
@@ -446,7 +529,10 @@ class ActivityRow(QFrame):
         self.detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.detail.setVisible(bool(self.detail_text))
         self.when = QLabel(fmt_time(ts))
-        self.when.setObjectName("Hint")
+        self.when.setObjectName("ActWhen")
+        from .safe_text import plain
+
+        plain(self.text, self.detail, self.when)  # (file and note names come from iCloud: never HTML)
         col = QVBoxLayout()
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(0)
@@ -460,6 +546,11 @@ class ActivityRow(QFrame):
         self._set_title()
         self.apply_palette(palette)
         self.refresh()
+        # every row the same height, with or without its second line: the list is a whole number
+        # of rows tall and the wheel moves one row at a time
+        self.text.ensurePolished()
+        self.detail.ensurePolished()
+        self.setFixedHeight(max(42, self.text.fontMetrics().height() + self.detail.fontMetrics().height() + 10))
 
     def _set_title(self) -> None:
         from PySide6.QtGui import QFontMetrics
@@ -473,18 +564,51 @@ class ActivityRow(QFrame):
         tip = [title] + ([self.detail_text] if self.detail_text else []) + ([self.target] if self.target else [])
         if self.kind == "error" and not self.target:
             tip.append(t("Click for details"))
-        self.setToolTip(chr(10).join(tip))
+        from .safe_text import plain_tip
+
+        self.setToolTip(plain_tip(chr(10).join(tip)))
 
     def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
+        if self.thumbed:
+            return  # the photo itself is shown
         if self.kind == "error":
             name, color = "error", palette["err_text"]
         else:
             name = ACTIVITY_GLYPH.get(self.kind) or file_glyph(self.title_text if self.detail_text else "", self.kind)
-            color = palette["accent_fg"] if self.kind in ("download", "upload") else palette["muted"]
-        self.icon.setPixmap(glyph(name, color, 14).pixmap(QSize(14, 14)))
+            color = self._service_colour(palette)
+            if color == service_color(palette, "note") and self.kind not in ("trash", "error"):
+                name = "note"  # a note changed: the note glyph, not an arrow
+        alpha = 34 if QColor(palette["bg"]).lightness() > 128 else 44
+        self.tile.set_fill(tint(color, alpha))
+        self.icon.setPixmap(glyph(name, color, 17).pixmap(QSize(17, 17)))
+
+    def _service_colour(self, palette: dict[str, str]) -> str:
+        """The colour of the service this entry is about (Photos pink, Drive blue, Notes amber...)."""
+        where = f"{self.detail_text} {self.target}".lower()
+        if "icloud drive" in where or self.message.lower().startswith("drive:"):
+            key = "folder"
+        elif "note" in where or "bilje" in where:
+            key = "note"
+        elif "bookmark" in where or "oznak" in where:
+            key = "bookmark"
+        elif Thumbs.wanted(self.target) or "photo" in where or "fotograf" in where:
+            key = "photo"
+        else:
+            return palette["muted"]
+        return service_color(palette, key) or palette["muted"]
+
+    def set_thumb(self, img: QImage) -> None:
+        """The photo this entry is about, in place of the icon."""
+        if img.isNull():
+            return
+        self.thumbed = True
+        self.tile.set_fill(None)
+        self.icon.setPixmap(rounded(img, 32, 8, max(1.0, self.devicePixelRatioF())))
 
     def refresh(self) -> None:
-        self.when.setText(fmt_time(self.ts))
+        self.when.setText(_short_time(self.ts))
+        self.when.setToolTip(fmt_time(self.ts))
         self.setAccessibleName(", ".join(x for x in (self.title_text, self.detail_text, self.when.text()) if x))
 
     def _activate(self) -> None:
@@ -524,6 +648,7 @@ class Banner(QFrame):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(12, 10, 10, 10)
         self.text = QLabel()
+        self.text.setTextFormat(Qt.PlainText)
         self.text.setWordWrap(True)
         self.btn = QPushButton(button)
         self.btn.setCursor(Qt.PointingHandCursor)
@@ -559,6 +684,11 @@ class Flyout(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFixedWidth(self.WIDTH)
         self.setFocusPolicy(Qt.StrongFocus)
+        from .backdrop import glass_supported
+
+        self.glass = glass_supported()  # Windows 11 with transparency effects: the desktop shows through
+        if self.glass:
+            self.setAttribute(Qt.WA_TranslucentBackground)
         self.state = "idle"
         self.paused = False
 
@@ -577,19 +707,18 @@ class Flyout(QWidget):
         self._scroll.setWidget(body)
         outer.addWidget(self._scroll, 1)
         root = QVBoxLayout(body)
-        root.setContentsMargins(16, 16, 16, 8)
-        root.setSpacing(11)
+        root.setContentsMargins(12, 12, 12, 8)
+        root.setSpacing(8)
 
         # header
         head = QHBoxLayout()
         # the brand mark: the cloud in the accent colour on its tint, glowing under the pointer
-        logo = GlowTile("cloud", palette, palette["accent_fg"], size=34, icon=20, radius=11, hover_self=True)
-        logo.setObjectName("Brand")
+        logo = LogoTile(36)  # the app's own icon, as on the taskbar
         self._brand = logo
         titles = QVBoxLayout()
         titles.setSpacing(0)
         app_title = QLabel(APP_NAME)
-        app_title.setObjectName("Title")
+        app_title.setObjectName("PanelTitle")
         self.account = QLabel(t("Not signed in"))  # shown as the title's tooltip and in Settings
         self.account.setObjectName("Muted")
         self.account.hide()
@@ -604,6 +733,7 @@ class Flyout(QWidget):
         self._spin_angle = 0.0
         self._spin_base: QPixmap | None = None
         self.status_line = QLabel("")
+        self.status_line.setTextFormat(Qt.PlainText)
         self.status_line.setObjectName("StatusLine")
         status.addWidget(self.status_icon, 0, Qt.AlignVCenter)
         status.addWidget(self.status_line, 1)
@@ -612,6 +742,7 @@ class Flyout(QWidget):
         self.gear = QToolButton()
         self.gear.setIcon(glyph("gear", palette["muted"]))
         self.gear.setIconSize(QSize(18, 18))
+        self.gear.setFixedSize(34, 34)
         self.gear.setToolTip(t("Settings"))
         self.gear.setCursor(Qt.PointingHandCursor)
         self.gear.clicked.connect(self.openSettings)
@@ -619,18 +750,27 @@ class Flyout(QWidget):
         self.dot = StatusDot(palette)
         self.storage_ring = StorageRing(palette)
         self.storage_ring.hide()
+        head.setSpacing(12)
         head.addWidget(logo)
-        head.addSpacing(6)
         head.addLayout(titles, 1)
         self.dot.hide()  # the status line under the title says it now (kept for its state logic)
         head.addWidget(self.storage_ring, 0, Qt.AlignVCenter)
+        from .notices import BellButton
+
+        self.bell = BellButton(palette)  # this session's notifications (shown once the app attaches them)
+        self.bell.clicked.connect(self.show_notices)
+        self.bell.hide()
+        self.notices_page = None
+        self.thumbs = Thumbs(self)  # small pictures of the photos named in the activity list
+        self.thumbs.ready.connect(self._thumb_ready)
+        head.addWidget(self.bell, 0, Qt.AlignVCenter)
         head.addWidget(self.gear, 0, Qt.AlignVCenter)
         root.addLayout(head)
 
         # status card (when it says "Sign-in required", clicking it signs in)
         flyout = self
 
-        class _Card(QFrame):
+        class _Card(SoftCard):
             def mouseReleaseEvent(self, e) -> None:  # noqa: N802 - Qt naming
                 if flyout.state == "auth" and e.button() == Qt.LeftButton:
                     flyout.login.emit()
@@ -656,23 +796,34 @@ class Flyout(QWidget):
         cl = QVBoxLayout(card)
         cl.setContentsMargins(12, 10, 12, 10)
         cl.setSpacing(8)
+        card.setFixedHeight(72)  # one height in every state: the panel never moves
         row = QHBoxLayout()
         row.setSpacing(12)
+        self.badge = StateBadge(palette)
+        row.addWidget(self.badge, 0, Qt.AlignVCenter)
         txt = QVBoxLayout()
-        txt.setSpacing(2)
+        txt.setSpacing(1)
+        txt.addStretch(1)
         self.status_title = QLabel(STATE_TITLES["idle"])
-        self.status_title.setObjectName("H2")
-        self.status_text = QLabel("")
-        self.status_text.setObjectName("Muted")
-        self.status_text.setWordWrap(True)
+        self.status_title.setObjectName("HeroTitle")
+        self.status_text = TwoLineLabel("")  # two lines at most; the whole text in its tooltip
+        self.status_text.setObjectName("HeroText")
         txt.addWidget(self.status_title)
         txt.addWidget(self.status_text)
+        txt.addStretch(1)
         row.addLayout(txt, 1)
+        self.review_btn = QPushButton(t("Review"))  # a large deletion waits: decided here, never by a card
+        self.review_btn.setCursor(Qt.PointingHandCursor)
+        self.review_btn.clicked.connect(self.reviewPending)
+        self.review_btn.hide()
+        row.addWidget(self.review_btn, 0, Qt.AlignVCenter)
         cl.addLayout(row)
+        self._progress: float | None = None
         self.bar = QProgressBar()
         self.bar.setTextVisible(False)
         self.bar.setRange(0, 1000)
         self.bar_label = QLabel()
+        self.bar_label.setTextFormat(Qt.PlainText)
         self.bar_label.setObjectName("Hint")
         cl.addWidget(self.bar)
         cl.addWidget(self.bar_label)
@@ -694,11 +845,11 @@ class Flyout(QWidget):
         root.addWidget(self.update_banner)
 
         # services
-        services = QFrame()
+        services = SoftCard()
         services.setObjectName("Card")
         self.services_card = services
         sl = QVBoxLayout(services)
-        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setContentsMargins(0, 0, 0, 2)  # (room for the card's edge and its shadow)
         sl.setSpacing(0)
         self.row_photos = ServiceRow("photo", t("Photos"), palette)
         self.row_drive = ServiceRow("folder", t("iCloud Drive"), palette)
@@ -712,8 +863,8 @@ class Flyout(QWidget):
             if i:
                 sep = QFrame()
                 sep.setObjectName("Sep")
-                inset = QHBoxLayout()  # the line starts after the icon tile, like a grouped list
-                inset.setContentsMargins(48, 0, 11, 0)
+                inset = QHBoxLayout()  # the line runs the card's full width (1.1 design)
+                inset.setContentsMargins(0, 0, 0, 0)
                 inset.addWidget(sep)
                 sl.addLayout(inset)
             sl.addWidget(row)
@@ -725,12 +876,13 @@ class Flyout(QWidget):
 
         # activity
         sec = QHBoxLayout()
+        sec.setContentsMargins(4, 6, 4, 0)
         lbl = QLabel(t("Recent activity"))
-        lbl.setObjectName("Section")
+        lbl.setObjectName("ListHead")
         self.last_sync = QLabel("")
         self.last_sync.setObjectName("Hint")
         self.clear_btn = QPushButton(t("Clear"))
-        self.clear_btn.setObjectName("Link")
+        self.clear_btn.setObjectName("ListLink")
         self.clear_btn.setCursor(Qt.PointingHandCursor)
         self.clear_btn.setToolTip(t("Clear the activity list. Your files are not touched."))
         self.clear_btn.clicked.connect(self._clear_activity)
@@ -740,11 +892,12 @@ class Flyout(QWidget):
         sec.addWidget(self.clear_btn)
         self.last_sync.hide()  # each service row now shows its own "checked …" time
         root.addLayout(sec)
-        self.list = QScrollArea()
+        self.list = RowScroll()  # one wheel notch, one row
         self.list.setWidgetResizable(True)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.setFrameShape(QFrame.NoFrame)
         self.list.setFocusPolicy(Qt.NoFocus)  # its rows take the focus themselves
+        self.list.setStyleSheet("QScrollBar:vertical { width: 6px; margin: 0; }")  # a slim bar, only when it scrolls
         self._rows_box = QWidget()
         self._rows_box.setObjectName("Root")
         self._rows = QVBoxLayout(self._rows_box)
@@ -757,17 +910,20 @@ class Flyout(QWidget):
         self.empty.setAlignment(Qt.AlignCenter)
         root.addWidget(self.list)
         root.addWidget(self.empty)
+        self._list_pad = QWidget()  # what is left under the last whole row: the panel keeps one height
+        self._list_pad.setFixedHeight(0)
+        root.addWidget(self._list_pad)
         self.list.hide()
 
         # footer: one primary button, then icon-only buttons (each with a tooltip and an accessible name)
         bar = QFrame()
         bar.setObjectName("BottomBar")
         bl = QHBoxLayout(bar)
-        bl.setContentsMargins(13, 10, 13, 11)
-        bl.setSpacing(6)
+        bl.setContentsMargins(12, 10, 12, 10)
+        bl.setSpacing(8)
 
-        def bar_button(text: str, slot, tip: str = "") -> QToolButton:
-            b = QToolButton()
+        def bar_button(text: str, slot, tip: str = "", kind=QToolButton) -> QToolButton:
+            b = kind()
             b.setObjectName("Bar")
             b.setToolButtonStyle(Qt.ToolButtonIconOnly)
             b.setIconSize(QSize(18, 18))
@@ -779,12 +935,17 @@ class Flyout(QWidget):
             bl.addWidget(b)
             return b
 
-        self.sync_btn = bar_button(t("Sync now"), self._on_sync_clicked)
+        self.checked_label = QLabel("")  # "Last checked / 14:32"
+        self.checked_label.setObjectName("Legend")
+        self.checked_label.setMinimumWidth(0)
+        self.checked_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        bl.addWidget(self.checked_label, 1)
+        self.sync_btn = bar_button(t("Sync now"), self._on_sync_clicked, kind=CenteredButton)
         self.sync_btn.setProperty("primary", True)
         self.sync_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.sync_btn.setIconSize(QSize(16, 16))
-        self.sync_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.open_btn = bar_button(t("Open folder"), self._open_folder_menu)
+        self.sync_btn.setFixedSize(132, 34)  # Stop takes Sync now's place: the same size, the same spot
+        self.open_btn = bar_button(t("Open folder"), self._open_folder_menu)  # (iCloud Drive's, when it syncs)
         self.folder_btn = bar_button(t("Find My"), self.findMy, t("Find My devices…"))  # (name kept: other code refers to it)
         self.more_btn = bar_button(t("More"), self._more_menu)
         # Kept as objects (other code and the tests use them); their actions live in the "More" menu now.
@@ -796,48 +957,78 @@ class Flyout(QWidget):
         outer.addWidget(bar)
         self._bar_icons()
         self.set_paused(False)
+        self._glass_style()
+
+    def _glass_style(self) -> None:
+        """Over Windows' acrylic: everything see-through, a light tint over the whole panel."""
+        if not self.glass:
+            self.setStyleSheet("")
+            return
+        from .backdrop import glass_colours
+        from .theme import accent_edges, accent_fill
+
+        g = glass_colours(self.c, QColor(self.c["bg"]).lightness() < 128)
+        self.setStyleSheet(
+            f"QWidget#Root {{ background: transparent; }}"
+            f"QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; }}"
+            f"SoftCard {{ qproperty-fill: {g['card']}; qproperty-stroke: {g['stroke']}; qproperty-shade: {g['shade']}; }}"
+            f"SoftCard[hot=\"true\"] {{ qproperty-fill: {g['hover']}; }}"
+            f"QFrame#BottomBar {{ background: {g['foot']}; border-top: 1px solid {g['stroke']}; }}"
+            f"QFrame#Row:hover, QFrame#ActRow[link=\"true\"]:hover {{ background: {g['hover']}; }}"
+            f"QToolButton#Bar {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
+            f"QToolButton#Bar[wide=\"true\"] {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
+            # the main button: the accent, see-through enough for the blur to show in it
+            f"QToolButton#Bar[primary=\"true\"] {{ background: {accent_fill(self.c['btn'], 0.68)};"
+            f" {accent_edges(self.c['btn'], 0.75)} }}"
+            f"QToolButton#Bar[primary=\"true\"]:hover {{ background: {accent_fill(self.c['btn_hover'], 0.82)};"
+            f" {accent_edges(self.c['btn_hover'], 0.85)} }}"
+            f"QFrame#Sep {{ background: {g['stroke']}; }}")
+
+    def paintEvent(self, e) -> None:  # noqa: N802
+        if self.glass:
+            # Windows draws the blur and its tint behind. A see-through window lets the mouse fall
+            # through wherever it is fully transparent (the wheel scrolled the browser behind the
+            # panel): an all but invisible fill keeps every pixel the panel's own.
+            p = QPainter(self)
+            p.fillRect(self.rect(), QColor(0, 0, 0, 1))
+            return
+        super().paintEvent(e)
 
     def _more_menu(self) -> None:
-        from PySide6.QtWidgets import QMenu
+        from .menus import Menu
 
-        menu = QMenu(self)
-        menu.addAction(glyph("globe", self.c["muted"]), t("Open iCloud.com"), self.web_btn.click)
-        pause = menu.addAction(glyph("play" if self.paused else "pause", self.c["muted"]),
-                               t("Resume syncing") if self.paused else t("Pause all syncing"), self.togglePause.emit)
+        menu = Menu(self.c, self)  # (rounded, 32 px items with 16 px icons, as in the 1.1 design)
+        menu.add("globe", t("Open iCloud.com"), self.web_btn.click)
+        pause = menu.add("play" if self.paused else "pause",
+                         t("Resume syncing") if self.paused else t("Pause all syncing"), self.togglePause.emit)
         pause.setEnabled(self.state not in ("auth", "setup"))
+        menu.set_glyph(pause, "play" if self.paused else "pause")  # (quieter while it can't be used)
         menu.exec(self.more_btn.mapToGlobal(self.more_btn.rect().topRight())
                   - QPoint(menu.sizeHint().width(), menu.sizeHint().height() + 4))
 
     def _bar_icons(self) -> None:
-        self.open_btn.setIcon(glyph("folder", self.c["muted"]))
-        self.web_btn.setIcon(glyph("globe", self.c["muted"]))
-        self.folder_btn.setIcon(glyph("pin", self.c["muted"]))
-        self.more_btn.setIcon(glyph("more", self.c["muted"]))
+        self.open_btn.setIcon(glyph("folder", self.c["text"]))
+        self.web_btn.setIcon(glyph("globe", self.c["text"]))
+        self.folder_btn.setIcon(glyph("pin", self.c["text"]))
+        self.more_btn.setIcon(glyph("more", self.c["text"]))
 
     def _open_folder_menu(self) -> None:
-        """One folder per synced service: open it straight away, or choose when there are several."""
-        from PySide6.QtWidgets import QMenu
-
+        """Opens the iCloud Drive folder straight away (the photos folder while Drive isn't synced):
+        Photos and Notes have their own windows from their rows."""
         s = getattr(self, "_stats", {}) or {}
-        choices = [("photos", t("Photos"))]
-        if s.get("drive_enabled"):
-            choices.append(("drive", t("iCloud Drive")))
-        if s.get("notes_enabled"):
-            choices.append(("notes", t("Notes")))
-        if len(choices) == 1:
-            self.folderClicked.emit("photos")
-            return
-        menu = QMenu(self)
-        for key, label in choices:
-            menu.addAction(label, lambda k=key: self.folderClicked.emit(k))
-        menu.exec(self.open_btn.mapToGlobal(self.open_btn.rect().topLeft()) - QPoint(0, menu.sizeHint().height()))
+        self.folderClicked.emit("drive" if s.get("drive_enabled") else "photos")
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         """Called when Windows switches light/dark: re-tint the hand-drawn icons."""
         self.c = palette
+        self._glass_style()
         self.gear.setIcon(glyph("gear", palette["muted"]))
+        self.bell.apply_palette(palette)
+        if self.notices_page is not None:
+            self.notices_page.apply_palette(palette)
         self._brand.set_palette(palette, palette["accent_fg"])
         self.dot.c = palette
+        self.badge.set_palette(palette)
         self.storage_ring.c = palette
         self.storage_ring.update()
         self.storage_bar.apply_palette(palette)
@@ -883,19 +1074,27 @@ class Flyout(QWidget):
         return "attention" if self.state == "idle" and getattr(self, "_pending_text", "") else self.state
 
     def set_state(self, state: str, text: str) -> None:
+        if state == "syncing" and self.state != "syncing":
+            from datetime import datetime as _dt
+
+            self._started = _dt.now().strftime("%H:%M")  # "Started at 09:42" in the footer
         self.state = state
+        if hasattr(self, "checked_label"):
+            self._footer_time()
         self.dot.set_state(self._dot_state())
         self.status_title.setText(STATE_TITLES.get(state, state))
         self.status_text.setText("" if text.rstrip(".…") == STATE_TITLES.get(state, "").rstrip(".…")
                                  else short_text(text, 260 if state in ("error", "auth") else 110))
         self.status_text.setVisible(bool(self.status_text.text()))
         self._dot_tip()
-        self.status_card.setVisible(state != "idle")  # all in sync: the green badge says it
+        self.status_card.setVisible(True)  # always there, one height: the panel never jumps
         self.status_card.setCursor(Qt.PointingHandCursor if state == "auth" else Qt.ArrowCursor)
         syncing = state == "syncing"
+        self.bar.hide()  # the badge's ring shows the progress
+        self.bar_label.hide()
         if not syncing:
-            self.bar.hide()
-            self.bar_label.hide()
+            self._progress = None
+        self._render_hero()
         self._render_services()
         self.auth_banner.hide()  # the status card and the main button already say "Sign in"
         if state == "auth":
@@ -906,10 +1105,46 @@ class Flyout(QWidget):
         self.sync_btn.setText(label)
         self.sync_btn.setToolTip(t("Resume syncing") if state == "paused" else label)
         self.sync_btn.setAccessibleName(self.sync_btn.toolTip())
-        self.sync_btn.setIcon(glyph(name, self.c["accent_fg"]))
+        quiet = state == "syncing"  # Stop is a quiet button in the same place; the rest is the accent
+        if bool(self.sync_btn.property("wide")) != quiet:
+            self.sync_btn.setProperty("primary", not quiet)
+            self.sync_btn.setProperty("wide", quiet)
+            self.sync_btn.style().unpolish(self.sync_btn)
+            self.sync_btn.style().polish(self.sync_btn)
+        self.sync_btn.setIcon(glyph("stop" if quiet else name, self.c["text"] if quiet else self.c["accent_text"]))
+        self.sync_btn.set_glyph("stop" if quiet else name)  # drawn centred with the text, in its colour
         self.sync_btn.setEnabled(True)  # paused: this button is the way to continue
         self._status_line()
         self._size_list()
+
+    def _render_hero(self) -> None:
+        """The status card: its badge, and a quiet second line when all is well."""
+        if self.state != "syncing" and self.status_text.objectName() != "HeroText":
+            self.status_text.setObjectName("HeroText")
+            self.status_text.style().unpolish(self.status_text)
+            self.status_text.style().polish(self.status_text)
+        state = self._dot_state()
+        self.badge.set_state(state, self._progress if self.state == "syncing" else None)
+        pending = state == "attention"
+        self.review_btn.setVisible(pending)
+        if pending:
+            self.status_title.setText(t("Deletion needs your OK"))
+            self.status_text.setText(getattr(self, "_pending_short", "") or self._pending_text)
+            from .safe_text import plain_tip
+
+            self.status_text.setToolTip(plain_tip(self._pending_text))
+            self.status_text.show()
+        elif self.state == "idle":
+            self.status_title.setText(t("Up to date"))  # (the line under the name says "in sync")
+            s = getattr(self, "_stats", {}) or {}
+            names = [t("Photos")] + ([t("iCloud Drive")] if s.get("drive_enabled") else []) + \
+                ([t("Notes")] if s.get("notes_enabled") else [])
+            if len(names) == 1:
+                self.status_text.setText(t("Your photos are in step with iCloud."))
+            else:
+                self.status_text.setText(t("{names} and {last} are in step with iCloud.",
+                                           names=", ".join(names[:-1]), last=names[-1]))
+            self.status_text.show()
 
     def _status_line(self) -> None:
         state = self._dot_state()
@@ -919,7 +1154,10 @@ class Flyout(QWidget):
         icon = {"idle": "check", "syncing": "sync", "paused": "pause", "error": "error", "auth": "error",
                 "offline": "cloud", "setup": "folder", "attention": "error"}.get(state, "check")
         color = state_color(self.c, state)
-        pix = glyph(icon, color, 13).pixmap(QSize(13, 13), max(1.0, self.devicePixelRatioF()))
+        if icon == "sync":  # syncing: the turning arrows (the user liked them; other states show a dot)
+            pix = glyph("sync", color, 13).pixmap(QSize(13, 13), max(1.0, self.devicePixelRatioF()))
+        else:
+            pix = _status_dot(color, max(1.0, self.devicePixelRatioF()))
         self.status_icon.setPixmap(pix)
         if icon == "sync" and animations_on():
             self._spin_base = pix
@@ -949,11 +1187,22 @@ class Flyout(QWidget):
         p.drawPixmap(0, 0, self._spin_base)
         p.end()
         self.status_icon.setPixmap(canvas)
+        self.badge.spin(self._spin_angle * 1.6)
 
     def set_progress(self, done: int, total: int, text: str) -> None:
         if self.state != "syncing" or total <= 0:
             return
         self.bar.setValue(int(1000 * min(done, total) / total))
+        self._progress = min(done, total) / total
+        self.badge.set_state("syncing", self._progress)
+        if self.status_text.objectName() != "HeroMono":
+            self.status_text.setObjectName("HeroMono")  # the numbers: "812 of 1,284 · 4.2 MB/s · ~3 min"
+            self.status_text.style().unpolish(self.status_text)
+            self.status_text.style().polish(self.status_text)
+        if text and " · " in text:  # "Downloading photos · 812 of 1,284": the action above, the numbers below
+            head, _, rest = text.partition(" · ")
+            self.status_title.setText(head)
+            text = rest
         text = break_at_dots(text) if text else text
         if text and text != self.status_text.text():
             lines_before = self.status_text.heightForWidth(max(1, self.status_text.width()))
@@ -962,9 +1211,7 @@ class Flyout(QWidget):
             if self.isVisible() and self.status_text.heightForWidth(max(1, self.status_text.width())) != lines_before:
                 QTimer.singleShot(0, self._size_list)  # wraps to more or fewer lines: fit again
             self.dot.setToolTip(STATE_TITLES.get(self.state, self.state) + "\n" + text.replace(chr(0xA0), " "))
-        if self.bar.isHidden():
-            self.bar.show()
-            self._size_list()  # the same sizing as everywhere: the buttons stay on screen
+
 
     def set_update(self, version: str | None) -> None:
         """A newer Skyfold is out (None: not, or already installed)."""
@@ -1035,9 +1282,22 @@ class Flyout(QWidget):
         else:
             self.row_notes.set(t("Off · click to turn on"), None)
 
+    def _footer_time(self) -> None:
+        """Beside the main button: when Skyfold last checked, or, while syncing, when this pass began."""
+        ts = getattr(self, "_last_sync_ts", None)
+        started = getattr(self, "_started", None)
+        if self.state == "syncing" and started:
+            self.checked_label.setText(t("Started") + "\n" + t("at {time}", time=started))
+        else:
+            self.checked_label.setText(t("Last checked") + "\n" + fmt_time(ts) if ts else "")
+
     def refresh_times(self) -> None:
         ts = getattr(self, "_last_sync_ts", None)
         self.last_sync.setText(t("Last check: {when}", when=fmt_time(ts)) if ts else "")
+        self._footer_time()
+        self.checked_label.setToolTip(self.last_sync.text())
+        if self.state == "idle":
+            self._render_hero()
         self._render_services()
 
     def _dot_tip(self) -> None:
@@ -1062,14 +1322,18 @@ class Flyout(QWidget):
                 parts.append(t("{n} deleted on this PC",
                                n=getattr(pending, "files_to_cloud", 0) or len(pending.to_cloud)))
             self._pending_text = t("A large deletion is waiting for your OK: {what}.", what=t(" and ").join(parts))
-            self.pending_banner.text.setText(self._pending_text)
-            self.pending_banner.show()
+            self._pending_short = t(" and ").join(parts)
+            self.pending_banner.text.setText(self._pending_text)  # (said by the status card now)
         self.dot.set_state(self._dot_state())
         self._dot_tip()
         self._status_line()
+        if not pending and self.state in STATE_TITLES:
+            self.status_title.setText(STATE_TITLES[self.state])
+        self._render_hero()
         self._size_list()
 
     MAX_ROWS_VISIBLE = 6
+    TARGET_HEIGHT = 624  # the panel's height (less on a small screen): the same in every state
     MIN_LIST_HEIGHT = 104  # the panel keeps a calm, steady height instead of jumping with each entry
     HELD_LIST_MIN = 56  # while open, the list may shrink this far to keep the panel's height
 
@@ -1085,6 +1349,8 @@ class Flyout(QWidget):
         row = ActivityRow(ts, kind, text, self.c, target)
         row.errorClicked.connect(self._error_details)
         self._rows.insertWidget(0, row)
+        if Thumbs.wanted(target):
+            self.thumbs.request(target)
         while self._rows.count() - 1 > 60:  # keep the newest 60 (the last item is the stretch)
             old = self._rows.takeAt(self._rows.count() - 2).widget()
             old.deleteLater()
@@ -1093,12 +1359,18 @@ class Flyout(QWidget):
         self.clear_btn.show()
         QTimer.singleShot(0, self._size_list)  # after styles are applied, so heights are exact
 
+    def _thumb_ready(self, target: str, img) -> None:
+        for row in self._activity_rows():
+            if row.target == target:
+                row.set_thumb(img)
+
     def _error_details(self, row: "ActivityRow") -> None:
         from PySide6.QtWidgets import QApplication, QMessageBox
 
         box = QMessageBox(self)
         box.setWindowTitle(t("Sync problem"))
         box.setIcon(QMessageBox.Warning)
+        box.setTextFormat(Qt.PlainText)  # (the message names files from iCloud: never HTML)
         box.setText(row.message)
         when = fmt_time(row.ts) + (f"  (×{row.count})" if row.count > 1 else "")
         network = any(w in row.message.lower() for w in ("connection", "timed out", "reach", "network",
@@ -1145,16 +1417,23 @@ class Flyout(QWidget):
         self._fit_width()
         self.services_card.show()
         self.list.setFixedHeight(max(height, self.MIN_LIST_HEIGHT if rows else 1) + 2)
+        # One height in every state: the list (or the empty-list line) fills what the rest leaves.
+        self._list_pad.setFixedHeight(0)
+        other = self._needed_height() - (self.list.height() if self.list.isVisible() else self.empty.height())
+        fill = max(self.MIN_LIST_HEIGHT, self.TARGET_HEIGHT - other)
+        # whole rows only, never one cut in half: the list is a whole number of rows tall (measured,
+        # since the row height follows the font and the display scale)
+        if rows:
+            self._row_step = max(30, rows[0].sizeHint().height())
+        step = getattr(self, "_row_step", 42)
+        shown = max(2, round(fill / step)) * step  # (the nearest whole number of rows: 3, not 2.9 cut to 2)
+        if self.list.isVisible():
+            self.list.setFixedHeight(shown)
+        else:
+            self.empty.setFixedHeight(shown)  # the same height with or without entries
         room = self._limit() - (self._needed_height() - self.list.height())
         if self.list.height() > room:  # the list gives way first; below that the panel content scrolls
             self.list.setFixedHeight(max(room, min(self.list.height(), 120)))
-        held = getattr(self, "_held", None)
-        if held and self.isVisible() and self.list.isVisible():
-            # Open: the panel keeps its height when "Syncing…" comes or goes (or its text takes
-            # another line); the list of recent activity takes up the difference instead.
-            diff = self._needed_height() - held
-            if diff:
-                self.list.setFixedHeight(max(self.HELD_LIST_MIN, self.list.height() - diff))
         self._fit()
 
     def refresh_activity_times(self) -> None:
@@ -1241,6 +1520,12 @@ class Flyout(QWidget):
         self.refresh_activity_times()
         self._size_list()
         self._place(anchor if anchor and anchor.isValid() and not anchor.isEmpty() else None)
+        if self.glass:
+            from .backdrop import blur_behind, glass_colours
+
+            dark = QColor(self.c["bg"]).lightness() < 128
+            r, g, b, a = (int(x) for x in glass_colours(self.c, dark)["tint"][5:-1].split(","))
+            blur_behind(self, QColor(r, g, b, a))  # Windows blurs the desktop behind the panel and tints it
         self.show()
         round_corners(self)
         self.raise_()
@@ -1256,7 +1541,42 @@ class Flyout(QWidget):
 
     def hideEvent(self, e) -> None:  # noqa: N802
         self._held = None  # opened again: its natural height
+        self.show_home()  # opened again: the panel itself, not the notifications
         super().hideEvent(e)
+
+    # notifications ----------------------------------------------------------------
+    def attach_notices(self, log, resolve) -> None:
+        """Show the bell for this session's notifications (a NoticeLog) and their page; resolve(key)
+        gives a notification button's (label, action, applies now)."""
+        from .notices import NoticesPage
+
+        page = NoticesPage(log, self.c, resolve)
+        page.hide()
+        page.back.connect(self.show_home)
+        self.layout().insertWidget(0, page, 1)
+        self.notices_page = page
+        self._notices = log
+        log.on_change(lambda: self.bell.set_count(log.unseen))
+        self.bell.set_count(log.unseen)
+        self.bell.show()
+
+    def show_notices(self) -> None:
+        """The notifications page in place of the panel's content; the panel keeps its size."""
+        if self.notices_page is None:
+            return
+        self._scroll.hide()
+        self._bottom.hide()
+        self.notices_page.show()
+        self._notices.mark_seen()
+        self.notices_page.setFocus(Qt.OtherFocusReason)
+
+    def show_home(self) -> None:
+        if self.notices_page is None or not self.notices_page.isVisible():
+            return
+        self.notices_page.hide()
+        self._scroll.show()
+        self._bottom.show()
+        self.setFocus(Qt.OtherFocusReason)
 
     def event(self, e) -> bool:  # noqa: N802
         if e.type() == QEvent.WindowDeactivate:
@@ -1265,7 +1585,9 @@ class Flyout(QWidget):
         return super().event(e)
 
     def keyPressEvent(self, e) -> None:  # noqa: N802
-        if e.key() == Qt.Key_Escape:
+        if e.key() == Qt.Key_Escape and self.notices_page is not None and self.notices_page.isVisible():
+            self.show_home()  # Escape on the notifications goes back first
+        elif e.key() == Qt.Key_Escape:
             self.hide()
         else:
             super().keyPressEvent(e)

@@ -37,6 +37,6 @@ def test_fixed_refresh_redraws_device_icon_and_leaves_unrelated_widgets(app):
     assert row.c is theme.DARK and icon.pixmap().toImage() != icon_before
     assert unrelated.c == {"profile": "unrelated"}  # only widgets with apply_palette are touched
     unrelated.ensurePolished()
-    assert unrelated.palette().color(QPalette.HighlightedText).name() == "#10223b"
+    assert unrelated.palette().color(QPalette.HighlightedText).name() == theme.DARK["accent_text"]
     row.close()
     app.setStyleSheet("")
