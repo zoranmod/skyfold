@@ -5,11 +5,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 import logging
+import time
 from typing import Any
 
 from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QRunnable, QSize, Qt, QThreadPool, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtGui import (QAccessible, QAccessibleActionInterface, QAccessibleStateChangeEvent, QColor, QFont,
+                           QPainter, QPalette, QPen, QPixmap)
 from PySide6.QtWidgets import (
+    QAccessibleWidget,
     QApplication,
     QAbstractSpinBox,
     QListView,
@@ -359,6 +362,71 @@ def _label(text: str, name: str | None = None, wrap: bool = False) -> QLabel:
         lbl.setObjectName(name)
     lbl.setWordWrap(wrap)
     return lbl
+
+
+class _Accessible(QAccessibleWidget):
+    """What a screen reader is told about a card that works like a standard control: a button (the
+    help cards), a radio button with its checked state (the layout choice), or the group around them.
+    The widget names its kind in the "a11y" property; Press (or Toggle) clicks it, as Enter/Space do."""
+
+    ROLES = {"button": QAccessible.Button, "radio": QAccessible.RadioButton, "group": QAccessible.Grouping}
+
+    def __init__(self, widget: QWidget, kind: str) -> None:
+        super().__init__(widget, self.ROLES[kind])
+        self.kind = kind
+
+    def state(self):
+        s = super().state()
+        if self.kind == "radio":
+            s.checkable = True
+            s.checked = bool(self.widget().property("selected"))
+        return s
+
+    def actionNames(self) -> list[str]:  # noqa: N802
+        names = list(super().actionNames())
+        if self.kind == "button":
+            names.insert(0, QAccessibleActionInterface.pressAction())
+        elif self.kind == "radio":
+            names[:0] = [QAccessibleActionInterface.pressAction(), QAccessibleActionInterface.toggleAction()]
+        return names
+
+    def doAction(self, name: str) -> None:  # noqa: N802
+        if self.kind != "group" and name in (QAccessibleActionInterface.pressAction(),
+                                             QAccessibleActionInterface.toggleAction()):
+            w = self.widget()
+            if w.isEnabled():
+                w.clicked.emit()
+            return
+        super().doAction(name)
+
+
+def _accessible_for(_key: str, obj: QObject):
+    try:
+        kind = obj.property("a11y") if isinstance(obj, QWidget) else None
+        return _Accessible(obj, kind) if kind in _Accessible.ROLES else None
+    except Exception:  # noqa: BLE001  (never take the screen reader down with it)
+        return None
+
+
+QAccessible.installFactory(_accessible_for)
+
+
+def _as_control(widget: QWidget, kind: str) -> None:
+    """Tell screen readers that this card is a button / radio button / group (see _Accessible). Called
+    first, before its accessible name is set: that already asks for the widget's interface."""
+    widget.setProperty("a11y", kind)
+
+
+class _Group(QWidget):
+    """Controls that belong together (a class of its own: Qt answers for a plain QWidget itself)."""
+
+
+def _checked_changed(widget: QWidget) -> None:
+    """A radio card was chosen or unchosen: screen readers hear it at once."""
+    if QAccessible.isActive():
+        changed = QAccessible.State()
+        changed.checked = True
+        QAccessible.updateAccessibility(QAccessibleStateChangeEvent(widget, changed))
 
 
 class _Dialog(QDialog):
@@ -1142,7 +1210,10 @@ class SettingsDialog(_Dialog):
 
         card = ClickCard()
         card.setMinimumHeight(56)
+        _as_control(card, "button")  # a button for screen readers: its Press action clicks it, as Enter does
         card.setAccessibleName(title)
+        if sub:
+            card.setAccessibleDescription(sub)
         row = QHBoxLayout(card)
         row.setContentsMargins(16, 10, 14, 10)
         row.setSpacing(16)
@@ -1567,7 +1638,10 @@ class SettingsDialog(_Dialog):
         lay.addWidget(head)
 
         where = self._group(lay, t("Where your data is"))
-        lines = [t("Settings: the 'data' folder next to the app."),
+        from .. import config
+
+        # the folder really in use: next to the app, or the private folder when that can't be written
+        lines = [t("Settings: {path}", path=config.DATA_DIR),
                  t("Sign-in and sync database: {path}", path=PRIVATE_DIR)]
         if APP_IN_CLOUD:
             lines.append(t("The app is in {service}, so the sign-in and database are kept only on this PC.",
@@ -1856,6 +1930,8 @@ class DriveFoldersDialog(_Dialog):
         self.c, self.get_api, self.sizes = palette, get_api, sizes or {}
         self.initial = list(selection) if selection is not None else None
         self._items: dict[str, Any] = {}  # path -> DriveItem, for reading deeper levels
+        self._incomplete: set[str] = set()  # folders ("" = the top) whose list from iCloud left folders out
+        self._noted = False  # the line below the tree says so
         self._tasks: list = []
         self._updating = False
         self.setMinimumWidth(480)
@@ -1924,23 +2000,42 @@ class DriveFoldersDialog(_Dialog):
         folder = self._items.get(path) or DriveItem("", ROOT_ID, "root", "com.apple.CloudDocs", None, True)
 
         def fetch():
-            listed = ICloudDrive(api).walk(folders=[folder])
+            drive = ICloudDrive(api)
+            listed = drive.walk(folders=[folder])
             return sorted((it for p, it in listed.items() if it.is_dir and p != path
                            and (p.rsplit("/", 1)[0] if "/" in p else "") == path),
-                          key=lambda it: it.path.casefold())
+                          key=lambda it: it.path.casefold()), path in drive.incomplete
 
-        def done(children) -> None:
-            self.add_children(parent, children)
+        def done(answer) -> None:
+            children, incomplete = answer
+            self.add_children(parent, children, incomplete=incomplete)
 
         def fail(msg: str) -> None:
-            self.info.setText(t("Couldn't read iCloud Drive: {error}", error=msg))
+            if parent is None:
+                self.info.setText(t("Couldn't read iCloud Drive: {error}", error=msg))
+            else:
+                self.load_failed(parent, msg)
 
         self._tasks.append(run_async(fetch, done, fail))
 
-    def add_children(self, parent, children) -> None:
+    def load_failed(self, parent, msg: str) -> None:
+        """A folder inside couldn't be read: say so in it, and read it again when it is opened again."""
+        parent.setData(0, self.LOADED, False)
+        if parent.childCount() and parent.child(0).data(0, self.PATH) is None:
+            note = parent.child(0)  # (the "Loading…" line)
+            note.setText(0, t("Couldn't read this folder. Close and open it again to try again."))
+            note.setToolTip(0, plain_tip(msg))
+        self.info.setText(t("Couldn't read iCloud Drive: {error}", error=msg))
+
+    def add_children(self, parent, children, incomplete: bool = False) -> None:
         from ..ui_text import count_text, size_text
 
         self._updating = True
+        path = parent.data(0, self.PATH) if parent is not None else ""
+        if incomplete:
+            self._incomplete.add(path)  # iCloud named fewer folders than it holds: Save never widens here
+        else:
+            self._incomplete.discard(path)
         if parent is not None:
             parent.takeChildren()
             parent.setData(0, self.LOADED, True)
@@ -1965,8 +2060,9 @@ class DriveFoldersDialog(_Dialog):
                 parent.addChild(node)
             else:
                 self.tree.addTopLevelItem(node)
-        if parent is not None and inherited == Qt.PartiallyChecked:
+        if parent is not None and inherited == Qt.PartiallyChecked and not incomplete:
             # the earlier choice inside may name folders that no longer exist: show what is real
+            # (not from an incomplete list: the folders it left out may be the ones chosen)
             kids = [parent.child(i).checkState(0) for i in range(parent.childCount())]
             if kids and all(k == kids[0] for k in kids):
                 parent.setCheckState(0, kids[0])
@@ -1977,10 +2073,14 @@ class DriveFoldersDialog(_Dialog):
             self.ok.setEnabled(True)
             self.info.setText(t("Open a folder to choose only some of the folders inside it.") if children
                               else t("There are no folders in your iCloud Drive."))
+        self._update_ok()
 
     def _expand(self, item) -> None:
         if not item.data(0, self.LOADED):
             item.setData(0, self.LOADED, True)
+            if item.childCount() and item.child(0).data(0, self.PATH) is None:  # (again, after a failed try)
+                item.child(0).setText(0, t("Loading…"))
+                item.child(0).setToolTip(0, "")
             self._load(item)
 
     # ticking -------------------------------------------------------------------------------
@@ -1999,22 +2099,106 @@ class DriveFoldersDialog(_Dialog):
         while parent is not None:  # the folders above show "some"
             kids = [parent.child(i).checkState(0) for i in range(parent.childCount())
                     if parent.child(i).data(0, self.PATH) is not None]
-            parent.setCheckState(0, kids[0] if kids and all(k == kids[0] for k in kids) else Qt.PartiallyChecked)
+            state = kids[0] if kids and all(k == kids[0] for k in kids) else Qt.PartiallyChecked
+            path = parent.data(0, self.PATH)
+            if path in self._incomplete and state != self._unseen_state(path):
+                state = Qt.PartiallyChecked  # the folders the list left out are set otherwise
+            parent.setCheckState(0, state)
             parent = parent.parent()
         self._updating = False
+        self._update_ok()
+
+    # an incomplete list ----------------------------------------------------------------------
+    # When iCloud names fewer folders than a folder holds, the folders left out keep their current
+    # setting: Save never adds one (never "all folders, also future ones"), and drops one only with
+    # the whole folder around it.
+    def _covered(self, path: str) -> bool:
+        """Is everything in this folder synced now (so also the folders the list left out)?"""
+        if self.initial is None:
+            return True
+        return bool(path) and any(path == s or path.startswith(s + "/") for s in self.initial)
+
+    def _tops(self) -> list:
+        return [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
+
+    def _unseen_state(self, path: str):
+        """How the folders inside path that the list left out are set now."""
+        if self._covered(path):
+            return Qt.Checked
+        return Qt.PartiallyChecked if any(s.startswith(path + "/") for s in self.initial or []) else Qt.Unchecked
+
+    def _drops_unseen(self) -> bool:
+        """Would saving now leave out folders that the incomplete list didn't show (and that are synced
+        now)? A list of chosen folders can't say "all of it except this one"."""
+        for path in self._incomplete:
+            if not self._covered(path):
+                continue
+            if path == "":
+                if not all(it.checkState(0) == Qt.Checked for it in self._tops()):
+                    return True
+                continue
+            node = self._node(path)  # (unticked as a whole: all of it goes, which a list can say)
+            if node is not None and node.checkState(0) == Qt.PartiallyChecked:
+                return True
+        return False
+
+    def _node(self, path: str):
+        stack = self._tops()
+        while stack:
+            it = stack.pop()
+            if it.data(0, self.PATH) == path:
+                return it
+            stack.extend(it.child(i) for i in range(it.childCount()))
+        return None
+
+    def _update_ok(self) -> None:
+        if not self._incomplete:  # (Save is enabled once the first list is in; a complete list never stops it)
+            if self._noted:  # a folder read again, completely this time
+                self._noted = False
+                self.ok.setEnabled(True)
+                self.info.setText(t("Open a folder to choose only some of the folders inside it."))
+            return
+        self._noted = True
+        stuck = self._drops_unseen()
+        self.ok.setEnabled(not stuck)
+        self.info.setText(t("iCloud didn't list every folder, so this choice can't be saved now: it would leave out "
+                            "folders that aren't shown. Try again later.") if stuck else
+                          t("iCloud didn't list every folder. Folders that aren't shown keep their current setting."))
 
     def selection(self) -> list[str] | None:
         """None when every folder is checked (= all of iCloud Drive, including future folders)."""
-        tops = [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
+        tops = self._tops()
         if not tops:
             return self.initial  # nothing to choose from: keep what was set
-        if all(it.checkState(0) == Qt.Checked for it in tops):
+        partial_root = "" in self._incomplete
+        if all(it.checkState(0) == Qt.Checked for it in tops) and (not partial_root or self.initial is None):
             return None
         out: list[str] = []
 
+        def shown_below(it) -> list[str]:
+            return [it.child(i).data(0, self.PATH) for i in range(it.childCount())
+                    if it.child(i).data(0, self.PATH) is not None]
+
+        def unseen(path: str, shown: list[str]) -> list[str]:
+            """The earlier choices inside path that the (incomplete) list didn't show."""
+            return [s for s in (self.initial or []) if (s.startswith(path + "/") if path else True)
+                    and not any(s == k or s.startswith(k + "/") for k in shown)]
+
         def visit(it) -> None:
             path, state = it.data(0, self.PATH), it.checkState(0)
-            if path is None or state == Qt.Unchecked:
+            if path is None:
+                return
+            if path in self._incomplete:  # its list left folders out
+                if state == Qt.Unchecked:
+                    return  # unticked as a whole
+                if state == Qt.Checked and self._covered(path):
+                    out.append(path)  # as it was: all of it
+                    return
+                for i in range(it.childCount()):  # never more than the folders shown and chosen
+                    visit(it.child(i))
+                out.extend(unseen(path, shown_below(it)))
+                return
+            if state == Qt.Unchecked:
                 return
             if state == Qt.Checked:
                 out.append(path)
@@ -2026,10 +2210,54 @@ class DriveFoldersDialog(_Dialog):
 
         for it in tops:
             visit(it)
-        return out
+        if partial_root:
+            out.extend(unseen("", [it.data(0, self.PATH) for it in tops]))
+        return list(dict.fromkeys(out))
 
 
 # pending deletions ------------------------------------------------------------------
+def _room_for(window: QWidget) -> int:
+    """The tallest the inside of a window can be on its screen (above the taskbar, below the title bar)."""
+    from PySide6.QtGui import QGuiApplication
+
+    screen = window.screen() or QGuiApplication.primaryScreen()
+    if screen is None:
+        return 1 << 20
+    title = window.frameGeometry().height() - window.height() if window.isVisible() else 0
+    return screen.availableGeometry().height() - max(title, 32)
+
+
+class _FitScroll(QScrollArea):
+    """Scrolls its content only when the window can't be tall enough for it: it asks for the whole
+    height of the content (at its width), and can give way to a small part of it."""
+
+    LEAST = 96
+
+    def __init__(self, content: QWidget) -> None:
+        super().__init__()
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.setWidget(content)
+        self.viewport().setAutoFillBackground(False)
+        content.setAutoFillBackground(False)
+
+    def _content_height(self) -> int:
+        w = self.widget()
+        lay = w.layout()
+        width = self.viewport().width() if self.isVisible() else w.sizeHint().width()
+        if lay is not None and lay.hasHeightForWidth():
+            return lay.totalHeightForWidth(max(width, 1))
+        return w.sizeHint().height()
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(self.widget().sizeHint().width(), self._content_height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(super().minimumSizeHint().width(), min(self.LEAST, self._content_height()))
+
+
 class PendingDialog(_Dialog):
     """The deletion question, compact as in the 1.1 design: what was deleted where (as a title), a
     short explanation, the photos themselves in a small strip (or the first names), the whole list
@@ -2051,7 +2279,7 @@ class PendingDialog(_Dialog):
         body = QWidget()
         lay = QVBoxLayout(body)
         lay.setContentsMargins(24, 22, 24, 18)
-        lay.setSpacing(8)
+        lay.setSpacing(0)
         outer.addWidget(body, 1)
         self._icon = QLabel()  # (kept for apply_palette; the title says it all)
         self._thumbs = None
@@ -2091,17 +2319,30 @@ class PendingDialog(_Dialog):
         fl.addLayout(self._answers)
         outer.addWidget(foot)
         self.adjustSize()
+        self._fit(shrink=True)
 
-    def _fit(self) -> None:
-        """Tall enough for the wrapped lines at this width, measured with the real fonts."""
+    def _fit(self, shrink: bool = False) -> None:
+        """Tall enough for the wrapped lines at this width, measured with the real fonts, but never
+        taller than the screen: then the text and lists scroll and the answers stay in view."""
         for w in self.findChildren(QWidget):
             w.ensurePolished()
+        for s in self.findChildren(_FitScroll):
+            s.updateGeometry()
         lay = self.layout()
         lay.invalidate()
         lay.activate()
-        need = lay.totalHeightForWidth(self.width())
-        if need > self.height():
+        room = _room_for(self)
+        self.setMaximumHeight(max(room, self.minimumSizeHint().height()))
+        need = lay.totalHeightForWidth(self.width()) if lay.hasHeightForWidth() else lay.sizeHint().height()
+        need = min(need, self.maximumHeight())
+        if need > self.height() or (shrink and need < self.height()):
             self.resize(self.width(), need)
+        if self.isVisible():  # a taller window may now reach below the screen: move it up
+            screen = self.screen()
+            if screen is not None:
+                avail, frame = screen.availableGeometry(), self.frameGeometry()
+                if frame.bottom() > avail.bottom():
+                    self.move(self.x(), max(avail.top(), self.y() - (frame.bottom() - avail.bottom())))
 
     def showEvent(self, e) -> None:  # noqa: N802
         super().showEvent(e)
@@ -2112,12 +2353,17 @@ class PendingDialog(_Dialog):
 
     def _section(self, lay, pending, ids, title, question, yes, no, pictures: bool) -> None:
         if getattr(self, "_sections", 0):  # a second question: set it clearly apart from the first
-            lay.addSpacing(10)
+            lay.addSpacing(18)
             sep = QFrame()
             sep.setObjectName("Sep")
             lay.addWidget(sep)
-            lay.addSpacing(8)
+            lay.addSpacing(16)
         self._sections = getattr(self, "_sections", 0) + 1
+        # what the question is about scrolls when the screen is short; the answers stay in view
+        outer_lay, content = lay, QWidget()
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
         lay.addWidget(_label(title, "Title", True))
         why = t("More than your limit ({n}) at once, so Skyfold asks first.", n=self.limit) if self.limit else \
             t("More than your limit at once, so Skyfold asks first.")
@@ -2157,12 +2403,10 @@ class PendingDialog(_Dialog):
             text = "\n".join(first) + ("\n" + t("… and {n} more", n=len(names) - 3) if len(names) > 3 else "")
             lay.addWidget(_label(text, "Mono", True))
 
-        # the whole list, on request
+        # the whole list, on request: every item the answer covers (a list view holds thousands)
         lst = QListWidget()
-        for name in names[:500]:
-            lst.addItem(name)
-        if len(ids) > 500:
-            lst.addItem(t("… and {n} more", n=len(ids) - 500))
+        lst.setUniformItemSizes(True)
+        lst.addItems(names)
         lst.setTextElideMode(Qt.ElideMiddle)
         lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         lst.setMinimumHeight(120)
@@ -2176,15 +2420,16 @@ class PendingDialog(_Dialog):
         def flip() -> None:
             lst.setVisible(not lst.isVisible())
             toggle.setText(t("Hide the list") if lst.isVisible() else t("Show the list"))
-            self.adjustSize()
+            self._fit(shrink=True)
 
         toggle.clicked.connect(flip)
         lay.addWidget(toggle, 0, Qt.AlignLeft)
         lay.addWidget(lst, 1)
+        outer_lay.addWidget(_FitScroll(content), 1)
 
         row = self._answers if self._one else QHBoxLayout()
         if not self._one:
-            row.setContentsMargins(0, 6, 0, 0)
+            row.setContentsMargins(0, 14, 0, 0)
         b_no = QPushButton(no)
         b_yes = QPushButton(yes)
         b_yes.setObjectName("Danger")
@@ -2197,7 +2442,7 @@ class PendingDialog(_Dialog):
         row.addWidget(b_yes)
         row.addWidget(b_no)
         if not self._one:
-            lay.addLayout(row)
+            outer_lay.addLayout(row)
 
     def _shot_ready(self, path: str, img) -> None:
         shot = self._strips.get(path)
@@ -2267,6 +2512,7 @@ class LayoutOption(QFrame):
         self.setObjectName("Option")
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)  # Tab reaches it; Space or Enter chooses it
+        _as_control(self, "radio")  # a screen reader hears a radio button, and whether it is the chosen one
         self.setAccessibleName(f"{title}: {example}")
         col = QVBoxLayout(self)
         col.setContentsMargins(12, 12, 12, 12)
@@ -2289,11 +2535,14 @@ class LayoutOption(QFrame):
         self.picture.update()
 
     def set_selected(self, on: bool) -> None:
+        was = bool(self.property("selected"))
         self.setProperty("selected", on)
         self.dot.setObjectName("DotOn" if on else "DotOff")
         for w in (self, self.dot):
             w.style().unpolish(w)
             w.style().polish(w)
+        if was != on:
+            _checked_changed(self)
 
     def mousePressEvent(self, e) -> None:  # noqa: N802
         self.clicked.emit()
@@ -2422,6 +2671,7 @@ class FolderSetupDialog(_Dialog):
         row.setSpacing(8)
         self.path = QLineEdit(current or default_photos_dir())
         self.path.setObjectName("PathField")
+        self.path.setAccessibleName(t("Photos folder"))
         from .theme import service_color
 
         self.path.addAction(glyph("folder", service_color(palette, "photo") or palette["accent"], 16),
@@ -2445,14 +2695,19 @@ class FolderSetupDialog(_Dialog):
             "year": (t("By year"), "2025\\IMG_4411.HEIC"),
             "year_month": (t("By year and month"), "2025\\11\\IMG_4411.HEIC"),
         }
-        cards = QHBoxLayout()
+        group = _Group()  # the three cards are one choice: a radio group for screen readers
+        _as_control(group, "group")
+        group.setAccessibleName(t("Layout"))
+        cards = QHBoxLayout(group)
+        cards.setContentsMargins(0, 0, 0, 0)
         cards.setSpacing(8)
         for key, (title, example) in examples.items():
             opt = LayoutOption(title, example, key, palette)
             opt.clicked.connect(lambda k=key: self._pick_layout(k))
             self.options[key] = opt
             cards.addWidget(opt, 1)
-        lay.addLayout(cards)
+        lay.addWidget(group)
+        self.layout_group = group
         self._pick_layout("flat")
         lay.addWidget(_label(t("An empty folder works best. Folder and layout can be changed later in Settings."),
                              "Hint", True))
@@ -3001,6 +3256,7 @@ class FindMyDialog(_Dialog):
                     w.deleteLater()
             for d in devs:
                 self.rows.addWidget(DeviceRow(d, self.c, self.get_api))
+            self._shown_at = time.strftime("%H:%M")  # (said when a later refresh fails)
             self.card.setVisible(bool(devs))
             self._devices_scroll.setVisible(bool(devs))
             self.info.setVisible(not devs)
@@ -3011,7 +3267,12 @@ class FindMyDialog(_Dialog):
             if self._closed:
                 return
             self.refresh_btn.setEnabled(True)
-            self.info.setText(msg)
+            text = msg
+            if self._devices_scroll.isVisibleTo(self) and getattr(self, "_shown_at", None):
+                # the devices below are still the earlier answer: their battery and "online" may be old
+                text = t("Couldn't refresh: {error}", error=msg) + "\n" + \
+                    t("Shown as of the last refresh at {time}.", time=self._shown_at)
+            self.info.setText(text)
             self.info.show()
             if msg == extras.sign_in_again_text():
                 self.signin_btn.show()
