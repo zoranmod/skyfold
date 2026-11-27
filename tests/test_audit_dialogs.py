@@ -391,39 +391,3 @@ def test_find_my_without_earlier_devices_shows_just_the_error(app, monkeypatch):
         assert d.signin_btn.isVisibleTo(d)
     finally:
         d.close()
-
-
-# Bosnian counts ----------------------------------------------------------------------------
-COUNTED = [
-    "{n} deleted in iCloud", "{n} deleted on this PC", "{n} items are waiting for your OK to be deleted.",
-    "Finished with {n} errors. Will retry.", "Followed {n} files moved inside the folder",
-    "The first download is done: {n} files. From now on only changes are synced.",
-    "The first sync is done: {n} files downloaded. From now on only changes are synced.",
-    "{n} photos were deleted in iCloud", "{n} photos were deleted on this PC",
-    "iCloud Drive: finished with {n} errors. Will retry.", "Notes: finished with {n} errors. Will retry.",
-    "Notes: moved {n} notes to other folders", "{n} files", "Safari bookmarks: {n} saved for Firefox and Chrome",
-    "{n} days", "{n} items", "{n} months", "Deleting {n} items…",
-]
-# a number straight before a counted word needs that word's form for the number (1 / 2-4 / 5+)
-WRONG = re.compile(r"\d+ (slik|stavk|fajl|grešak|obrisan|premješten|sačuvan|mjesec|dan|bilješ)", re.I)
-
-
-@pytest.mark.parametrize("n", [1, 2, 3, 4, 5, 11, 12, 21, 22, 25, 101, 112])
-def test_bosnian_counts_read_right_for_every_number(n):
-    i18n.set_language("bs")
-    try:
-        for key in COUNTED:
-            assert not WRONG.search(i18n.t(key, n=n)), (key, n)
-        for key, kw in (("{prefix}{i} of {n} files", {"prefix": "Drive: ", "i": n, "n": n + 1}),
-                        ("Drive: uploading, {i} of {n} files done", {"i": n, "n": n + 1}),
-                        ("{files} files · {size}", {"files": n, "size": "1 MB"}),
-                        ("{photos} photos · {videos} videos · {size}", {"photos": n, "videos": n, "size": "1 MB"}),
-                        ("Photos: {n} missing files are kept for now, part of the photos folder couldn't be read",
-                         {"n": n}),
-                        ("{n} items couldn't be deleted: {error}", {"n": n, "error": "x"}),
-                        ("Drive: {name} is no longer synced; {n} files that aren't in iCloud were kept on this PC",
-                         {"name": "A", "n": n})):
-            assert not WRONG.search(i18n.t(key, **kw)), (key, n)
-        assert i18n.t("{n} photos were deleted in iCloud", n=3) == "Obrisano slika u iCloud-u: 3"
-    finally:
-        i18n.set_language("en")

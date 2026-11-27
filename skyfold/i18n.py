@@ -24,7 +24,39 @@ def language() -> str:
 
 def t(text: str, **kw) -> str:
     s = _CATALOGS.get(_lang, {}).get(text, text)
+    forms = _FORMS.get(_lang, {}).get(text)
+    if forms and kw:
+        s = forms(kw, s) if callable(forms) else _form(kw.get(forms[0]), forms[1], forms[2], s)
     return Text(s.format(**kw) if kw else s)  # marked as Skyfold's own wording (see safelog)
+
+
+def _count(value) -> int | None:
+    """The number a count was given as: 7, or "1,284" / "1.284" / "1 284" as the app writes them."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    return int(digits) if digits and len(digits) < 16 else None
+
+
+def _form(value, one: str | None, few: str | None, many: str) -> str:
+    """The wording for this number. Bosnian has three: 1, 21, 31… / 2-4, 22-24… / 5-20, 25-30…
+    (11-14 always take the last); English has two (1 / everything else)."""
+    n = _count(value)
+    if n is None:
+        return many
+    if _lang == "bs":
+        if n % 10 == 1 and n % 100 != 11:
+            return one or many
+        if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+            return few or many
+        return many
+    return one if (n == 1 and one) else many
+
+
+def _word(n, one: str, few: str, many: str) -> str:
+    return _form(n, one, few, many)
 
 
 BS: dict[str, str] = {
@@ -971,3 +1003,105 @@ BS: dict[str, str] = {
 }
 
 _CATALOGS = {"bs": BS}
+
+
+# Wordings that change with the number in them: text -> (the count's name, the form for 1, the
+# form for 2-4 (Bosnian only), or a function of the values for texts with two counts). The
+# catalog itself holds the form for 5 and more (Bosnian) or for every other number (English).
+def _photos_videos_bs(kw, _s):
+    return (_word(kw.get("photos"), "{photos} slika", "{photos} slike", "{photos} slika") + " · "
+            + _word(kw.get("videos"), "{videos} video", "{videos} videa", "{videos} videa") + " · {size}")
+
+
+def _photos_videos_en(kw, s):
+    return (_word(kw.get("photos"), "{photos} photo", None, "{photos} photos") + " · "
+            + _word(kw.get("videos"), "{videos} video", None, "{videos} videos") + " · {size}")
+
+
+_FORMS_BS = {
+    "{n} deleted in iCloud": ("n", "{n} obrisan u iCloud-u", "{n} obrisana u iCloud-u"),
+    "{n} deleted on this PC": ("n", "{n} obrisan na PC-u", "{n} obrisana na PC-u"),
+    "{n} items are waiting for your OK to be deleted.": (
+        "n", "Čeka se tvoja potvrda za brisanje {n} stavke.", "Čeka se tvoja potvrda za brisanje {n} stavke."),
+    "Finished with {n} errors. Will retry.": (
+        "n", "Završeno uz {n} grešku. Pokušaću ponovo.", "Završeno uz {n} greške. Pokušaću ponovo."),
+    "iCloud Drive: finished with {n} errors. Will retry.": (
+        "n", "iCloud Drive: završeno uz {n} grešku. Pokušaću ponovo.",
+        "iCloud Drive: završeno uz {n} greške. Pokušaću ponovo."),
+    "Notes: finished with {n} errors. Will retry.": (
+        "n", "Bilješke: završeno uz {n} grešku. Pokušaću ponovo.", "Bilješke: završeno uz {n} greške. Pokušaću ponovo."),
+    "Followed {n} files moved inside the folder": (
+        "n", "Praćeno premještanje {n} fajla unutar foldera", "Praćeno premještanje {n} fajla unutar foldera"),
+    "Photos: {n} missing files are kept until {folder} can be read. Fix its access rights, or move that folder "
+    "out of the photos folder.": (
+        "n", "Fotografije: {n} fajl koji nedostaje zadržan je dok se {folder} ne može pročitati. Popravi prava "
+             "pristupa ili premjesti taj folder iz foldera s fotografijama.",
+        "Fotografije: {n} fajla koja nedostaju zadržana su dok se {folder} ne može pročitati. Popravi prava "
+        "pristupa ili premjesti taj folder iz foldera s fotografijama."),
+    "Photos: {n} missing files are kept for now, part of the photos folder couldn't be read": (
+        "n", "Fotografije: {n} fajl koji nedostaje zasad se ne dira, dio foldera s fotografijama se ne može pročitati",
+        "Fotografije: {n} fajla koja nedostaju zasad se ne diraju, dio foldera s fotografijama se ne može pročitati"),
+    "The first download is done: {n} files. From now on only changes are synced.": (
+        "n", "Prvo preuzimanje je gotovo: {n} fajl. Od sada se sinhronizuju samo izmjene.",
+        "Prvo preuzimanje je gotovo: {n} fajla. Od sada se sinhronizuju samo izmjene."),
+    "The first sync is done: {n} files downloaded. From now on only changes are synced.": (
+        "n", "Prva sinhronizacija je gotova: preuzet {n} fajl. Od sada se sinhronizuju samo izmjene.",
+        "Prva sinhronizacija je gotova: preuzeta {n} fajla. Od sada se sinhronizuju samo izmjene."),
+    "Drive: {name} is no longer synced; {n} files that aren't in iCloud were kept on this PC": (
+        "n", "Drive: {name} se više ne sinhronizuje; {n} fajl kojeg nema u iCloudu ostao je na računaru",
+        "Drive: {name} se više ne sinhronizuje; {n} fajla kojih nema u iCloudu ostala su na računaru"),
+    "{prefix}{i} of {n} files": ("n", "{prefix}{i} od {n} fajla", "{prefix}{i} od {n} fajla"),
+    "{n} photos were deleted in iCloud": ("n", "{n} slika je obrisana u iCloud-u", "{n} slike su obrisane u iCloud-u"),
+    "{n} photos were deleted on this PC": ("n", "{n} slika je obrisana na PC-u", "{n} slike su obrisane na PC-u"),
+    "Drive: uploading, {i} of {n} files done": (
+        "n", "Drive: šaljem, gotovo {i} od {n} fajla", "Drive: šaljem, gotovo {i} od {n} fajla"),
+    "{files} files · {size}": ("files", "{files} fajl · {size}", "{files} fajla · {size}"),
+    "{photos} photos · {videos} videos · {size}": _photos_videos_bs,
+    "Notes: moved {n} notes to other folders": (
+        "n", "Bilješke: {n} premještena u drugi folder", "Bilješke: {n} premještene u druge foldere"),
+    "{n} files": ("n", "{n} fajl", "{n} fajla"),
+    "Safari bookmarks: {n} saved for Firefox and Chrome": (
+        "n", "Safari oznake: {n} sačuvana za Firefox i Chrome", "Safari oznake: {n} sačuvane za Firefox i Chrome"),
+    "{n} days": ("n", "{n} dan", "{n} dana"),
+    "{n} items": ("n", "{n} stavka", "{n} stavke"),
+    "{n} months": ("n", "{n} mjesec", "{n} mjeseca"),
+    "{n} notes": ("n", "{n} bilješka", "{n} bilješke"),
+    "Deleting {n} items…": ("n", "Brišem {n} stavku…", "Brišem {n} stavke…"),
+    "{n} items couldn't be deleted: {error}": (
+        "n", "{n} stavka nije obrisana: {error}", "{n} stavke nisu obrisane: {error}"),
+}
+
+_FORMS_EN = {
+    "{n} items are waiting for your OK to be deleted.": ("n", "{n} item is waiting for your OK to be deleted.", None),
+    "Finished with {n} errors. Will retry.": ("n", "Finished with {n} error. Will retry.", None),
+    "iCloud Drive: finished with {n} errors. Will retry.": ("n", "iCloud Drive: finished with {n} error. Will retry.", None),
+    "Notes: finished with {n} errors. Will retry.": ("n", "Notes: finished with {n} error. Will retry.", None),
+    "Followed {n} files moved inside the folder": ("n", "Followed {n} file moved inside the folder", None),
+    "Photos: {n} missing files are kept until {folder} can be read. Fix its access rights, or move that folder "
+    "out of the photos folder.": (
+        "n", "Photos: {n} missing file is kept until {folder} can be read. Fix its access rights, or move that "
+             "folder out of the photos folder.", None),
+    "Photos: {n} missing files are kept for now, part of the photos folder couldn't be read": (
+        "n", "Photos: {n} missing file is kept for now, part of the photos folder couldn't be read", None),
+    "The first download is done: {n} files. From now on only changes are synced.": (
+        "n", "The first download is done: {n} file. From now on only changes are synced.", None),
+    "The first sync is done: {n} files downloaded. From now on only changes are synced.": (
+        "n", "The first sync is done: {n} file downloaded. From now on only changes are synced.", None),
+    "Drive: {name} is no longer synced; {n} files that aren't in iCloud were kept on this PC": (
+        "n", "Drive: {name} is no longer synced; {n} file that isn't in iCloud was kept on this PC", None),
+    "{prefix}{i} of {n} files": ("n", "{prefix}{i} of {n} file", None),
+    "{n} photos were deleted in iCloud": ("n", "{n} photo was deleted in iCloud", None),
+    "{n} photos were deleted on this PC": ("n", "{n} photo was deleted on this PC", None),
+    "Drive: uploading, {i} of {n} files done": ("n", "Drive: uploading, {i} of {n} file done", None),
+    "{files} files · {size}": ("files", "{files} file · {size}", None),
+    "{photos} photos · {videos} videos · {size}": _photos_videos_en,
+    "Notes: moved {n} notes to other folders": ("n", "Notes: moved {n} note to another folder", None),
+    "{n} days": ("n", "{n} day", None),
+    "{n} items": ("n", "{n} item", None),
+    "{n} months": ("n", "{n} month", None),
+    "{n} notes": ("n", "{n} note", None),
+    "Deleting {n} items…": ("n", "Deleting {n} item…", None),
+    "{n} items couldn't be deleted: {error}": ("n", "{n} item couldn't be deleted: {error}", None),
+}
+
+_FORMS = {"bs": _FORMS_BS, "en": _FORMS_EN}
