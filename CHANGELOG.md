@@ -2,6 +2,12 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.2] - 2026-11-27
+
+### Fixed
+- **A notification with photos stays above the taskbar.** The small pictures of the new photos are read after the card appears; the taller card used to reach down over the taskbar, where its countdown line couldn't be seen. It now moves up as it grows, and the cards above it make room.
+- **Skyfold's tests no longer write to your crash log.** Running Skyfold's tests on a PC where Skyfold is installed could add test entries to `%LOCALAPPDATA%\Skyfold\crash.log`; they now use a folder of their own.
+
 ## [1.1.1] - 2026-11-27
 
 ### Fixed
