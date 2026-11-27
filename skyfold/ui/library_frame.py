@@ -20,6 +20,30 @@ def count_font(base: QFont) -> QFont:
 class LibraryDialog(_Dialog):
     GLASS = True
 
+    def changeEvent(self, event) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            self._fit_maximized()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._fit_maximized()
+
+    def _fit_maximized(self) -> None:
+        """Maximized, Windows makes its title bar thinner and the window reaches the screen's edges:
+        the content layer then got right up under the caption buttons. It keeps a gap from the title
+        bar there, as in a normal window."""
+        lay = self.layout()
+        if lay is None:
+            return
+        if not hasattr(self, "_base_margins"):
+            self._base_margins = lay.contentsMargins()
+        m = self._base_margins
+        if self.isMaximized():
+            lay.setContentsMargins(m.left(), max(m.top(), 10), max(m.right(), 10), max(m.bottom(), 10))
+        else:
+            lay.setContentsMargins(m)
+
     def _glass_style(self) -> None:
         # _Dialog owns the native backdrop. These windows have their own pane and controls.
         # Their stylesheet is also rebuilt by apply_palette, including for Notes' local theme.

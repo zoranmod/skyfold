@@ -31,3 +31,23 @@ def test_translucent_client_has_no_click_through_pixels(kind, monkeypatch):
     finally:
         window.close()
         app.processEvents()
+
+
+@pytest.mark.parametrize("kind", ["notes", "photos"])
+def test_maximized_the_content_keeps_a_gap_under_the_title_bar(kind):
+    app = QApplication.instance() or QApplication([])
+    window = (NotesWindow(theme.DARK, lambda: None) if kind == "notes" else
+              PhotosWindow(theme.DARK, lambda: None, lambda: None))
+    try:
+        window.show()
+        app.processEvents()
+        normal = window.layout().contentsMargins()
+        window.showMaximized()
+        app.processEvents()
+        assert window.layout().contentsMargins().top() >= 10  # (not right up under Windows' caption buttons)
+        window.showNormal()
+        app.processEvents()
+        assert window.layout().contentsMargins() == normal
+    finally:
+        window.close()
+        app.processEvents()

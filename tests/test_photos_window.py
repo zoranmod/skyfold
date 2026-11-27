@@ -567,7 +567,7 @@ def test_the_wheel_glides_and_a_notch_after_another_adds_up(qapp, made_up, monke
         wheel(-120)
         assert smooth.target is None and bar.value() == min(bar.maximum(), bar.minimum() + notch)
     finally:
-        pw.PhotosWindow.zoom_level = 2
+        pw.PhotosWindow.zoom_level = 1  # (the default since 1.1: five columns)
         w.close()
 
 
@@ -665,7 +665,7 @@ def test_the_same_photos_stay_in_view_when_the_window_is_maximized(qapp, made_up
                 assert len(xs) == min(want, max(2, vp // 60)), (level, width, len(xs))
                 assert vp - len(xs) * w.tile < 40, (level, width)
     finally:
-        pw.PhotosWindow.zoom_level = 2
+        pw.PhotosWindow.zoom_level = 1  # (the default since 1.1: five columns)
         w.close()
 
 

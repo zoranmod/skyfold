@@ -17,7 +17,7 @@ from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import (QAbstractListModel, QEasingCurve, QEvent, QItemSelection, QItemSelectionModel, QObject,
+from PySide6.QtCore import (QAbstractListModel, QMargins, QEasingCurve, QEvent, QItemSelection, QItemSelectionModel, QObject,
                             QMimeData, QModelIndex, QPoint, QRect, QRectF, QSize, Qt, QTimer, QUrl, QVariantAnimation,
                             Signal)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetricsF, QGuiApplication, QIcon, QImage, QKeySequence,
@@ -1879,7 +1879,8 @@ class PhotosWindow(LibraryDialog):
     def eventFilter(self, obj, e):  # noqa: N802
         if obj is getattr(self, "side", None) and e.type() in (QEvent.Show, QEvent.Hide):
             # without the sidebar the pane keeps the same 8 px of material on its left as on its right
-            self.layout().setContentsMargins(0 if not self.side.isHidden() else 8, 4, 8, 8)
+            self._base_margins = QMargins(0 if not self.side.isHidden() else 8, 4, 8, 8)
+            self._fit_maximized()  # (maximized: a gap under the title bar as well)
         return super().eventFilter(obj, e)
 
     NARROW = 820  # below this the sidebar steps aside by itself (the ☰ button still opens it)
