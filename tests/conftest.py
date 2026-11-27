@@ -67,3 +67,20 @@ def _network_policy_per_test():
     requests.Session.send = send
     netpolicy._INSTALLED = installed
     netdiag._until = 0.0
+
+
+@pytest.fixture(autouse=True)
+def _crash_log_in_tmp(tmp_path, monkeypatch):
+    """No test writes the user's real crash.log: a test that starts Skyfold (main) gets one in its own
+    temporary folder, and afterwards a crash in a later test is reported by pytest as usual."""
+    import faulthandler
+    import sys
+
+    from skyfold import app
+
+    monkeypatch.setattr(app, "LOG_FILE", tmp_path / "skyfold.log")
+    monkeypatch.setattr(app, "_CRASH_FILE", None)
+    yield
+    if app._CRASH_FILE is not None:
+        faulthandler.enable(file=sys.__stderr__, all_threads=True)
+        app._CRASH_FILE.close()

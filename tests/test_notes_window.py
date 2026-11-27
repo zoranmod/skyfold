@@ -635,11 +635,8 @@ def test_crash_log_is_set_up(tmp_path, monkeypatch):
     monkeypatch.setattr(faulthandler, "enable", lambda **k: calls.append(k))
     monkeypatch.setattr(app, "_CRASH_FILE", None)
     app.setup_crash_log()
-    try:
-        assert calls and calls[0]["all_threads"] and calls[0]["file"] is app._CRASH_FILE
-        assert "started" in (tmp_path / "crash.log").read_text(encoding="utf-8")
-    finally:
-        app._CRASH_FILE.close()
+    assert calls and calls[0]["all_threads"] and calls[0]["file"] is app._CRASH_FILE
+    assert "started" in (tmp_path / "crash.log").read_text(encoding="utf-8")  # (conftest closes it)
 
 
 def test_account_change_closes_notes_on_the_ui_thread_and_only_for_another_account(qapp):
