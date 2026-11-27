@@ -167,6 +167,9 @@ def _rgba(c: QColor, alpha: float) -> str:
     return f"rgba({c.red()}, {c.green()}, {c.blue()}, {max(0, min(255, int(alpha * 255)))})"
 
 
+STOP, STOP_HOVER, STOP_PRESSED = "#c42b1c", "#d23a2a", "#a72417"  # Stop: Windows' own red, white on it
+
+
 def accent_fill(colour: str, alpha: float = 1.0) -> str:
     """The main buttons' fill: the accent with a little light at the top, as on Windows 11's accent
     buttons (alpha < 1: see-through over Windows' blur)."""
@@ -224,8 +227,10 @@ QToolButton#Bar::menu-indicator {{ image: none; width: 0; }}
 QToolButton#Bar[primary="true"], QToolButton#Bar[wide="true"] {{ font-size: 9.75pt; font-weight: 600;
     padding: 0 12px; min-width: 106px; max-width: 106px; }}
 QToolButton#Bar[primary="true"] {{ background: {accent_fill(c['btn'])}; color: {c['accent_text']}; {accent_edges(c['btn'])} }}
-QToolButton#Bar[wide="true"] {{ color: {c['text']}; background: {c['surface']}; border: 1px solid {c['border']};
-    border-bottom-color: {c['border_strong']}; }}
+QToolButton#Bar[wide="true"] {{ color: #ffffff; background: {accent_fill(STOP)}; {accent_edges(STOP)} }}
+QToolButton#Bar[wide="true"]:hover {{ background: {accent_fill(STOP_HOVER)}; {accent_edges(STOP_HOVER)} color: #ffffff; }}
+QToolButton#Bar[wide="true"]:pressed {{ background: {STOP_PRESSED}; color: #ffffff; }}
+QToolButton#Bar[wide="true"]:focus {{ border: 2px solid {c['text']}; }}
 QToolButton#Bar[primary="true"]:hover {{ background: {accent_fill(c['btn_hover'])}; {accent_edges(c['btn_hover'])} color: {c['accent_text']}; }}
 QToolButton#Bar[primary="true"]:pressed {{ background: {c['btn_pressed']}; color: {c['accent_text']}; }}
 QToolButton#Bar[primary="true"]:focus {{ border: 2px solid {c['text']}; }}

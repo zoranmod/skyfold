@@ -594,6 +594,9 @@ class SyncWorker(QObject):
                 self._drive_want_full = True
             if self._drive_thread is not None and self._drive_thread.is_alive():
                 return  # the running pass picks the request up when it finishes
+            with self._state_lock:  # (shown at once: the Photos pass ending meanwhile must not flash "done")
+                if self._drive_ui[0] not in ("error", "offline"):
+                    self._drive_ui = ("syncing", t("Checking iCloud Drive…"))
             self._drive_thread = threading.Thread(target=self._drive_loop, name="SkyfoldDrive", daemon=True)
             self._drive_thread.start()
 
@@ -602,6 +605,13 @@ class SyncWorker(QObject):
         return t_ is not None and t_.is_alive()
 
     def _drive_loop(self) -> None:
+        try:
+            self._drive_passes()
+        finally:
+            if self._drive_ui[0] == "syncing":  # (left without a pass: never stay at "syncing")
+                self._set_state("idle", "", "drive")
+
+    def _drive_passes(self) -> None:
         while True:
             with self._drive_lock:
                 if self.drive is None:

@@ -145,6 +145,9 @@ def round_corners(widget: QWidget) -> None:
         pass
 
 
+ARROWS_DEG_PER_MS = 0.36  # the small arrows by "Syncing…": one turn a second
+RING_DEG_PER_MS = 0.576  # the arc in the status ring: a little faster
+
 BADGE = 32  # header badges (status, iCloud storage): small round buttons beside the gear
 
 
@@ -728,9 +731,13 @@ class Flyout(QWidget):
         self.status_icon = QLabel()
         self.status_icon.setFixedSize(13, 13)
         self._spin = QTimer(self)  # turns the sync arrows next to "Syncing…" while a pass runs
-        self._spin.setInterval(50)
+        self._spin.setInterval(16)  # (about 60 frames a second: a smooth turn)
+        self._spin.setTimerType(Qt.PreciseTimer)
         self._spin.timeout.connect(self._spin_tick)
         self._spin_angle = 0.0
+        from PySide6.QtCore import QElapsedTimer
+
+        self._spin_clock = QElapsedTimer()  # the angles follow the clock, not the number of frames
         self._spin_base: QPixmap | None = None
         self.status_line = QLabel("")
         self.status_line.setTextFormat(Qt.PlainText)
@@ -965,7 +972,7 @@ class Flyout(QWidget):
             self.setStyleSheet("")
             return
         from .backdrop import glass_colours
-        from .theme import accent_edges, accent_fill
+        from .theme import STOP, STOP_HOVER, accent_edges, accent_fill
 
         g = glass_colours(self.c, QColor(self.c["bg"]).lightness() < 128)
         self.setStyleSheet(
@@ -976,7 +983,10 @@ class Flyout(QWidget):
             f"QFrame#BottomBar {{ background: {g['foot']}; border-top: 1px solid {g['stroke']}; }}"
             f"QFrame#Row:hover, QFrame#ActRow[link=\"true\"]:hover {{ background: {g['hover']}; }}"
             f"QToolButton#Bar {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
-            f"QToolButton#Bar[wide=\"true\"] {{ background: {g['control']}; border-color: {g['stroke2']}; }}"
+            # Stop: the same kind of button in red, as see-through as the blue one
+            f"QToolButton#Bar[wide=\"true\"] {{ background: {accent_fill(STOP, 0.72)}; {accent_edges(STOP, 0.8)} }}"
+            f"QToolButton#Bar[wide=\"true\"]:hover {{ background: {accent_fill(STOP_HOVER, 0.85)};"
+            f" {accent_edges(STOP_HOVER, 0.9)} }}"
             # the main button: the accent, see-through enough for the blur to show in it
             f"QToolButton#Bar[primary=\"true\"] {{ background: {accent_fill(self.c['btn'], 0.68)};"
             f" {accent_edges(self.c['btn'], 0.75)} }}"
@@ -1105,13 +1115,13 @@ class Flyout(QWidget):
         self.sync_btn.setText(label)
         self.sync_btn.setToolTip(t("Resume syncing") if state == "paused" else label)
         self.sync_btn.setAccessibleName(self.sync_btn.toolTip())
-        quiet = state == "syncing"  # Stop is a quiet button in the same place; the rest is the accent
+        quiet = state == "syncing"  # Stop is the red button in the same place; the rest is the accent
         if bool(self.sync_btn.property("wide")) != quiet:
             self.sync_btn.setProperty("primary", not quiet)
             self.sync_btn.setProperty("wide", quiet)
             self.sync_btn.style().unpolish(self.sync_btn)
             self.sync_btn.style().polish(self.sync_btn)
-        self.sync_btn.setIcon(glyph("stop" if quiet else name, self.c["text"] if quiet else self.c["accent_text"]))
+        self.sync_btn.setIcon(glyph("stop" if quiet else name, "#ffffff" if quiet else self.c["accent_text"]))
         self.sync_btn.set_glyph("stop" if quiet else name)  # drawn centred with the text, in its colour
         self.sync_btn.setEnabled(True)  # paused: this button is the way to continue
         self._status_line()
@@ -1162,18 +1172,24 @@ class Flyout(QWidget):
         if icon == "sync" and animations_on():
             self._spin_base = pix
             if not self._spin.isActive():
+                if not self._spin_clock.isValid():
+                    self._spin_clock.start()
                 self._spin.start()
         else:
             self._spin.stop()
             self._spin_base = None
             self._spin_angle = 0.0
+            self._spin_clock.invalidate()
         self.status_line.setText(title)
         self.status_line.setStyleSheet(f"color: {color};")
 
     def _spin_tick(self) -> None:
         if self._spin_base is None or not self.isVisible():
             return  # hidden panel: nothing to draw
-        self._spin_angle = (self._spin_angle + 18) % 360
+        ms = self._spin_clock.elapsed() if self._spin_clock.isValid() else 0
+        # each turns at its own steady speed and wraps on its own: the ring's arc used to follow the
+        # arrows' angle x 1.6, which jumped back from 216° to 0° each time the arrows came round
+        self._spin_angle = (ms * ARROWS_DEG_PER_MS) % 360
         dpr = self._spin_base.devicePixelRatio()
         canvas = QPixmap(round(13 * dpr), round(13 * dpr))
         canvas.setDevicePixelRatio(dpr)
@@ -1187,7 +1203,7 @@ class Flyout(QWidget):
         p.drawPixmap(0, 0, self._spin_base)
         p.end()
         self.status_icon.setPixmap(canvas)
-        self.badge.spin(self._spin_angle * 1.6)
+        self.badge.spin((ms * RING_DEG_PER_MS) % 360)
 
     def set_progress(self, done: int, total: int, text: str) -> None:
         if self.state != "syncing" or total <= 0:
