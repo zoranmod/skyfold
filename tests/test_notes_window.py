@@ -404,6 +404,22 @@ def test_sort_zoom_full_screen_and_keys(qapp, library):
     w.close()
 
 
+def test_the_zoom_hint_does_not_fade_with_windows_animations_off(qapp, library, monkeypatch):
+    from skyfold.ui import notes_window
+    w = window(qapp, library)
+    hint = w.zoom_hint
+    monkeypatch.setattr(notes_window, "animations_on", lambda: False)
+    hint.flash("110%")
+    assert hint.isVisible()
+    hint.timer.timeout.emit()  # its moment is over
+    assert not hint.isVisible() and hint.fade.state() != hint.fade.State.Running
+    monkeypatch.setattr(notes_window, "animations_on", lambda: True)
+    hint.flash("120%")
+    hint.timer.timeout.emit()
+    assert hint.isVisible() and hint.fade.state() == hint.fade.State.Running  # (with them on, it fades)
+    w.close()
+
+
 @pytest.mark.parametrize("lang", ["en", "bs"])
 def test_fits_a_small_screen(qapp, library, lang):
     from skyfold import i18n

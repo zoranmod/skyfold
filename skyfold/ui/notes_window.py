@@ -41,6 +41,7 @@ from .dialogs import Combo
 from .library_frame import LibraryDialog, SearchField, count_font
 from .panel_parts import SoftCard
 from .settings_parts import ElidedLabel
+from .glow import animations_on
 from .icons import glyph
 from .theme import service_color
 
@@ -1091,6 +1092,9 @@ class _ZoomHint(QWidget):
 
     def _fade_out(self) -> None:
         self.fade.stop()
+        if not animations_on():  # Windows animation effects off: gone at once, no fade
+            self.hide()
+            return
         self.fade.setStartValue(self.effect.opacity())
         self.fade.setEndValue(0.0)
         self.fade.start()
