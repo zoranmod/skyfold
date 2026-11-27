@@ -505,7 +505,10 @@ class ToastCard(QWidget):
             from .flyout import round_corners
 
             light = theme_kind(self.c) == "light"
-            blur_behind(self, QColor(243, 244, 247, 150) if light else QColor(30, 33, 39, 150))
+            from .backdrop import glass_colours
+
+            r, g, b, a = (int(x) for x in glass_colours(self.c, not light)["tint"][5:-1].split(","))
+            blur_behind(self, QColor(r, g, b, a))
             round_corners(self)
 
     def remaining(self) -> int:

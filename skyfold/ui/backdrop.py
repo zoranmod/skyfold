@@ -102,16 +102,30 @@ def apply_backdrop(widget: QWidget, kind: str = "acrylic", dark: bool = True) ->
 
 def glass_colours(c: dict[str, str], dark: bool) -> dict[str, str]:
     """The layers over the window material: a tint over the whole window, then cards, the footer,
-    hover and control fills, all partly see-through (rgba)."""
+    hover and control fills, all partly see-through (rgba).
+
+    The tint is about as dense as the design's material (80 % over the blurred desktop): enough for
+    small text to stay readable over a bright wallpaper. OLED is its own, much blacker material,
+    so it stays clearly apart from Dark."""
+    if c.get("bg") == "#000000":  # OLED: nearly black glass
+        return {"tint": "rgba(0, 0, 0, 220)", "card": "rgba(255, 255, 255, 12)", "stroke": "rgba(255, 255, 255, 20)",
+                "stroke2": "rgba(255, 255, 255, 30)", "shade": "rgba(0, 0, 0, 90)", "foot": "rgba(0, 0, 0, 90)",
+                "hover": "rgba(255, 255, 255, 20)", "control": "rgba(255, 255, 255, 16)"}
     if dark:
-        return {"tint": "rgba(30, 33, 39, 150)", "card": "rgba(255, 255, 255, 13)", "stroke": "rgba(255, 255, 255, 20)",
+        return {"tint": "rgba(30, 33, 39, 185)", "card": "rgba(255, 255, 255, 13)", "stroke": "rgba(255, 255, 255, 20)",
                 "shade": "rgba(0, 0, 0, 70)",
                 "stroke2": "rgba(255, 255, 255, 30)", "foot": "rgba(0, 0, 0, 34)", "hover": "rgba(255, 255, 255, 20)",
                 "control": "rgba(255, 255, 255, 18)"}
-    return {"tint": "rgba(243, 244, 247, 150)", "card": "rgba(255, 255, 255, 170)", "stroke": "rgba(0, 0, 0, 15)",
+    return {"tint": "rgba(243, 244, 247, 185)", "card": "rgba(255, 255, 255, 170)", "stroke": "rgba(0, 0, 0, 15)",
             "shade": "rgba(0, 0, 0, 22)",
             "stroke2": "rgba(0, 0, 0, 26)", "foot": "rgba(255, 255, 255, 70)", "hover": "rgba(0, 0, 0, 10)",
             "control": "rgba(255, 255, 255, 200)"}
+
+
+def rgba(text: str) -> QColor:
+    """'rgba(30, 33, 39, 185)' as a QColor."""
+    r, g, b, a = (int(x) for x in text.strip()[5:-1].split(","))
+    return QColor(r, g, b, a)
 
 
 def blur_behind(widget: QWidget, tint: QColor | None = None) -> bool:

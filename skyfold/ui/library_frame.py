@@ -37,7 +37,7 @@ class LibraryDialog(_Dialog):
             self.style().drawPrimitive(QStyle.PE_Widget, option, p, self)
 
     def _veil(self) -> str:
-        return "rgba(30, 33, 39, 46)" if self._dark() else "rgba(243, 244, 247, 60)"
+        return glass_colours(self.c, self._dark())["tint"]  # (the same veil as every other window)
 
     def frame_style(self) -> str:
         c = self.c
@@ -47,7 +47,7 @@ class LibraryDialog(_Dialog):
         return (
             # a light veil over Windows' acrylic (which brings its own tint): what is behind shows
             # through as in the design; the old 150/255 veil made the windows look nearly solid
-            f"QDialog#Root {{ background:{self._veil() if material else c['bg']}; }}"
+            f"QDialog#Root {{ background:{'transparent' if material else c['bg']}; }}"  # (_Dialog paints the veil)
             f"SoftCard#LibraryPane {{ qproperty-fill:{g.get('card', c['surface'])};"
             f" qproperty-stroke:{g.get('stroke', c['border'])}; qproperty-shade:transparent; }}"
             f"SoftCard#LibrarySearch {{ qproperty-fill:{g.get('control', c['surface2'])};"

@@ -281,6 +281,19 @@ class _Dialog(QDialog):
         if sheet != self.styleSheet():  # (setting it again would announce another change: a loop)
             self.setStyleSheet(sheet)
 
+    def paintEvent(self, e) -> None:  # noqa: N802
+        if self.glass:
+            # the theme's veil over Windows' material: dense enough for small text to stay readable
+            # over a bright wallpaper (a see-through window doesn't paint its style sheet background)
+            from PySide6.QtGui import QPainter as _P
+
+            from .backdrop import glass_colours, rgba
+
+            p = _P(self)
+            p.fillRect(self.rect(), rgba(glass_colours(self.c, self._dark())["tint"]))
+            return
+        super().paintEvent(e)
+
     def showEvent(self, e) -> None:  # noqa: N802
         super().showEvent(e)
         if self.glass:
