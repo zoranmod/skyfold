@@ -138,6 +138,7 @@ class SyncWorker(QObject):
         self.busy = False
         self._again: tuple[bool, bool] | None = None  # (full photos check, force drive)
         self._watchers: dict[str, _Watcher] = {}
+        self._watchers_lock = threading.Lock()  # Quit can drain these from the UI thread
         self._pending: Pending | None = None
         self._drive_pending: Pending | None = None
         self._drive_last = 0.0
@@ -543,23 +544,37 @@ class SyncWorker(QObject):
         wanted = {"photos": (self.settings.photos_dir, self._photos_hit)}
         if self.settings.drive_enabled:
             wanted["drive"] = (self.settings.drive_dir, self._drive_hit)
-        for key in list(self._watchers):
-            w = self._watchers[key]
-            if key not in wanted or w.root != wanted[key][0] or not w.alive():
-                w.stop()
-                del self._watchers[key]
-        for key, (root, hit) in wanted.items():
-            if key in self._watchers or not Path(root).exists():
+        with self._watchers_lock:
+            stale = [key for key, w in self._watchers.items()
+                     if key not in wanted or w.root != wanted[key][0] or not w.alive()]
+            retiring = [self._watchers.pop(key) for key in stale]
+            missing = {key: entry for key, entry in wanted.items() if key not in self._watchers}
+        for watcher in retiring:
+            watcher.stop()
+        for key, (root, hit) in missing.items():
+            if self._closing_now():
+                return
+            if not Path(root).exists():
                 continue
             try:
-                self._watchers[key] = _Watcher(root, hit)
+                watcher = _Watcher(root, hit)
             except (OSError, ImportError) as exc:
                 log.warning("Watcher for %s failed: %s", root, exc)
+                continue
+            with self._watchers_lock:
+                if not self._closing_now():
+                    self._watchers[key] = watcher
+                    continue
+            # Quit may have drained the registry while watchdog was starting.
+            watcher.stop()
+            return
 
     def _stop_watchers(self) -> None:
-        for w in self._watchers.values():
+        with self._watchers_lock:
+            watchers = list(self._watchers.values())
+            self._watchers.clear()
+        for w in watchers:
             w.stop()
-        self._watchers.clear()
 
     # sync -------------------------------------------------------------------
     @Slot(bool)
