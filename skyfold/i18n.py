@@ -70,8 +70,8 @@ BS: dict[str, str] = {
     "Choose folder": "Izaberi folder",
     "Signing in to iCloud is required to sync.": "Za sinhronizaciju je potrebna prijava na iCloud.",
     "Last check: {when}": "Zadnja provjera: {when}",
-    "{n} deleted in iCloud": "{n} obrisanih u iCloud-u",
-    "{n} deleted on this PC": "{n} obrisanih na PC-u",
+    "{n} deleted in iCloud": "Obrisano u iCloud-u: {n}",
+    "{n} deleted on this PC": "Obrisano na PC-u: {n}",
     "A large deletion is waiting for your OK: {what}.": "Veliko brisanje čeka potvrdu: {what}.",
     " and ": " i ",
     # time ------------------------------------------------------------------------
@@ -93,12 +93,12 @@ BS: dict[str, str] = {
     "Sync stopped.": "Sinhronizacija prekinuta.",
     "Error: {error}": "Greška: {error}",
     "Sync error: {error}": "Greška pri sinhronizaciji: {error}",
-    "{n} items are waiting for your OK to be deleted.": "Čeka se tvoja potvrda za brisanje {n} stavki.",
+    "{n} items are waiting for your OK to be deleted.": "Stavke koje čekaju tvoju potvrdu za brisanje: {n}.",
     "Downloaded: {n}": "Preuzeto: {n}",
     "Deleted on PC: {n}": "Obrisano na PC-u: {n}",
     "Deleted in iCloud: {n}": "Obrisano u iCloud-u: {n}",
     "Photos synced": "Slike sinhronizovane",
-    "Finished with {n} errors. Will retry.": "Završeno uz {n} grešaka. Pokušaću ponovo.",
+    "Finished with {n} errors. Will retry.": "Završeno, broj grešaka: {n}. Pokušaću ponovo.",
     "Photos you deleted only on this PC will be downloaded again.": "Ručno obrisane slike će biti ponovo preuzete.",
     # engine ----------------------------------------------------------------------
     "Photos folder is not available: {path}": "Folder za slike nije dostupan: {path}",
@@ -106,7 +106,7 @@ BS: dict[str, str] = {
     "Syncing has stopped so nothing gets deleted by mistake.":
         "Folder za slike ne izgleda kao ranije (nedostaje oznaka sinhronizacije). "
         "Sinhronizacija je zaustavljena da se ništa ne bi obrisalo greškom.",
-    "Followed {n} files moved inside the folder": "Praćeno premještanje {n} fajlova unutar foldera",
+    "Followed {n} files moved inside the folder": "Praćeno premještanje fajlova unutar foldera: {n}",
     "Checking iCloud for changes…": "Provjeravam promjene u iCloud-u…",
     "Reading your iCloud library…": "Čitam iCloud biblioteku…",
     "Reading your iCloud library… {n}": "Čitam iCloud biblioteku… {n}",
@@ -204,14 +204,14 @@ BS: dict[str, str] = {
         "ili sam premjesti taj fajl negdje drugo.",
     "Photos: {n} missing files are kept until {folder} can be read. Fix its access rights, or move that folder "
     "out of the photos folder.":
-        "Fotografije: {n} fajlova koji nedostaju zadržano je dok se {folder} ne može pročitati. Popravi prava pristupa "
+        "Fotografije: fajlovi koji nedostaju ({n}) zadržani su dok se {folder} ne može pročitati. Popravi prava pristupa "
         "ili premjesti taj folder iz foldera s fotografijama.",
     "The sync database of the earlier installation couldn't be taken over. The earlier file is kept "
     "unchanged:\n{details}\n\nStart with a new database? (No: Skyfold closes now and tries again at the next start.)":
         "Baza sinhronizacije ranije instalacije nije mogla biti preuzeta. Raniji fajl je zadržan nepromijenjen:"
         "\n{details}\n\nPočeti s novom bazom? (Ne: Skyfold se sad zatvara i pokušava ponovo pri sljedećem pokretanju.)",
     "Photos: {n} missing files are kept for now, part of the photos folder couldn't be read":
-        "Fotografije: {n} fajlova koji nedostaju zasad se ne diraju, dio foldera s fotografijama se ne može pročitati",
+        "Fotografije: fajlovi koji nedostaju ({n}) zasad se ne diraju, dio foldera s fotografijama se ne može pročitati",
     "This Drive folder belongs to another Apple ID. Choose a new, empty folder for iCloud Drive in Settings.":
         "Ovaj Drive folder pripada drugom Apple ID-u. U Postavkama izaberi novi, prazan folder za iCloud Drive.",
     "{name} leads outside the Drive folder; left alone": "{name} vodi izvan Drive foldera; ostavljeno kako jeste",
@@ -299,10 +299,10 @@ BS: dict[str, str] = {
     "Copy text": "Kopiraj tekst",
     "Your photos are on this PC": "Tvoje slike su na ovom PC-u",
     "The first download is done: {n} files. From now on only changes are synced.":
-        "Prvo preuzimanje je gotovo: {n} fajlova. Od sada se sinhronizuju samo izmjene.",
+        "Prvo preuzimanje je gotovo, preuzeto fajlova: {n}. Od sada se sinhronizuju samo izmjene.",
     "iCloud Drive is ready": "iCloud Drive je spreman",
     "The first sync is done: {n} files downloaded. From now on only changes are synced.":
-        "Prva sinhronizacija je gotova: preuzeto {n} fajlova. Od sada se sinhronizuju samo izmjene.",
+        "Prva sinhronizacija je gotova, preuzeto fajlova: {n}. Od sada se sinhronizuju samo izmjene.",
     "FOLDERS": "FOLDERI",
     "Choose folders…": "Izaberi foldere…",
     "Folders you leave out stay in iCloud untouched and aren't downloaded.":
@@ -331,13 +331,13 @@ BS: dict[str, str] = {
     "Couldn't read iCloud Drive: {error}": "Ne mogu pročitati iCloud Drive: {error}",
     "Loading…": "Učitavam…",
     "Drive: {name} is no longer synced; {n} files that aren't in iCloud were kept on this PC":
-        "Drive: {name} se više ne sinhronizuje; {n} fajlova kojih nema u iCloudu ostalo je na računaru",
+        "Drive: {name} se više ne sinhronizuje; fajlovi kojih nema u iCloudu ostali su na računaru ({n})",
     "Drive: moved to the Recycle Bin (no longer synced): {name}": "Drive: premješteno u Recycle Bin (više se ne sinhronizuje): {name}",
     "less than a minute": "manje od minute",
     "about {m} min": "oko {m} min",
     "about {h} h {m} min": "oko {h} h {m} min",
     "about {h} h": "oko {h} h",
-    "{prefix}{i} of {n} files": "{prefix}{i} od {n} fajlova",
+    "{prefix}{i} of {n} files": "{prefix}fajlovi {i} od {n}",
     "{done} of {total}": "{done} od {total}",
     "{speed}/s": "{speed}/s",
     "{time} left": "još {time}",
@@ -480,10 +480,10 @@ BS: dict[str, str] = {
     "Nothing is deleted permanently.":
         "Radi sigurnosti, kad se odjednom briše više stavki nego što je dozvoljeno u postavkama, "
         "Skyfold prvo pita. Ništa se ne briše trajno.",
-    "{n} photos were deleted in iCloud": "{n} slika je obrisano u iCloud-u",
+    "{n} photos were deleted in iCloud": "Obrisano slika u iCloud-u: {n}",
     "{n} files or folders were deleted in iCloud Drive": "Obrisano na iCloud Driveu (fajlova ili foldera): {n}",
     "{n} files or folders were deleted on this PC": "Obrisano na ovom PC-u (fajlova ili foldera): {n}",
-    "{n} photos were deleted on this PC": "{n} slika je obrisano na PC-u",
+    "{n} photos were deleted on this PC": "Obrisano slika na PC-u: {n}",
     "Delete on this PC too": "Obriši i na PC-u",
     "Keep on this PC": "Zadrži na PC-u",
     "Delete in iCloud too": "Obriši i u iCloud-u",
@@ -528,7 +528,7 @@ BS: dict[str, str] = {
     "Drive: uploaded {n} files": "Drive: poslano fajlova: {n}",
     "Drive: uploading {i} of {n}": "Drive: šaljem {i} od {n}",
     "Drive: uploading ": "Drive: šaljem ",
-    "Drive: uploading, {i} of {n} files done": "Drive: šaljem, gotovo {i} od {n} fajlova",
+    "Drive: uploading, {i} of {n} files done": "Drive: šaljem, gotovo fajlova: {i} od {n}",
     "Enabled": "Uključeno",
     "File/folder clash, skipped: {name}": "Fajl i folder istog imena, preskočeno: {name}",
     "Files are downloaded to this PC; there are no online-only placeholders.":
@@ -566,8 +566,8 @@ BS: dict[str, str] = {
         "kad obrišeš jedan tamo, briše se i u iCloud-u. Nastaviti?",
     "iCloud Drive": "iCloud Drive",
     "iCloud Drive synced": "iCloud Drive sinhronizovan",
-    "iCloud Drive: finished with {n} errors. Will retry.": "iCloud Drive: završeno uz {n} grešaka. Pokušaću ponovo.",
-    "Notes: finished with {n} errors. Will retry.": "Bilješke: završeno uz {n} grešaka. Pokušaću ponovo.",
+    "iCloud Drive: finished with {n} errors. Will retry.": "iCloud Drive: završeno, broj grešaka: {n}. Pokušaću ponovo.",
+    "Notes: finished with {n} errors. Will retry.": "Bilješke: završeno, broj grešaka: {n}. Pokušaću ponovo.",
     "Skyfold {version} is published, but its download isn't complete yet. Try again later.":
         "Skyfold {version} je objavljen, ali preuzimanje još nije spremno. Pokušaj ponovo kasnije.",
     "{n} min": "{n} min",
@@ -575,8 +575,8 @@ BS: dict[str, str] = {
     "checked {when}": "provjereno {when}",
     "first read pending": "čeka prvo čitanje",
     "first sync in progress": "prva sinhronizacija u toku",
-    "{files} files · {size}": "{files} fajlova · {size}",
-    "{photos} photos · {videos} videos · {size}": "{photos} slika · {videos} videa · {size}",
+    "{files} files · {size}": "fajlova: {files} · {size}",
+    "{photos} photos · {videos} videos · {size}": "slika: {photos} · videa: {videos} · {size}",
     # Notes -----------------------------------------------------------------------------
     "Notes": "Bilješke",
     "Apple Notes": "Apple bilješke",
@@ -607,7 +607,7 @@ BS: dict[str, str] = {
     "Notes: moved {name} to {folder}": "Bilješke: „{name}” premještena u {folder}",
     "Notes: updated {name}": "Bilješke: ažurirana „{name}”",
     "Notes: renamed {old} to {name}": "Bilješke: „{old}” preimenovana u „{name}”",
-    "Notes: moved {n} notes to other folders": "Bilješke: {n} premještenih u druge foldere",
+    "Notes: moved {n} notes to other folders": "Bilješke: premješteno u druge foldere: {n}",
     "Note has no content": "Bilješka nema sadržaj",
     "Untitled": "Bez naslova",
     "Search notes…": "Pretraži bilješke…",
@@ -668,7 +668,7 @@ BS: dict[str, str] = {
     "Upload photos and videos I add to this folder to iCloud Photos": "Šalji u iCloud slike i videe koje dodam u ovaj folder",
     "Uploading {name}…": "Šaljem {name}…",
     "Uploading {name}": "Šaljem {name}",
-    "{n} files": "{n} fajlova",
+    "{n} files": "više fajlova ({n})",
     "Upload unconfirmed: {name}. Check iCloud Photos and add it there manually if missing.": "Slanje nije potvrđeno: {name}. Provjeri iCloud slike i dodaj fajl ručno ako ga nema.",
     "Upload failed ({name}): {error}": "Slanje nije uspjelo ({name}): {error}",
     "Already in iCloud Photos: {name}": "Već je u iCloud slikama: {name}",
@@ -705,7 +705,7 @@ BS: dict[str, str] = {
     "Safari bookmarks can't be read: iCloud answered {code}.": 'Safari oznake se ne mogu pročitati: iCloud je odgovorio {code}.',
     "Safari bookmarks can't be read: iCloud didn't allow it ({code}).": 'Safari oznake se ne mogu pročitati: iCloud to nije dozvolio ({code}).',
     "Safari bookmarks can't be read: too many pages.": 'Safari oznake se ne mogu pročitati: previše stranica.',
-    'Safari bookmarks: {n} saved for Firefox and Chrome': 'Safari oznake: {n} sačuvano za Firefox i Chrome',
+    'Safari bookmarks: {n} saved for Firefox and Chrome': 'Safari oznake sačuvane za Firefox i Chrome: {n}',
     "{name} wasn't written by Skyfold; it is left as it is. Move it or choose another folder for Safari bookmarks.": '{name} nije napravio Skyfold; ostaje kakav jeste. Premjesti ga ili izaberi drugi folder za Safari oznake.',
     "The attachment folder {name} leads outside the Notes folder; nothing is written there.":
         "Folder s prilozima {name} vodi izvan foldera s bilješkama; tamo se ništa ne upisuje.",
@@ -886,10 +886,10 @@ BS: dict[str, str] = {
     'Years': 'Godine',
     'and to Recently Deleted in iCloud': 'i u Recently Deleted u iCloudu',
     '{a} of {b}': '{a} od {b}',
-    '{n} days': '{n} dana',
-    '{n} items': '{n} stavki',
+    '{n} days': 'dana: {n}',
+    '{n} items': 'stavki: {n}',
     '{n} items moved to the Recycle Bin': 'Stavke premještene u Koš: {n}',
-    '{n} months': '{n} mjeseci',
+    '{n} months': 'mjeseci: {n}',
     '{n} results': 'Rezultata: {n}',
     '{n} selected': 'Odabrano: {n}',
     'January': 'Januar',
@@ -913,9 +913,9 @@ BS: dict[str, str] = {
     'Sunday': 'Nedjelja',
     'This photo couldn\'t be opened. Is it still in the photos folder?': 'Ova slika se ne može otvoriti. Da li je još u folderu sa slikama?',
     'Still deleting the previous photos': 'Još se brišu prethodne slike',
-    'Deleting {n} items…': 'Brišem {n} stavki…',
+    'Deleting {n} items…': 'Brišem stavke: {n}…',
     'iCloud gets the deletion at the next sync.': 'U iCloudu se briše pri sljedećoj sinhronizaciji.',
-    '{n} items couldn\'t be deleted: {error}': '{n} stavki nije obrisano: {error}',
+    '{n} items couldn\'t be deleted: {error}': 'Nije obrisano stavki: {n}. {error}',
     '{name} was moved or replaced since it was synced; it was left alone': '{name} je premješten ili zamijenjen nakon sinhronizacije, pa je ostavljen na miru',
     'Hidden in iCloud, kept on this PC: {name}': 'Sakriveno u iCloudu, ostaje na ovom PC-u: {name}',
     "Deleted in iCloud, kept on this PC (it can't go to the Recycle Bin there): {name}": 'Obrisano u iCloudu, ostaje na ovom PC-u (tamo ne može u Koš): {name}',
