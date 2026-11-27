@@ -540,6 +540,17 @@ BS: dict[str, str] = {
     "Reading iCloud Drive…": "Čitam iCloud Drive…",
     "Reading iCloud Drive… {n}": "Čitam iCloud Drive… {n}",
     "Settings: the 'data' folder next to the app.": "Postavke: folder 'data' pored aplikacije.",
+    "Settings: {path}": "Postavke: {path}",
+    "Couldn't read this folder. Close and open it again to try again.":
+        "Ovaj folder se ne može pročitati. Zatvori ga i ponovo otvori da pokušaš opet.",
+    "iCloud didn't list every folder. Folders that aren't shown keep their current setting.":
+        "iCloud nije izlistao sve foldere. Folderi koji nisu prikazani zadržavaju trenutnu postavku.",
+    "iCloud didn't list every folder, so this choice can't be saved now: it would leave out folders that aren't "
+    "shown. Try again later.":
+        "iCloud nije izlistao sve foldere, pa se ovaj izbor sada ne može sačuvati: izostavio bi foldere koji nisu "
+        "prikazani. Pokušaj ponovo kasnije.",
+    "Couldn't refresh: {error}": "Osvježavanje nije uspjelo: {error}",
+    "Shown as of the last refresh at {time}.": "Prikazano stanje sa zadnjeg osvježavanja u {time}.",
     "Sign-in and sync database: {path}": "Prijava i baza sinhronizacije: {path}",
     "Skyfold is not made by Apple. It uses the same web services as iCloud.com.":
         "Skyfold nije Apple-ov program. Koristi iste web servise kao iCloud.com.",
