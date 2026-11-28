@@ -44,7 +44,7 @@ class StateBadge(QWidget):
     offline, or a warning that needs the user."""
 
     GLYPH = {"idle": "check", "paused": "pause", "offline": "cloud", "error": "error", "auth": "error",
-             "setup": "folder", "attention": "shield"}
+             "setup": "folder", "attention": "shield", "note": "info"}
 
     def __init__(self, palette: dict[str, str], size: int = 44) -> None:
         super().__init__()
@@ -70,7 +70,7 @@ class StateBadge(QWidget):
     def _colour(self) -> str:
         c = self.c
         return {"idle": c["ok"], "paused": c["warn"], "offline": c["offline"], "error": c["err"], "auth": c["err"],
-                "setup": c["accent_fg"], "attention": c["warn"]}.get(self.state, c["accent_fg"])
+                "setup": c["accent_fg"], "attention": c["warn"], "note": c["offline"]}.get(self.state, c["accent_fg"])
 
     def paintEvent(self, _e) -> None:  # noqa: N802
         p = QPainter(self)
@@ -182,12 +182,28 @@ class FootTime(QWidget):
 
     def setText(self, text: str) -> None:  # noqa: N802 - "caption\nvalue", as the label it replaces
         cap, _, val = (text or "").partition("\n")
-        self.caption.setText(cap)
-        self.value.setText(val)
+        self._full = (cap, val)
+        self._elide()
         self.value.setVisible(bool(val))
 
+    def _elide(self) -> None:
+        """Never cut off mid-character: wider than the space, it ends in "…" (the whole is its tooltip)."""
+        cap, val = getattr(self, "_full", ("", ""))
+        width = max(1, self.contentsRect().width()) if self.isVisible() else 1 << 20
+        self.caption.setText(self.caption.fontMetrics().elidedText(cap, Qt.ElideRight, width))
+        shown = self.value.fontMetrics().elidedText(val, Qt.ElideRight, width)
+        self.value.setText(shown)
+        from .safe_text import plain_tip
+
+        self.setToolTip(plain_tip(val) if shown != val else "")
+
+    def resizeEvent(self, e) -> None:  # noqa: N802
+        super().resizeEvent(e)
+        self._elide()
+
     def text(self) -> str:
-        return self.caption.text() + ("\n" + self.value.text() if self.value.text() else "")
+        cap, val = getattr(self, "_full", ("", ""))
+        return cap + ("\n" + val if val else "")
 
 
 class TwoLineLabel(QLabel):

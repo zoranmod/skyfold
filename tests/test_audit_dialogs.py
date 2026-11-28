@@ -345,7 +345,7 @@ def test_about_names_the_settings_folder_really_in_use(app, monkeypatch, tmp_pat
     monkeypatch.setattr(config, "DATA_DIR", private)
     d = dialogs.SettingsDialog(Settings(), theme.LIGHT)
     try:
-        texts = [lb.text() for lb in d.findChildren(QLabel)]
+        texts = [lb.text().replace(chr(0x200B), "") for lb in d.findChildren(QLabel)]  # (wrap points)
         assert any(str(private) in tx for tx in texts)
         assert not any("next to the app" in tx for tx in texts)
     finally:

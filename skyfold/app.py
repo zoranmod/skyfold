@@ -254,6 +254,18 @@ def _close_stale_settings(controller) -> None:
                 pass  # already destroyed
 
 
+def _load_icloud_library() -> None:
+    """Import the iCloud library (pyicloud and pydantic, which loads a compiled module) on the UI
+    thread before the worker starts. Otherwise the worker thread imports it while the UI thread is
+    building the panel; a crash at start-up was once seen right there."""
+    try:
+        import pyicloud  # noqa: F401
+        import pyicloud.session  # noqa: F401
+        import pyicloud.exceptions  # noqa: F401
+    except Exception as exc:  # noqa: BLE001 - the worker reports a real problem when it signs in
+        log.info("iCloud library not loaded ahead: %s", type(exc).__name__)
+
+
 class Controller(QObject):
     """Lives on the UI thread. Being a QObject matters: worker signals connected to its
     methods are queued onto the UI thread instead of running inside the worker thread."""
@@ -358,6 +370,7 @@ class Controller(QObject):
             QTimer.singleShot(60_000, f, lambda: self.check_updates(False))
             self.update_clock.start()
 
+        _load_icloud_library()  # here, before the worker thread imports it at the same time as the UI
         self.thread.start()
 
     # plumbing ---------------------------------------------------------------

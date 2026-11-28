@@ -84,7 +84,8 @@ def service_color(c: dict[str, str], glyph_name: str) -> str | None:
 def state_color(c: dict[str, str], state: str) -> str:
     """Text/icon colour of a sync state on this palette (readable on its surfaces)."""
     return {"idle": c["ok"], "syncing": c["accent_fg"], "paused": c["warn"], "offline": c["offline"],
-            "error": c["err"], "auth": c["err"], "setup": c["warn"], "attention": c["warn"]}.get(state, c["ok"])
+            "error": c["err"], "auth": c["err"], "setup": c["warn"], "attention": c["warn"],
+            "note": c["offline"]}.get(state, c["ok"])
 
 
 def is_dark() -> bool:

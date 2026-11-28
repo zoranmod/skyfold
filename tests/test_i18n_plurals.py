@@ -13,11 +13,11 @@ def bs():
 
 
 @pytest.mark.parametrize("n, want", [
-    (1, "1 slika je obrisana u iCloud-u"), (3, "3 slike su obrisane u iCloud-u"),
-    (5, "5 slika je obrisano u iCloud-u"), (11, "11 slika je obrisano u iCloud-u"),
-    (12, "12 slika je obrisano u iCloud-u"), (21, "21 slika je obrisana u iCloud-u"),
-    (24, "24 slike su obrisane u iCloud-u"), (112, "112 slika je obrisano u iCloud-u"),
-    ("1,284", "1,284 slike su obrisane u iCloud-u"),
+    (1, "1 slika je obrisana u iCloudu"), (3, "3 slike su obrisane u iCloudu"),
+    (5, "5 slika je obrisano u iCloudu"), (11, "11 slika je obrisano u iCloudu"),
+    (12, "12 slika je obrisano u iCloudu"), (21, "21 slika je obrisana u iCloudu"),
+    (24, "24 slike su obrisane u iCloudu"), (112, "112 slika je obrisano u iCloudu"),
+    ("1,284", "1,284 slike su obrisane u iCloudu"),
 ])
 def test_bosnian_deletion_counts(bs, n, want):
     assert i18n.t("{n} photos were deleted in iCloud", n=n) == want

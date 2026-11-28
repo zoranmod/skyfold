@@ -676,4 +676,4 @@ def test_tray_menu_says_why_a_pass_ended(controller):
     ctl._on_state("idle", t("Sync stopped."))
     assert ctl.m_status.text() == t("Sync stopped.").rstrip(".")
     ctl._on_state("idle", t("Everything is in sync."))
-    assert ctl.m_status.text() == t("Everything is in sync").rstrip(".") or ctl.m_status.text().startswith(t("Everything"))
+    assert ctl.m_status.text() == t("Everything is in sync")

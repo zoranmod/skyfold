@@ -102,7 +102,7 @@ BS: dict[str, str] = {
     "Choose folder": "Izaberi folder",
     "Signing in to iCloud is required to sync.": "Za sinhronizaciju je potrebna prijava na iCloud.",
     "Last check: {when}": "Zadnja provjera: {when}",
-    "{n} deleted in iCloud": "{n} obrisanih u iCloud-u",
+    "{n} deleted in iCloud": "{n} obrisanih u iCloudu",
     "{n} deleted on this PC": "{n} obrisanih na PC-u",
     "A large deletion is waiting for your OK: {what}.": "Veliko brisanje čeka potvrdu: {what}.",
     " and ": " i ",
@@ -115,8 +115,8 @@ BS: dict[str, str] = {
     "Choose where your photos should be kept before the first sync.":
         "Prije prve sinhronizacije izaberi gdje će se čuvati slike.",
     "Sign in with your Apple ID to start syncing.": "Prijavi se svojim Apple ID-jem da počne sinhronizacija.",
-    "Connecting to iCloud…": "Povezujem se sa iCloud-om…",
-    "Can't reach iCloud. Will retry shortly.": "Nema veze sa iCloud-om. Pokušaću ponovo uskoro.",
+    "Connecting to iCloud…": "Povezujem se sa iCloudom…",
+    "Can't reach iCloud. Will retry shortly.": "Nema veze sa iCloudom. Pokušaću ponovo uskoro.",
     "Your session has expired. Please sign in again.": "Sesija je istekla. Prijavi se ponovo.",
     "Your iCloud session has expired. Click to sign in again.": "iCloud sesija je istekla. Klikni da se prijaviš ponovo.",
     "Syncing is paused.": "Sinhronizacija je pauzirana.",
@@ -128,7 +128,7 @@ BS: dict[str, str] = {
     "{n} items are waiting for your OK to be deleted.": "Čeka se tvoja potvrda za brisanje {n} stavki.",
     "Downloaded: {n}": "Preuzeto: {n}",
     "Deleted on PC: {n}": "Obrisano na PC-u: {n}",
-    "Deleted in iCloud: {n}": "Obrisano u iCloud-u: {n}",
+    "Deleted in iCloud: {n}": "Obrisano u iCloudu: {n}",
     "Photos synced": "Slike sinhronizovane",
     "Finished with {n} errors. Will retry.": "Završeno uz {n} grešaka. Pokušaću ponovo.",
     "Photos you deleted only on this PC will be downloaded again.": "Ručno obrisane slike će biti ponovo preuzete.",
@@ -139,14 +139,14 @@ BS: dict[str, str] = {
         "Folder za slike ne izgleda kao ranije (nedostaje oznaka sinhronizacije). "
         "Sinhronizacija je zaustavljena da se ništa ne bi obrisalo greškom.",
     "Followed {n} files moved inside the folder": "Praćeno premještanje {n} fajlova unutar foldera",
-    "Checking iCloud for changes…": "Provjeravam promjene u iCloud-u…",
+    "Checking iCloud for changes…": "Provjeravam promjene u iCloudu…",
     "Reading your iCloud library…": "Čitam iCloud biblioteku…",
     "Reading your iCloud library… {n}": "Čitam iCloud biblioteku… {n}",
     "Deleted on this PC only: {name}": "Obrisano samo na PC-u: {name}",
-    "Deleting in iCloud…": "Brišem u iCloud-u…",
-    "Couldn't delete in iCloud ({name}): {error}": "Brisanje u iCloud-u nije uspjelo ({name}): {error}",
-    "Deleted in iCloud: {name}": "Obrisano u iCloud-u: {name}",
-    "Deleted in iCloud, kept on this PC: {name}": "Obrisano u iCloud-u, zadržano na PC-u: {name}",
+    "Deleting in iCloud…": "Brišem u iCloudu…",
+    "Couldn't delete in iCloud ({name}): {error}": "Brisanje u iCloudu nije uspjelo ({name}): {error}",
+    "Deleted in iCloud: {name}": "Obrisano u iCloudu: {name}",
+    "Deleted in iCloud, kept on this PC: {name}": "Obrisano u iCloudu, zadržano na PC-u: {name}",
     "Moving deleted photos to the Recycle Bin…": "Premještam obrisane u Recycle Bin…",
     "Couldn't delete {name}: {error}": "Ne mogu obrisati {name}: {error}",
     "Deleted on this PC (Recycle Bin): {name}": "Obrisano na PC-u (u Recycle Bin): {name}",
@@ -433,14 +433,14 @@ BS: dict[str, str] = {
     "DELETING": "BRISANJE",
     "Deleted on the phone → delete on this PC too": "Obrisano na telefonu → obriši i na PC-u",
     "The file goes to the Recycle Bin, where it can be restored.": "Fajl ide u Recycle Bin, odakle se može vratiti.",
-    "Deleted on this PC → delete in iCloud too": "Obrisano na PC-u → obriši i u iCloud-u",
+    "Deleted on this PC → delete in iCloud too": "Obrisano na PC-u → obriši i u iCloudu",
     "The photo goes to 'Recently Deleted' on the phone and can be restored for 30 days.":
         "Slika ide u 'Nedavno obrisano' na telefonu i može se vratiti 30 dana.",
     "Send deletions on this PC right away (watch the folder)": "Brisanje na PC-u šalji odmah (prati folder)",
     "Ask before deleting more than": "Traži potvrdu ako se briše više od",
     "Bring back photos I deleted only on this PC": "Vrati slike koje sam obrisao samo na PC-u",
     "Downloads again the photos deleted on this PC while deleting in iCloud was off.":
-        "Ponovo preuzima slike koje su obrisane na PC-u dok je brisanje u iCloud-u bilo isključeno.",
+        "Ponovo preuzima slike koje su obrisane na PC-u dok je brisanje u iCloudu bilo isključeno.",
     "SYSTEM": "SISTEM",
     # 1.1 Settings: cards, sentence-case group titles
     "Windows": "Windows",
@@ -495,14 +495,14 @@ BS: dict[str, str] = {
     " The app is in {service}, so the sign-in and database are kept only on this PC ({path}).":
         " Program je u {service}-u, pa se prijava i baza čuvaju samo na ovom računaru ({path}).",
     "Choose a folder for photos": "Izaberi folder za slike",
-    "Sign out of iCloud? Photos on this PC stay.": "Odjaviti se sa iCloud-a? Slike na PC-u ostaju.",
+    "Sign out of iCloud? Photos on this PC stay.": "Odjaviti se sa iClouda? Slike na PC-u ostaju.",
     "Photos deleted only on this PC will be downloaded again.": "Slike obrisane samo na PC-u biće ponovo preuzete.",
     "Photos folder": "Folder za slike",
     "Use this folder anyway?": "Ipak koristiti ovaj folder?",
     "New folder": "Novi folder",
     "You changed the photos folder.\n\nPhotos won't be moved: the new location is filled from iCloud, "
     "and the old folder stays untouched and is no longer synced. Continue?":
-        "Promijenio si folder za slike.\n\nSlike se neće premještati: nova lokacija se puni iz iCloud-a, "
+        "Promijenio si folder za slike.\n\nSlike se neće premještati: nova lokacija se puni iz iClouda, "
         "a stari folder ostaje netaknut i više se ne sinhronizuje. Nastaviti?",
     "Restart to change the language?": "Ponovo pokrenuti program da se promijeni jezik?",
     # pending dialog ----------------------------------------------------------------
@@ -512,13 +512,13 @@ BS: dict[str, str] = {
     "Nothing is deleted permanently.":
         "Radi sigurnosti, kad se odjednom briše više stavki nego što je dozvoljeno u postavkama, "
         "Skyfold prvo pita. Ništa se ne briše trajno.",
-    "{n} photos were deleted in iCloud": "{n} slika je obrisano u iCloud-u",
+    "{n} photos were deleted in iCloud": "{n} slika je obrisano u iCloudu",
     "{n} files or folders were deleted in iCloud Drive": "Obrisano na iCloud Driveu (fajlova ili foldera): {n}",
     "{n} files or folders were deleted on this PC": "Obrisano na ovom PC-u (fajlova ili foldera): {n}",
     "{n} photos were deleted on this PC": "{n} slika je obrisano na PC-u",
     "Delete on this PC too": "Obriši i na PC-u",
     "Keep on this PC": "Zadrži na PC-u",
-    "Delete in iCloud too": "Obriši i u iCloud-u",
+    "Delete in iCloud too": "Obriši i u iCloudu",
     "Bring them back to this PC": "Vrati ih na PC",
     "Decide later": "Odluči kasnije",
     "… and {n} more": "… i još {n}",
@@ -547,13 +547,13 @@ BS: dict[str, str] = {
     "Changed on both sides, kept both: {name}": "Promijenjeno na obje strane, sačuvane obje verzije: {name}",
     "Checking iCloud Drive…": "Provjeravam iCloud Drive…",
     "Choose a folder for iCloud Drive": "Izaberi folder za iCloud Drive",
-    "Couldn't create folder in iCloud ({name}): {error}": "Ne mogu napraviti folder u iCloud-u ({name}): {error}",
+    "Couldn't create folder in iCloud ({name}): {error}": "Ne mogu napraviti folder u iCloudu ({name}): {error}",
     "Couldn't resolve conflict ({name}): {error}": "Ne mogu riješiti konflikt ({name}): {error}",
     "DOWNLOAD": "PREUZIMANJE",
     "DRIVE FOLDER": "FOLDER ZA DRIVE",
-    "Deleted in iCloud → delete on this PC too": "Obrisano u iCloud-u → obriši i na PC-u",
+    "Deleted in iCloud → delete on this PC too": "Obrisano u iCloudu → obriši i na PC-u",
     "Drive folder is not available: {path}": "Drive folder nije dostupan: {path}",
-    "Drive: deleted in iCloud: {name}": "Drive: obrisano u iCloud-u: {name}",
+    "Drive: deleted in iCloud: {name}": "Drive: obrisano u iCloudu: {name}",
     "Drive: deleted on this PC (Recycle Bin): {name}": "Drive: obrisano na PC-u (u Recycle Bin): {name}",
     "Drive: downloaded {n} files": "Drive: preuzeto fajlova: {n}",
     "Drive: downloading {i} of {n}": "Drive: preuzimam {i} od {n}",
@@ -607,9 +607,9 @@ BS: dict[str, str] = {
     "You changed the folder.\n\nFiles won't be moved: the new location is filled from iCloud, and the old folder "
     "stays untouched and is no longer synced. Files in the new folder are synced both ways: deleting one there "
     "deletes it in iCloud too. Continue?":
-        "Promijenio si folder.\n\nFajlovi se neće premještati: nova lokacija se puni iz iCloud-a, a stari folder "
+        "Promijenio si folder.\n\nFajlovi se neće premještati: nova lokacija se puni iz iClouda, a stari folder "
         "ostaje netaknut i više se ne sinhronizuje. Fajlovi u novom folderu se sinhronizuju u oba smjera: "
-        "kad obrišeš jedan tamo, briše se i u iCloud-u. Nastaviti?",
+        "kad obrišeš jedan tamo, briše se i u iCloudu. Nastaviti?",
     "iCloud Drive": "iCloud Drive",
     "iCloud Drive synced": "iCloud Drive sinhronizovan",
     "iCloud Drive: finished with {n} errors. Will retry.": "iCloud Drive: završeno uz {n} grešaka. Pokušaću ponovo.",
@@ -1022,7 +1022,7 @@ def _photos_videos_en(kw, s):
 
 
 _FORMS_BS = {
-    "{n} deleted in iCloud": ("n", "{n} obrisan u iCloud-u", "{n} obrisana u iCloud-u"),
+    "{n} deleted in iCloud": ("n", "{n} obrisan u iCloudu", "{n} obrisana u iCloudu"),
     "{n} deleted on this PC": ("n", "{n} obrisan na PC-u", "{n} obrisana na PC-u"),
     "{n} items are waiting for your OK to be deleted.": (
         "n", "Čeka se tvoja potvrda za brisanje {n} stavke.", "Čeka se tvoja potvrda za brisanje {n} stavke."),
@@ -1054,7 +1054,7 @@ _FORMS_BS = {
         "n", "Drive: {name} se više ne sinhronizuje; {n} fajl kojeg nema u iCloudu ostao je na računaru",
         "Drive: {name} se više ne sinhronizuje; {n} fajla kojih nema u iCloudu ostala su na računaru"),
     "{prefix}{i} of {n} files": ("n", "{prefix}{i} od {n} fajla", "{prefix}{i} od {n} fajla"),
-    "{n} photos were deleted in iCloud": ("n", "{n} slika je obrisana u iCloud-u", "{n} slike su obrisane u iCloud-u"),
+    "{n} photos were deleted in iCloud": ("n", "{n} slika je obrisana u iCloudu", "{n} slike su obrisane u iCloudu"),
     "{n} photos were deleted on this PC": ("n", "{n} slika je obrisana na PC-u", "{n} slike su obrisane na PC-u"),
     "Drive: uploading, {i} of {n} files done": (
         "n", "Drive: šaljem, gotovo {i} od {n} fajla", "Drive: šaljem, gotovo {i} od {n} fajla"),

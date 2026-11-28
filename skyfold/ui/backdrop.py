@@ -19,6 +19,20 @@ DWMWA_CAPTION_COLOR = 35
 DWMWA_TEXT_COLOR = 36
 
 
+def native_window() -> bool:
+    """Whether Qt's windows are real Windows windows. Under the "offscreen" platform (tests, CI,
+    screenshots) winId() is a made-up number 1, 2, 3…, which must never reach a Windows call as a
+    window handle."""
+    if sys.platform != "win32":
+        return False
+    try:
+        from PySide6.QtGui import QGuiApplication
+
+        return QGuiApplication.platformName() == "windows"
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _colorref(c: QColor) -> int:
     return c.red() | (c.green() << 8) | (c.blue() << 16)
 
@@ -27,7 +41,7 @@ def match_frame(widget: QWidget, background: str | None = None, text: str | None
                 border: str | None = None) -> bool:
     """Colour the window's title bar and border like its content. background/text/border are
     '#rrggbb' (default: the widget's palette). Returns whether Windows took it."""
-    if sys.platform != "win32":
+    if not native_window():
         return False
     try:
         import ctypes
@@ -79,7 +93,7 @@ def glass_supported() -> bool:
 def apply_backdrop(widget: QWidget, kind: str = "acrylic", dark: bool = True) -> bool:
     """Ask Windows for its acrylic (a popup: the tray panel) or Mica (a window) material behind the
     widget, which must have Qt.WA_TranslucentBackground. Returns whether Windows took it."""
-    if sys.platform != "win32":
+    if not native_window():
         return False
     try:
         import ctypes
@@ -132,7 +146,7 @@ def blur_behind(widget: QWidget, tint: QColor | None = None) -> bool:
     """Windows' own blur of what is behind a frameless window (the tray panel and the notification
     cards): the accent policy behind Windows' acrylic, which, unlike the system backdrop, also
     works on windows without a frame. tint: the colour laid over the blur (its alpha is the amount)."""
-    if sys.platform != "win32":
+    if not native_window():
         return False
     try:
         import ctypes

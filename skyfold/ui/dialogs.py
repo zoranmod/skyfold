@@ -1599,8 +1599,11 @@ class SettingsDialog(_Dialog):
         from .. import config
 
         # the folder really in use: next to the app, or the private folder when that can't be written
-        lines = [t("Settings: {path}", path=config.DATA_DIR),
-                 t("Sign-in and sync database: {path}", path=PRIVATE_DIR)]
+        def breakable(path) -> str:  # a long path wraps at its folders instead of widening the page
+            return str(path).replace("\\", "\\" + chr(0x200B))  # (a zero-width space after each "\")
+
+        lines = [t("Settings: {path}", path=breakable(config.DATA_DIR)),
+                 t("Sign-in and sync database: {path}", path=breakable(PRIVATE_DIR))]
         if APP_IN_CLOUD:
             lines.append(t("The app is in {service}, so the sign-in and database are kept only on this PC.",
                            service=APP_IN_CLOUD))
@@ -2404,6 +2407,7 @@ class PendingDialog(_Dialog):
         outer_lay.addWidget(_FitScroll(content), 1)
 
         row = self._answers if self._one else QHBoxLayout()
+        row.setSpacing(8)  # (the two answers never touch)
         if not self._one:
             row.setContentsMargins(0, 14, 0, 0)
         b_no = QPushButton(no)

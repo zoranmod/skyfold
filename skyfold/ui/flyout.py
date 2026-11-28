@@ -133,7 +133,9 @@ def storage_text(n: int) -> str:
 
 def round_corners(widget: QWidget) -> None:
     """Ask Windows 11 DWM for native rounded corners and shadow on a frameless window."""
-    if sys.platform != "win32":
+    from .backdrop import native_window
+
+    if not native_window():  # (offscreen: no real window handle)
         return
     try:
         import ctypes
@@ -149,6 +151,24 @@ ARROWS_DEG_PER_MS = 0.36  # the small arrows by "Syncing…": one turn a second
 RING_DEG_PER_MS = 0.576  # the arc in the status ring: a little faster
 
 BADGE = 32  # header badges (status, iCloud storage): small round buttons beside the gear
+
+
+def _footer_when(ts: str) -> str:
+    """When Skyfold last checked, short enough for the panel's footer: "just now", "5 min ago",
+    "20:17" (today), "Sat 20:17" (this week), "18 Nov" (earlier). (The full date was cut off there.)"""
+    from datetime import datetime
+
+    try:
+        dt = datetime.fromisoformat(ts).astimezone()
+    except (TypeError, ValueError):
+        return fmt_time(ts)
+    now = datetime.now().astimezone()
+    if (now - dt).total_seconds() < 3600:
+        return fmt_time(ts)  # ("just now", "5 min ago")
+    short = _short_time(ts)  # "20:17" / "Sat" / "18 Nov"
+    if dt.date() != now.date() and (now.date() - dt.date()).days < 7:
+        short += f" {dt:%H:%M}"
+    return short
 
 
 def _short_time(ts: str) -> str:
@@ -1094,7 +1114,11 @@ class Flyout(QWidget):
         self.pause_btn.setAccessibleName(t("Resume syncing") if paused else t("Pause syncing"))
 
     def _dot_state(self) -> str:
-        return "attention" if self.state == "idle" and getattr(self, "_pending_text", "") else self.state
+        if self.state == "idle" and getattr(self, "_pending_text", ""):
+            return "attention"
+        if self.state == "idle" and self._idle_note():
+            return "note"  # ended for a reason (stopped, uploads waiting): a neutral sign, never the green tick
+        return self.state
 
     def set_state(self, state: str, text: str) -> None:
         if state == "syncing" and self.state != "syncing":
@@ -1347,7 +1371,7 @@ class Flyout(QWidget):
         if self.state == "syncing" and started:
             self.checked_label.setText(t("Started") + "\n" + started)
         else:
-            self.checked_label.setText(t("Last checked") + "\n" + fmt_time(ts) if ts else "")
+            self.checked_label.setText(t("Last checked") + "\n" + _footer_when(ts) if ts else "")
 
     def refresh_times(self) -> None:
         ts = getattr(self, "_last_sync_ts", None)

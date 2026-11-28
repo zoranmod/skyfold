@@ -2269,7 +2269,8 @@ def render_index(data: list, updated: str, theme: str = "system") -> str:
         strings["notes"][1], strings["folderCount"][1] = strings["notes"][2], strings["folderCount"][2]
 
     def js(v) -> str:
-        return json.dumps(v, ensure_ascii=False).replace("</", "<\\/")
+        # every "<" escaped: a note title like "<!--<script>" can't start a comment or a tag in the page
+        return json.dumps(v, ensure_ascii=False).replace("<", "\\u003c")
 
     page = INDEX_TEMPLATE.replace("@@theme_script@@", THEME_SCRIPT).replace("@@lang@@", language() or "en")
     page = page.replace("@@default_theme@@", _export_theme(theme))

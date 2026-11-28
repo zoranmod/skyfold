@@ -250,8 +250,11 @@ class SyncWorker(QObject):
     def cancel(self) -> None:
         """Thread-safe: may be called directly from the UI thread."""
         self._stops = getattr(self, "_stops", 0) + 1  # the round running now ends at its next check
-        if not self._paused():  # (paused: Resume is what starts work again)
-            self._drive_stopped = True  # queued Drive work waits for the next request to sync
+        with self._drive_lock:  # (the lock under which the Drive thread decides to start a pass)
+            if not self._paused():  # (paused: Resume is what starts work again)
+                self._drive_stopped = True  # queued Drive work waits for the next request to sync
+            if self.drive is not None:
+                self.drive.cancel_flag.set()
         for s in (self.syncer, self.drive, self.notes):
             if s:
                 if self._closing_now() and hasattr(s, "closing"):
@@ -415,6 +418,7 @@ class SyncWorker(QObject):
                                      s.delete_threshold, _Bridge(self, "drive"),
                                      cache_file=STATE_DB.parent / "drive_cache.json")
             self.drive.on_pending = self._drivePendingSeen.emit
+            self.drive.cancel_cleared_by_caller = True  # (cleared in _drive_passes, under _drive_lock)
             import hashlib
 
             # whose Drive this is comes from the session actually in use, not from the settings
@@ -462,6 +466,13 @@ class SyncWorker(QObject):
     @Slot(object, bool, bool)
     def apply_settings(self, settings: Settings, reset_state: bool, reset_drive: bool = False) -> None:
         old_folders = self.settings.drive_folders
+        if self.settings.bookmarks_enabled and not settings.bookmarks_enabled:
+            try:  # Safari bookmarks switched off: the copy for the browser extension goes too
+                from . import bookmarks
+
+                bookmarks.remove_cache()
+            except Exception as exc:  # noqa: BLE001
+                log.info("Bookmarks copy not removed: %s", type(exc).__name__)
         albums_changed = settings.albums_as_folders != self.settings.albums_as_folders
         # videos switched on: the ones skipped so far come now, not at the next daily full check
         more_videos = ((settings.include_videos and not self.settings.include_videos)
@@ -679,6 +690,8 @@ class SyncWorker(QObject):
                     leave = True  # paused, stopped or quitting meanwhile: the waiting changes stay queued
                 elif not leave:
                     self._drive_once = False  # (Sync now while paused: this one pass)
+                    if not self._closing_now():
+                        self.drive.cancel_flag.clear()  # a new pass; a Stop from now on reaches it
                     if self._drive_want_full:
                         self._drive_want_full, changed = False, None
                     elif self._drive_changes:

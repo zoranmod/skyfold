@@ -225,6 +225,10 @@ class Local:
 
 
 class DriveSyncer:
+    # The worker clears cancel_flag itself when it decides to start a pass, under the same lock a Stop
+    # takes: run() clearing it would undo a Stop pressed in between (and that pass would run to the end).
+    cancel_cleared_by_caller = False
+
     def __init__(self, state: DriveState, remote: DriveRemote, root: Path, delete_threshold: int,
                  cb: Callbacks | None = None, delete_pc_to_cloud: bool = True,
                  delete_cloud_to_pc: bool = True, cache_file: Path | None = None) -> None:
@@ -688,7 +692,8 @@ class DriveSyncer:
 
     def run(self, changed: set[str] | None = None, _prev: dict | None = None) -> DriveResult:
         """Full sync, or a quick one limited to the folders around `changed` local paths."""
-        self.cancel_flag.clear()
+        if not self.cancel_cleared_by_caller:  # (the worker clears it itself, under its lock)
+            self.cancel_flag.clear()
         self._check_cancel()  # quitting: this pass never starts
         self._hashes = {}
         self._late = None
@@ -2827,7 +2832,7 @@ def windows_name_problem(path: str, root: Path) -> str | None:
             return "its name has a character Windows doesn't allow"
         if part.endswith((" ", ".")):
             return "its name ends with a space or dot"
-        if part.split(".")[0].upper() in _RESERVED:
+        if part.split(".")[0].strip().upper() in _RESERVED:  # ("con .jpg" is reserved too)
             return "its name is reserved by Windows"
     if len(str(root / Path(path))) > MAX_PATH:
         return "its path is too long for Windows"
