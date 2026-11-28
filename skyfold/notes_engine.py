@@ -1330,11 +1330,20 @@ class NotesSyncer:
 
     def _drop(self, p: Path, forever: bool) -> None:
         """To the Recycle Bin. forever: a copy of a note that is locked now is deleted outright, so
-        its text and pictures can't be read back from the Recycle Bin (the note itself stays in iCloud)."""
+        its text and pictures can't be read back from the Recycle Bin (the note itself stays in iCloud).
+        Only for a file the caller has checked to be exactly what Skyfold wrote: its read-only mark,
+        if it has one, is taken off for this (it kept the locked note readable for good)."""
         if forever:
-            os.remove(p)
+            _unlink_even_read_only(p)
         else:
             self._trash(p)
+
+    def _still_our_export(self, p: Path, nid: str) -> bool:
+        """Is this file byte for byte the page Skyfold wrote for this note? Its look doesn't say so:
+        a page you annotated, or another export put there by hand, carries Skyfold's style too. Only
+        the fingerprint written down when the page was put in place does. (Unreadable: OSError.)"""
+        recorded = self.state.get(f"page:{nid}")
+        return bool(recorded) and not _is_link(p) and stat.S_ISREG(os.lstat(p).st_mode) and _digest(p) == recorded
 
     # attachments ----------------------------------------------------------------------
     _ASSET_REF = re.compile(r"""[^"'\s()<>]*_assets[\\/][^"'\s()<>]*""")
@@ -1401,6 +1410,8 @@ class NotesSyncer:
                 left[rel] = [size, mtime_ns]  # can't be looked at now: tried again next time
                 continue
             if not stat.S_ISREG(st.st_mode) or (st.st_size, st.st_mtime_ns) != (size, mtime_ns):
+                if forever:  # of a note that is locked now: it stays readable, so it is at least written down
+                    log.warning("Notes: an attachment of a locked note was changed on this PC; left where it is: %s", rel)
                 continue  # not what the export made any more: yours now, left alone
             if not inside_root(self.root, p):  # a folder there was swapped for a link: someone else's file
                 log.warning("Notes: %s leads outside the notes folder; not removed", rel)
@@ -1723,6 +1734,14 @@ class NotesSyncer:
                 elif files:
                     self._retire_assets(n.id, files, {}, forever=True)  # its pictures are as private as its text
                 self.state.put(n.id, keep, n.title, folder, None if keep else modified, True)
+                if old and not old[5]:
+                    # Readable until now: Notes.html stops linking to it right here, not at the end of a
+                    # pass that may be stopped or fail before it gets there. (The Notes window reads the
+                    # database, which has just been told.)
+                    try:
+                        self.write_index()
+                    except Exception as exc:  # noqa: BLE001 - reported by the index written at the end
+                        log.info("Notes: the index couldn't be updated right after a lock: %s", brief(exc))
                 continue
             if old and old[4] == modified and old[1] and (self.root / old[1]).exists() and old[3] == folder \
                     and old[2] == n.title:
@@ -1980,6 +1999,16 @@ class NotesSyncer:
                 if p.suffix.lower() == ".html" and not _is_our_page(p, strict=True):  # unreadable: tried again
                     log.info("Notes: %s isn't a page Skyfold wrote; left alone", row[1])
                     return True  # someone else's file now: forget the note's old path, keep the file
+                if forever and not self._still_our_export(p, row[0]):
+                    # The note is locked now, but this is no longer the page Skyfold wrote (changed here,
+                    # or another page put in its place): what was added may exist nowhere else. It leaves
+                    # the Notes folder, but to the Recycle Bin, and the user is told.
+                    self._trash(p)
+                    res.removed += 1
+                    self.cb.activity("trash", t("Notes: {name} is locked now. Its page on this PC had been changed, "
+                                                "so it went to the Recycle Bin instead of being deleted for good.",
+                                                name=row[2] or row[1]))
+                    return True
                 self._drop(p, forever)
             if count:
                 res.removed += 1
@@ -1993,7 +2022,8 @@ class NotesSyncer:
     # index page ------------------------------------------------------------------------
     def write_index(self) -> None:
         rows = sorted(self.state.all().values(), key=lambda r: (r[3] or "", (r[2] or "").lower()))
-        data = [{"t": r[2] or t("Untitled"), "f": r[3] or "", "p": r[1], "m": local_datetime(r[4]),
+        # (a locked note is listed without its page: a copy that couldn't be removed yet is never linked)
+        data = [{"t": r[2] or t("Untitled"), "f": r[3] or "", "p": None if r[5] else r[1], "m": local_datetime(r[4]),
                  "l": bool(r[5])} for r in rows]
         page = render_index(data, t("Updated {when}", when=local_datetime(datetime.now())), self.theme)
         target = self.root / INDEX

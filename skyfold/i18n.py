@@ -650,6 +650,8 @@ BS: dict[str, str] = {
     "Notes: downloaded {n}": "Bilješke: preuzeto {n}",
     "Notes: downloaded {name}": "Bilješke: preuzeto „{name}”",
     "Notes: removed {name}": "Bilješke: uklonjeno {name}",
+    "Notes: {name} is locked now. Its page on this PC had been changed, so it went to the Recycle Bin instead of being deleted for good.":
+        "Bilješke: {name} je sada zaključana. Njena stranica na ovom PC-u je bila izmijenjena, pa je otišla u Recycle Bin umjesto da se trajno obriše.",
     "Notes: moved {name} to {folder}": "Bilješke: „{name}” premještena u {folder}",
     "Notes: updated {name}": "Bilješke: ažurirana „{name}”",
     "Notes: renamed {old} to {name}": "Bilješke: „{old}” preimenovana u „{name}”",
