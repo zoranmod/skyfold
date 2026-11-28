@@ -102,6 +102,8 @@ def fetch(api) -> list[dict]:
     url = f"{base}/database/1/{CONTAINER}/production/private/changes/zone"
     body: dict = {"zones": [{"zoneID": {"zoneName": ZONE}}]}
     records: list[dict] = []
+    seen_tokens: set[str] = set()
+    incomplete = t("Safari bookmarks can't be read right now ({code}).", code="INCOMPLETE_RESPONSE")
     for _ in range(MAX_PAGES):
         try:
             r = api.session.post(url, params=api.params, json=body, timeout=60, allow_redirects=False)
@@ -112,16 +114,30 @@ def fetch(api) -> list[dict]:
                                          code=r.status_code))
         if r.status_code != 200:
             raise BookmarksUnavailable(t("Safari bookmarks can't be read right now ({code}).", code=r.status_code))
-        zone = (r.json().get("zones") or [{}])[0]
+        reply = r.json()
+        zones = reply.get("zones") if isinstance(reply, dict) and not reply.get("serverErrorCode") else None
+        if not isinstance(zones, list) or len(zones) != 1 or not isinstance(zones[0], dict):
+            raise BookmarksUnavailable(incomplete)
+        zone = zones[0]
+        zone_id = zone.get("zoneID")
+        if zone_id is not None and (not isinstance(zone_id, dict) or zone_id.get("zoneName") != ZONE):
+            raise BookmarksUnavailable(incomplete)
         code = zone.get("serverErrorCode")
-        if code == "ZONE_NOT_FOUND":
+        if code == "ZONE_NOT_FOUND" and not seen_tokens:
             return []  # Safari bookmarks aren't in iCloud (turned off on the devices)
         if code:
             raise BookmarksUnavailable(t("Safari bookmarks can't be read: iCloud answered {code}.", code=code))
-        records += zone.get("records") or []
+        batch = zone.get("records", [])
+        if not isinstance(batch, list) or (zone_id is None and "records" not in zone):
+            raise BookmarksUnavailable(incomplete)
+        records.extend(batch)
         if not zone.get("moreComing"):
             return records
-        body = {"zones": [{"zoneID": {"zoneName": ZONE}, "syncToken": zone.get("syncToken")}]}
+        token = zone.get("syncToken")
+        if not isinstance(token, str) or not token or token in seen_tokens:
+            raise BookmarksUnavailable(incomplete)
+        seen_tokens.add(token)
+        body = {"zones": [{"zoneID": {"zoneName": ZONE}, "syncToken": token}]}
     raise BookmarksUnavailable(t("Safari bookmarks can't be read: too many pages."))
 
 
