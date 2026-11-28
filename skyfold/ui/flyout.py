@@ -406,15 +406,14 @@ class _RowDetail(ElidedLabel):
     """A service row's quiet line: always one line, ending in "…" when there is no room for all of it
     (a line that wrapped made its row, and the whole panel, taller). The row's tooltip then has it whole."""
 
-    def __init__(self, row: "ServiceRow") -> None:
-        self._row = row
+    def __init__(self) -> None:
         super().__init__("", Qt.ElideRight)
 
     def clipped(self) -> bool:
         return self.fontMetrics().horizontalAdvance(self.text()) > self.contentsRect().width()
 
-    def _update_tip(self) -> None:  # (the row has one tooltip, wherever the pointer is on it)
-        self._row._tip()
+    def _update_tip(self) -> None:
+        pass  # (no tooltip of its own: the row has one, wherever the pointer is on it)
 
 
 class ServiceRow(QFrame):
@@ -440,7 +439,7 @@ class ServiceRow(QFrame):
         self.name = QLabel(name)
         self.name.setObjectName("RowTitle")
         self._checked = ""
-        self.detail = _RowDetail(self)
+        self.detail = _RowDetail()
         self.detail.setObjectName("Muted")
         col.addWidget(self.name)
         col.addWidget(self.detail)
@@ -462,7 +461,8 @@ class ServiceRow(QFrame):
     def set(self, detail: str, state: str | None, checked: str = "") -> None:
         """detail: the one quiet line; checked: when it was last checked (tooltip and screen readers)."""
         self._checked = checked
-        self.detail.setText(detail)  # (sets the tooltip too: _tip)
+        self.detail.setText(detail)
+        self._tip()
         self.setAccessibleName(f"{self.name.text()}: {detail}" + (f", {checked}" if checked else ""))
         if state in (None, "idle", "syncing"):  # nothing to flag: the row stays quiet
             self.dot.setStyleSheet("background: transparent;")
@@ -471,11 +471,12 @@ class ServiceRow(QFrame):
 
     def _tip(self) -> None:
         """The detail in full when it is cut short, then when the service was last checked."""
-        detail = getattr(self, "detail", None)
-        if detail is None:  # (still being built)
-            return
-        lines = [detail.text()] if detail.clipped() else []
+        lines = [self.detail.text()] if self.detail.clipped() else []
         self.setToolTip(plain_tip("\n".join(lines + ([self._checked] if self._checked else []))))
+
+    def resizeEvent(self, e) -> None:  # noqa: N802
+        super().resizeEvent(e)
+        self._tip()  # (more or less room: the detail may be cut short now, or fit again)
 
     def mousePressEvent(self, e) -> None:  # noqa: N802
         if e.button() == Qt.LeftButton:  # (a middle or right click opened the service too)
