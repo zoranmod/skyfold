@@ -34,7 +34,15 @@ def test_deferred_startup_panel_obeys_widget_lifetime(monkeypatch, deleted):
             single_shot(0, *args)
 
     monkeypatch.setattr(QTimer, "singleShot", schedule)
-    monkeypatch.setattr(sys, "excepthook", lambda typ, exc, tb: failures.append(str(exc)))
+    import traceback
+
+    def caught(typ, exc, tb):
+        # only what the deferred start-up panel itself raises: a timer left by an earlier test may
+        # fire inside this test's short event loop too, and is not what this test is about
+        if any(frame.filename.replace("\\", "/").endswith("skyfold/app.py") for frame in traceback.extract_tb(tb)):
+            failures.append(str(exc))
+
+    monkeypatch.setattr(sys, "excepthook", caught)
     Controller.start(ctl, show=True)
     if deleted:
         getattr(ctl, deleted).deleteLater()
