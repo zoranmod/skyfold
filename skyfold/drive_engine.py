@@ -156,10 +156,11 @@ class DriveState:
         """Forget these rows and what is below them, all together or (on a failure) none of them.
         (The connection autocommits, so `with self._db` alone would not make one transaction.)"""
         with self.transaction():
-            for path in paths:
-                prefix = path + "/"
-                self._db.execute("DELETE FROM drive_files WHERE path=? OR substr(path, 1, ?)=?",
-                                 (path, len(prefix), prefix))
+            for path in _collapse(paths):
+                # The primary key uses SQLite BINARY order. All descendants start with "/",
+                # immediately before "0", so both lookups use the index even for a single leaf.
+                self._db.execute("DELETE FROM drive_files WHERE path=? OR (path>=? AND path<?)",
+                                 (path, path + "/", path + "0"))
 
     def get_meta(self, key: str) -> str | None:
         with self._lock:
