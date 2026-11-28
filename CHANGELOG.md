@@ -2,6 +2,34 @@
 
 All notable changes to Skyfold are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-11-28
+
+### Added
+- **"− 100% +" in the Notes and Photos windows.** A small bar shows the size as a percentage; − and + change it and a click on the percentage goes back to the usual size (as `Ctrl 0`). In Notes it replaces the zoom items of the **…** menu; in Photos `Ctrl 0` now returns to the usual five columns.
+- **Notification cards in Windows 11's own layout:** Skyfold's name across the top, the tile beside the title and text, and buttons of equal width across the card.
+- **Tooltips in the 1.1 look,** where they add something: an activity entry shows what happened and the full path of the file, broken at its folders.
+
+### Changed
+- **Stop is a red button** following the same text rule as *Sync now* (white in Light, dark in Dark and OLED), its text centred with its icon. The tray menu is see-through like the panel (1.1.1).
+- **The footer says "Last checked" over a short time** ("just now", "20:17", "Sat 20:17", "8 Nov") and its buttons show no tooltips.
+- **Show in folder** on a photo card opens the folder of the newest new photo with it selected, and only appears when something arrived; a card about deletions shows no photo.
+- **Signing in looks like the first-run steps before it:** the same see-through window and size; its text no longer repeats itself.
+- **Counts read naturally** in Bosnian (1 / 2–4 / 5+: "1 slika", "3 slike", "7 slika") and English ("1 photo").
+- **A pass that ended for a reason** (stopped, uploads waiting, more notes to come) says so in the panel and the tray menu, with a neutral sign instead of the green tick.
+
+### Fixed
+- **The tray panel keeps one height**: it no longer shrank or grew when *Sync now* or the bell was pressed, or when it opened.
+- **Stop ends the whole round:** Notes, bookmarks and iCloud Drive no longer start after a Stop, and a Stop pressed just as a Drive pass starts reaches it.
+- **The syncing ring turns smoothly** (it jumped back once a turn), and *Sync now* no longer flashes between the Photos and Drive passes.
+- **The deletion question** lists every item its answer covers, fits a small screen with its answers always in view, and *Show the list* shows it at the first click.
+- **iCloud Drive folder choice:** an incomplete folder list from iCloud never widens the choice to all folders; a folder that couldn't be read can be read again; a failed change keeps the previous choice.
+- **The update window never loads a picture** from this PC or a network share (a release text could have made Windows connect to another computer).
+- **Safari bookmarks:** nothing is written after signing out, and switching bookmarks off removes the browser extension's copy.
+- **Maximized Notes and Photos windows** keep Windows' close button inside the title bar, and come back maximized when opened again from the tray.
+- **Notification cards** are as tall as their text (short texts left space, long ones were cut off), and stay above the taskbar when their photos arrive (1.1.2).
+- Find My keeps one window and marks devices from an earlier refresh; Settings → About shows where settings really are and wraps long paths; a theme change keeps the progress text; only a left click opens a service row; the tray icon stands still when Windows' animation effects are off; note titles can't break the `Notes.html` page; names like "con .jpg" count as reserved.
+- Stability: the iCloud library is loaded before the background work starts, and Windows' window calls are made only for real windows.
+
 ## [1.1.2] - 2026-11-27
 
 ### Fixed
