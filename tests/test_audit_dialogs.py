@@ -385,3 +385,20 @@ def test_find_my_without_earlier_devices_shows_just_the_error(app, monkeypatch):
         assert d.signin_btn.isVisibleTo(d)
     finally:
         d.close()
+
+
+@pytest.mark.parametrize("n", [3, 40, 2000])
+def test_show_the_list_really_shows_it(app, n):
+    """After one click on "Show the list" the list is on screen, not below the fold of the text."""
+    d = dialogs.PendingDialog(_pending(n), theme.LIGHT, limit=2)
+    try:
+        d.show()
+        app.processEvents()
+        toggle = next(b for b in d.findChildren(QPushButton) if b.text() == dialogs.t("Show the list"))
+        lst = d.findChild(QListWidget)
+        toggle.click()
+        app.processEvents()
+        app.processEvents()
+        assert lst.visibleRegion().boundingRect().height() >= min(lst.height(), 120)
+    finally:
+        d.close()

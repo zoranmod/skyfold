@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Any
 
-from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QRunnable, QSize, Qt, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal, Slot
 from PySide6.QtGui import (QColor, QFont,
                            QPainter, QPalette, QPen, QPixmap)
 from PySide6.QtWidgets import (
@@ -2276,7 +2276,16 @@ class PendingDialog(_Dialog):
         taller than the screen: then the text and lists scroll and the answers stay in view."""
         for w in self.findChildren(QWidget):
             w.ensurePolished()
+        # a list just shown or hidden: the layouts inside the scroll areas measure it now, not at the
+        # next event (their old size made the window stay as it was and the list stay out of view)
         for s in self.findChildren(_FitScroll):
+            inner = s.widget().layout()
+            if inner is not None:
+                for w in s.widget().findChildren(QWidget):
+                    if w.layout() is not None:
+                        w.layout().invalidate()
+                inner.invalidate()
+                inner.activate()
             s.updateGeometry()
         lay = self.layout()
         lay.invalidate()
@@ -2371,6 +2380,15 @@ class PendingDialog(_Dialog):
             lst.setVisible(not lst.isVisible())
             toggle.setText(t("Hide the list") if lst.isVisible() else t("Show the list"))
             self._fit(shrink=True)
+
+            def settle() -> None:  # once Qt has laid the list out: measure again, then show it
+                self._fit(shrink=True)
+                if lst.isVisible():  # (where the window can't grow enough, the text scrolls to the list)
+                    area = next((a for a in self.findChildren(_FitScroll) if a.isAncestorOf(lst)), None)
+                    if area is not None:
+                        area.ensureWidgetVisible(lst, 0, 0)
+
+            QTimer.singleShot(0, self, settle)
 
         toggle.clicked.connect(flip)
         lay.addWidget(toggle, 0, Qt.AlignLeft)
