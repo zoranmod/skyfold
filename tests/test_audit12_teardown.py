@@ -33,4 +33,3 @@ def test_worker_tests_can_run_before_widget_tests():
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=90,
     )
     assert result.returncode == 0, (result.stdout, result.stderr)
-

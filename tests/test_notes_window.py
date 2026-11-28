@@ -99,13 +99,28 @@ def test_text_for_search_and_first_line():
     assert (pos[i], pos[i + 4]) == (3, 7)  # Qt counts the emoji as two
 
 
-def test_search_snippets_stay_fast():
-    text = ("riječ " * 1750)[:10_500]
+def test_search_snippets_reuse_the_folded_text_even_for_a_match_at_the_end(monkeypatch):
+    text = "Čaj riječ " * 1100 + "Žetva"
     folded = nv.fold(text)
-    start = time.perf_counter()
-    for _ in range(240):
-        nv.snippet(text, folded, "Title", "rijec")
-    assert time.perf_counter() - start < 0.2
+    original_fold = nv.fold
+    original_index = nv._source_index
+    mapped = []
+
+    def fold_query(value):
+        assert len(value) < 40  # the indexer already folded the body
+        return original_fold(value)
+
+    def map_offset(body, i):
+        mapped.append(i)
+        return original_index(body, i)
+
+    monkeypatch.setattr(nv, "fold", fold_query)
+    monkeypatch.setattr(nv, "_source_index", map_offset)
+    assert nv.snippet(text, folded, "", "zetva") == "…" + text[-35:]
+    assert not mapped  # length-preserving folds already have the original Python offsets
+
+    decomposed = "C\u030caj " * 40 + "Žetva"
+    assert nv.snippet(decomposed, original_fold(decomposed), "", "zetva") == "…" + decomposed[-35:]
 
 
 def test_matching_ranks_title_folder_text():

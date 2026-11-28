@@ -459,7 +459,9 @@ def snippet(text: str, folded: str, title: str, query: str = "", width: int = 12
         q = fold(query.strip())
         i = folded.find(q) if q else -1
         if i >= 0:
-            i = _source_index(text, i)  # lone accents make the two strings differ in length
+            # Each character folds to at most one character. Equal lengths preserve every offset.
+            if len(text) != len(folded):
+                i = _source_index(text, i)
             start = max(0, i - 30)
             cut = text[start:start + width].replace(LABEL, "").replace("\n", " · ")
             return ("…" if start else "") + cut
