@@ -1750,12 +1750,23 @@ class PhotosWindow(LibraryDialog):
             self.selbar.adjustSize()
         y = H - self.pill.height() - 14
         if not self.pill.isHidden():
-            x = (W - self.pill.width()) // 2  # the switch in the middle, − + beside it
-            self.pill.move(x, y)
+            x = (W - self.pill.width()) // 2  # the switch in the middle, − 100% + beside it
+            zw, zy = self.zoom_pill.width(), y
             zx = x + self.pill.width() + 8
-            if zx + self.zoom_pill.width() > W - 8:
-                zx = max(8, W - 8 - self.zoom_pill.width())
-            self.zoom_pill.move(zx, y)
+            if zx + zw > W - 8:
+                # No room beside the switch in the middle. The size bar keeps the right edge (as under
+                # a note) and never lies over the switch (it covered "All Photos" in a narrow window):
+                # the switch moves left for it or, when the two are wider than the photos together,
+                # stays in the middle with the size bar on a row of its own above it.
+                zx = max(8, W - 8 - zw)
+                if self.zoom_pill.isHidden():  # (Years, Months: the switch alone, in the middle)
+                    pass
+                elif self.pill.width() + 8 + zw <= W - 16:
+                    x = zx - 8 - self.pill.width()
+                else:
+                    zy = y - self.zoom_pill.height() - 8
+            self.pill.move(max(8, x), y)
+            self.zoom_pill.move(zx, zy)
         else:
             self.zoom_pill.move((W - self.zoom_pill.width()) // 2, y)
         self.selbar.move((W - self.selbar.width()) // 2, H - self.selbar.height() - 14)

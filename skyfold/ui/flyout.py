@@ -1421,7 +1421,7 @@ class Flyout(QWidget):
     MAX_ROWS_VISIBLE = 6
     TARGET_HEIGHT = 624  # the panel's height (less on a small screen): the same in every state
     MIN_LIST_HEIGHT = 104  # the panel keeps a calm, steady height instead of jumping with each entry
-    HELD_LIST_MIN = 56  # while open, the list may shrink this far to keep the panel's height
+    MIN_ROWS = 1  # a small screen, or a banner while open: the list gives up whole rows, down to this many
 
     def _activity_rows(self) -> list["ActivityRow"]:
         return [self._rows.itemAt(i).widget() for i in range(self._rows.count() - 1)]
@@ -1529,15 +1529,21 @@ class Flyout(QWidget):
         filler.setFixedHeight(shown)  # the same height with or without entries
         room = self._limit() - (self._needed_height() - filler.height())
         if filler.height() > room:  # the list gives way first; below that the panel content scrolls
-            filler.setFixedHeight(max(room, min(filler.height(), 120)))
+            # (whole rows here too: the room left on a small screen is any number of pixels, e.g. 80 for
+            # 45 px rows on a 640 px screen at 125 %, and the list took exactly that, the last row cut)
+            filler.setFixedHeight(max(self.MIN_ROWS, room // step) * step)
+            # what is left under the last whole row: the panel fills the screen's room, and so has
+            # nowhere to grow to (one height) when a banner then takes a row
+            self._list_pad.setFixedHeight(max(0, room - filler.height()))
         held = getattr(self, "_held", None)
         if held and self.isVisible():
             # Open: the panel keeps the height it opened with, whatever comes or goes (a banner, the
             # storage details, the first entry and its "Clear"). The list gives up whole rows for what
             # needs more room; what is left over lies under it.
+            self._list_pad.setFixedHeight(0)
             over = self._needed_height() - held
             if over > 0:
-                filler.setFixedHeight(max(self.HELD_LIST_MIN, filler.height() - -(-over // step) * step))
+                filler.setFixedHeight(max(self.MIN_ROWS * step, filler.height() - -(-over // step) * step))
                 over = self._needed_height() - held
             if over < 0:
                 self._list_pad.setFixedHeight(-over)
