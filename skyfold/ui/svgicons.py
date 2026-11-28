@@ -31,6 +31,7 @@ ICONS: dict[str, str] = {
     "download": '<path d="M10 4v9M6 9.5l4 4 4-4M4.5 16h11"/>',
     "info": '<circle cx="10" cy="10" r="7.5"/><path d="M10 9v5M10 6.3v.2"/>',
     "error": '<circle cx="10" cy="10" r="7.5"/><path d="M10 6v5M10 13.8v.2"/>',
+    "warning": '<path d="M10 3.2l7.3 12.8H2.7z"/><path d="M10 8.3v3.6M10 14.2v.2"/>',
     "clock": '<circle cx="10" cy="10" r="7.5"/><path d="M10 6v4.3l2.8 1.7"/>',
     "bell": '<path d="M5.5 13.5V9a4.5 4.5 0 0 1 9 0v4.5l1.3 1.5H4.2z"/><path d="M8.3 17h3.4"/>',
     "globe": '<circle cx="10" cy="10" r="7.5"/><path d="M2.5 10h15M10 2.5c2 2.2 3 4.7 3 7.5s-1 5.3-3 7.5c-2-2.2-3-4.7-3-7.5s1-5.3 3-7.5z"/>',

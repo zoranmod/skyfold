@@ -1480,31 +1480,25 @@ class Flyout(QWidget):
                 row.set_thumb(img)
 
     def _error_details(self, row: "ActivityRow") -> None:
-        from PySide6.QtWidgets import QApplication, QMessageBox
+        from PySide6.QtWidgets import QApplication
 
-        box = QMessageBox(self)
-        box.setWindowTitle(t("Sync problem"))
-        box.setIcon(QMessageBox.Warning)
-        box.setTextFormat(Qt.PlainText)  # (the message names files from iCloud: never HTML)
-        box.setText(row.message)
+        from .dialogs import choose
+
         when = fmt_time(row.ts) + (f"  (×{row.count})" if row.count > 1 else "")
         network = any(w in row.message.lower() for w in ("connection", "timed out", "reach", "network",
                                                             "veza", "dohvatiti"))
-        box.setInformativeText(t("Last seen: {when}", when=when) + "\n\n" + (t(
+        text = t("Last seen: {when}", when=when) + "\n\n" + (t(
             "Skyfold tries again by itself. Most problems like this are a short break in the connection to "
-            "Apple and go away on the next sync.") if network else t("Skyfold tries again by itself.")))
-        again = box.addButton(t("Try again now"), QMessageBox.AcceptRole)
-        again.setObjectName("Primary")
-        again.style().unpolish(again)
-        again.style().polish(again)
-        copy = box.addButton(t("Copy text"), QMessageBox.ActionRole)
-        box.addButton(t("Close"), QMessageBox.RejectRole)
-        box.setDefaultButton(again)
+            "Apple and go away on the next sync.") if network else t("Skyfold tries again by itself."))
         self.hide()  # the panel closes on focus loss anyway; the dialog stands on its own
-        box.exec()
-        if box.clickedButton() is again:
+        # (the message names files from iCloud: the dialog shows plain text only, never HTML)
+        got = choose(None, t("Sync problem"), text,
+                     [("copy", t("Copy text"), ""), ("close", t("Close"), "cancel"),
+                      ("again", t("Try again now"), "primary")],
+                     heading=t("Sync problem"), detail=row.message, kind="warning", palette=self.c)
+        if got == "again":
             self.syncNow.emit()
-        elif box.clickedButton() is copy:
+        elif got == "copy":
             QApplication.clipboard().setText(f"{row.message}\n{row.ts}")
 
     def _clear_activity(self) -> None:

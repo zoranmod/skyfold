@@ -243,7 +243,7 @@ def test_settings_signout_requires_its_confirmation(ui):
 
     def dismiss():
         box = app.activeModalWidget()
-        if isinstance(box, QMessageBox):
+        if isinstance(box, dialogs.MessageDialog):
             answered.append(box.windowTitle())
             QTest.keyClick(box, Qt.Key_Escape)
         elif len(tries) < 200:  # not open yet: look again (never leave a question open: the run would hang)
