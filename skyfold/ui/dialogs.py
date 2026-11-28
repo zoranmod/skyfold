@@ -261,106 +261,6 @@ def _palette_of(widget) -> dict[str, str]:
     return _current_palette()
 
 
-def _tile_pixmap(icon, c: dict[str, str], dpr: float = 2.0) -> QPixmap:
-    """The message's sign as in the 1.1 design: a rounded tile tinted with the state's colour (warning:
-    amber, error: red, question and information: the accent) and its line icon in that colour."""
-    colour = {QMessageBox.Warning: c["warn"], QMessageBox.Critical: c["err"]}.get(icon, c["accent_fg"])
-    size = 40
-    pm = QPixmap(round(size * dpr), round(size * dpr))
-    pm.setDevicePixelRatio(dpr)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    tint = QColor(colour)
-    tint.setAlphaF(0.14 if QColor(c["bg"]).lightness() > 128 else 0.20)
-    p.setPen(Qt.NoPen)
-    p.setBrush(tint)
-    p.drawRoundedRect(QRectF(0, 0, size, size), 10, 10)
-    if icon == QMessageBox.Question:  # (the icon set has no question mark: drawn as text)
-        f = QFont()
-        f.setFamilies(["Segoe UI Variable Display", "Segoe UI"])
-        f.setPixelSize(22)
-        f.setWeight(QFont.DemiBold)
-        p.setFont(f)
-        p.setPen(QColor(colour))
-        p.drawText(QRectF(0, 0, size, size), Qt.AlignCenter, "?")
-    else:
-        name = "info" if icon in (QMessageBox.Information, QMessageBox.NoIcon) else "error"
-        glyph(name, colour, 22).paint(p, 9, 9, 22, 22)
-    p.end()
-    return pm
-
-
-def style_message_box(box: QMessageBox, kind=None) -> None:
-    """A QMessageBox in the 1.1 design, still a QMessageBox (its answers, roles and Escape work as
-    before): 14 px text, the sign on a tile in the state's colour, the main answer highlighted and
-    on the right, the buttons in a band along the bottom. kind: the box's icon (default: its own)."""
-    c = _palette_of(box.parentWidget()) if box.parentWidget() is not None else _current_palette()
-    kind = box.icon() if kind is None else kind
-    primary = box.defaultButton() or (box.buttons()[0] if len(box.buttons()) == 1 else None)
-    if primary is not None:
-        primary.setObjectName("Primary")
-    for b in box.buttons():
-        b.setMinimumWidth(96)
-        b.setCursor(Qt.PointingHandCursor)
-    box.setObjectName("Message")
-    box.setStyleSheet(
-        # button-layout 3: the main answer on the right ("No  Yes"), as in Windows 11's own dialogs
-        f"QMessageBox#Message {{ background: {c['bg']}; }}"
-        "QMessageBox#Message QLabel#qt_msgbox_label { font-size: 10.5pt; min-width: 300px; max-width: 440px; }"
-        f"QMessageBox#Message QLabel#qt_msgbox_informativelabel {{ font-size: 9.25pt; color: {c.get('muted2', c['muted'])}; }}")
-    from PySide6.QtWidgets import QDialogButtonBox
-
-    buttons = box.findChild(QDialogButtonBox)
-    if buttons is not None:  # (set on the button box itself: a rule from the box loses to the app's sheet)
-        buttons.setStyleSheet("QDialogButtonBox { button-layout: 3; }")
-    label = box.findChild(QLabel, "qt_msgboxex_icon_label")
-    if label is not None:  # the sign drawn in the design (box.icon() keeps telling what it is)
-        label.setPixmap(_tile_pixmap(kind, c, max(2.0, box.devicePixelRatioF())))
-        label.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
-        label.setContentsMargins(0, 2, 8, 0)
-    else:
-        box.setIconPixmap(_tile_pixmap(kind, c))
-    lay = box.layout()
-    if lay is not None:
-        lay.setContentsMargins(24, 22, 24, 18)
-        lay.setVerticalSpacing(18)
-
-
-def _box(parent, icon, title: str, text: str, yes_no: bool) -> int:
-    """QMessageBox with the buttons in the app's language (Qt's own Yes/No/OK stay English), in the
-    1.1 design (style_message_box)."""
-    box = QMessageBox(parent)
-    box.setIcon(icon)
-    box.setWindowTitle(title)
-    box.setTextFormat(Qt.PlainText)  # (messages name files and folders from iCloud: never HTML)
-    box.setText(text)
-    if yes_no:
-        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        box.button(QMessageBox.Yes).setText(t("Yes"))
-        box.button(QMessageBox.No).setText(t("No"))
-        box.setDefaultButton(QMessageBox.Yes)
-    else:
-        box.setStandardButtons(QMessageBox.Ok)
-        box.button(QMessageBox.Ok).setText(t("OK"))
-        box.setDefaultButton(QMessageBox.Ok)
-    style_message_box(box, icon)
-    return box.exec()
-
-
-def ask(parent, title: str, text: str) -> int:
-    """Returns QMessageBox.Yes or QMessageBox.No."""
-    return _box(parent, QMessageBox.Question, title, text, True)
-
-
-def inform(parent, title: str, text: str) -> None:
-    _box(parent, QMessageBox.Information, title, text, False)
-
-
-def warn(parent, title: str, text: str) -> None:
-    _box(parent, QMessageBox.Warning, title, text, False)
-
-
 def _label(text: str, name: str | None = None, wrap: bool = False) -> QLabel:
     lbl = QLabel()
     lbl.setTextFormat(Qt.PlainText)  # (names from iCloud are never read as HTML; markup opts in itself)
@@ -425,6 +325,11 @@ class _Dialog(QDialog):
         layers over it (as in the tray panel)."""
         if not self.glass:
             return
+        sheet = self._glass_sheet()
+        if sheet != self.styleSheet():  # (setting it again would announce another change: a loop)
+            self.setStyleSheet(sheet)
+
+    def _glass_sheet(self) -> str:
         from .backdrop import glass_colours
         from .theme import accent_edges, accent_fill
 
@@ -451,8 +356,7 @@ class _Dialog(QDialog):
             f"QPushButton#Primary {{ background: {accent_fill(self.c['btn'], 0.80)}; {accent_edges(self.c['btn'], 0.85)} }}"
             f"QPushButton#Primary:hover {{ background: {accent_fill(self.c['btn_hover'], 0.92)};"
             f" {accent_edges(self.c['btn_hover'], 0.95)} }}")
-        if sheet != self.styleSheet():  # (setting it again would announce another change: a loop)
-            self.setStyleSheet(sheet)
+        return sheet
 
     def paintEvent(self, e) -> None:  # noqa: N802
         if self.glass:
@@ -490,6 +394,279 @@ class _Dialog(QDialog):
                     self._material()  # (light or dark material, and the layers in the new colours)
                 return
             self._match_frame()  # the theme changed while it was open
+
+
+# The message window -------------------------------------------------------------------
+# what a message is about: its line icon and the colour of its tile
+_KINDS = {
+    "info": ("info", "accent_fg"),
+    "question": ("?", "accent_fg"),  # (the icon set has no question mark: drawn as text)
+    "warning": ("warning", "warn"),
+    "error": ("error", "err"),
+    "delete": ("trash", "stop"),
+    "danger": ("warning", "stop"),
+}
+_MAX_TEXT = 900  # (a message is a few lines; a runaway one is cut so the answers stay on the screen)
+
+
+def _tile_pixmap(icon: str, colour: str, c: dict[str, str], dpr: float = 2.0) -> QPixmap:
+    """A message's sign as on the notification cards: a rounded tile tinted with the colour of what
+    it is about (the accent, amber for a warning, red for an error or a deletion) and a line icon in
+    that colour."""
+    size = 40
+    pm = QPixmap(round(size * dpr), round(size * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    tint = QColor(colour)
+    tint.setAlphaF(0.14 if QColor(c["bg"]).lightness() > 128 else 0.20)
+    p.setPen(Qt.NoPen)
+    p.setBrush(tint)
+    p.drawRoundedRect(QRectF(0, 0, size, size), 10, 10)
+    if icon == "?":
+        f = QFont()
+        f.setFamilies(["Segoe UI Variable Display", "Segoe UI"])
+        f.setPixelSize(22)
+        f.setWeight(QFont.DemiBold)
+        p.setFont(f)
+        p.setPen(QColor(colour))
+        p.drawText(QRectF(0, 0, size, size), Qt.AlignCenter, "?")
+    else:
+        glyph(icon, colour, 22).paint(p, 9, 9, 22, 22)
+    p.end()
+    return pm
+
+
+def _breakable(text: str) -> str:
+    """The text as it is shown: a long path or file name may wrap after a separator (an invisible
+    break there), so one word wider than the window is never cut off at its edge."""
+    out = []
+    run = 0
+    for ch in text:
+        out.append(ch)
+        run = 0 if ch.isspace() else run + 1
+        if ch in "\\/_-" or run >= 28:
+            out.append("​")
+            run = 0
+    return "".join(out)
+
+
+class MessageDialog(_Dialog):
+    """Every question and message of the app, one window in the 1.1 design: on glass, a tinted tile
+    with a line icon, a clear title, a short muted text under it, and the answers in the footer band
+    on the right. An answer that deletes or removes something is red and never the one Enter picks
+    by itself: the safe answer has the focus. Esc (and the window's X) is the safe answer too.
+
+    buttons: (key, text, style) from left to right; style is "primary", "danger", "cancel" or "".
+    After exec(), answer holds the key of the button that was chosen."""
+
+    GLASS = True
+    WIDTH = 440
+
+    def __init__(self, parent, title: str, text: str, *, heading: str = "", detail: str = "",
+                 kind: str = "info", icon: str | None = None, buttons=None, default: str | None = None,
+                 escape: str | None = None, palette: dict[str, str] | None = None) -> None:
+        super().__init__(title)
+        self.c = palette or (_palette_of(parent) if parent is not None else _current_palette())
+        # over the window it belongs to (never behind it, where the app would seem to hang); a
+        # message without one (start-up, the tray) is a window of its own with a taskbar button
+        owner = parent.window() if isinstance(parent, QWidget) and parent.isVisible() else None
+        flags = Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint
+        if owner is not None:
+            self.setParent(owner, flags)
+        else:
+            self.setWindowFlags(flags)
+        buttons = list(buttons or [("ok", t("OK"), "primary")])
+        self.kind, self._icon_name = kind, icon
+        self.answer: str | None = None
+        styles = {key: style for key, _text, style in buttons}
+        # Esc: the answer that changes nothing (Cancel; a lone OK)
+        self._escape = escape or next((k for k, s in styles.items() if s == "cancel"), None) or (
+            buttons[0][0] if len(buttons) == 1 else None)
+        risky = "danger" in styles.values()
+        # Enter: the main answer, but never one that deletes: then the safe one
+        default = default or (self._escape if risky else None) or next(
+            (k for k, s in styles.items() if s == "primary"), None) or buttons[-1][0]
+        self.setFixedWidth(self.WIDTH)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        body = QWidget()
+        row = QHBoxLayout(body)
+        row.setContentsMargins(24, 22, 24, 20)
+        row.setSpacing(16)
+        outer.addWidget(body, 1)
+        self.tile = QLabel()
+        self.tile.setFixedSize(40, 40)
+        row.addWidget(self.tile, 0, Qt.AlignTop)
+        # the text beside the tile: one line sits level with the tile's middle, more grow downwards
+        side = QWidget()
+        side.setMinimumHeight(40)
+        col = QVBoxLayout(side)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+        col.addStretch(1)
+        row.addWidget(side, 1)
+        shown = text if len(text) <= _MAX_TEXT else text[:_MAX_TEXT].rstrip() + "…"
+        self.heading = self.detail = None
+        if heading:
+            self.heading = _label(_breakable(heading), "MsgTitle", True)
+            col.addWidget(self.heading)
+        if detail:
+            if heading:
+                col.addSpacing(6)
+            self.detail = _label(_breakable(detail), "MsgDetail", True)
+            col.addWidget(self.detail)
+        # (plain text always: messages name files and folders from iCloud, never read as HTML)
+        self.text = _label(_breakable(shown), "MsgText", True)
+        self.text.setVisible(bool(text))
+        if text and (heading or detail):
+            col.addSpacing(6)
+        col.addWidget(self.text)
+        col.addStretch(1)
+        for lb in (self.heading, self.detail, self.text):
+            if lb is not None:
+                lb.setTextInteractionFlags(Qt.NoTextInteraction)
+        # for screen readers: the window says what it asks, without the invisible breaks
+        self.setAccessibleName(heading or title)
+        self.setAccessibleDescription("\n".join(s for s in (detail, text) if s))
+        fl = _footer_band(outer)
+        fl.addStretch(1)
+        self._buttons: dict[str, QPushButton] = {}
+        self._styles = styles
+        for key, label, style in buttons:
+            b = QPushButton(label)
+            b.setMinimumWidth(88)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setAutoDefault(True)  # Enter presses the button that has the focus, no other
+            if style == "primary":
+                b.setObjectName("Primary")
+            elif style == "danger":
+                b.setObjectName("Destructive")
+            b.clicked.connect(lambda _=False, k=key: self._chosen(k))
+            fl.addWidget(b)
+            self._buttons[key] = b
+        self._default = self._buttons[default]
+        self._default.setDefault(True)
+        self._default.setFocus()
+        self._paint_parts()
+        self._fit()
+
+    def button(self, key: str) -> QPushButton:
+        return self._buttons[key]
+
+    def default_button(self) -> QPushButton:
+        return self._default
+
+    def _chosen(self, key: str) -> None:
+        self.answer = key
+        self.accept()
+
+    def reject(self) -> None:  # Esc, the window's X
+        self.answer = self._escape
+        super().reject()
+
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
+        self._paint_parts()
+        if self.glass:
+            self._glass_style()
+
+    def _paint_parts(self) -> None:
+        """The parts in the theme's colours. Each carries its own style, so a message looks the same
+        over any window and at start-up, before the app has its style sheet."""
+        from .theme import accent_edges, accent_fill
+
+        c = self.c
+        icon, tone = _KINDS.get(self.kind, _KINDS["info"])
+        self.tile.setPixmap(_tile_pixmap(self._icon_name or icon, c[tone], c, max(2.0, self.devicePixelRatioF())))
+        if self.heading is not None:
+            self.heading.setStyleSheet(
+                f"QLabel {{ font-family: \"Segoe UI Variable Display\",\"Segoe UI\"; font-size: 13.5pt;"
+                f" font-weight: 600; color: {c['text']}; }}")
+        if self.detail is not None:
+            self.detail.setStyleSheet(f"QLabel {{ font-size: 10.5pt; color: {c['text']}; }}")
+        # under a title the text is the quiet part; alone it is the message itself
+        quiet = self.heading is not None or self.detail is not None
+        self.text.setStyleSheet(f"QLabel {{ font-size: 10.5pt; color: {c['muted'] if quiet else c['text']}; }}")
+        a, e, h = (0.80, 0.85, 0.92) if self.glass else (1.0, 1.0, 1.0)  # (see-through over the glass, as Primary)
+        for key, b in self._buttons.items():
+            if self._styles[key] != "danger":
+                continue
+            b.setStyleSheet(
+                f"QPushButton {{ color: {c['stop_text']}; background: {accent_fill(c['stop'], a)};"
+                f" {accent_edges(c['stop'], e)} font-weight: 600; }}"
+                f"QPushButton:hover {{ background: {accent_fill(c['stop_hover'], h)}; {accent_edges(c['stop_hover'], h)} }}"
+                f"QPushButton:pressed {{ background: {c['stop_pressed']}; border-color: {c['stop_pressed']}; }}"
+                f"QPushButton:focus {{ border: 2px solid {c['text']}; }}")
+
+    def _base_sheet(self) -> str:
+        """The app's style sheet when the app has none yet (a message at start-up)."""
+        app = QApplication.instance()
+        if app is not None and app.styleSheet():
+            return ""
+        from .theme import stylesheet
+
+        return stylesheet(self.c)
+
+    def _glass_sheet(self) -> str:
+        return self._base_sheet() + super()._glass_sheet()
+
+    def _fit(self) -> None:
+        """As tall as the wrapped lines need at this width, measured with the real fonts."""
+        if not self.glass:
+            base = self._base_sheet()
+            if base != self.styleSheet():
+                self.setStyleSheet(base)
+        for w in self.findChildren(QWidget):
+            w.ensurePolished()
+        lay = self.layout()
+        lay.invalidate()
+        lay.activate()
+        need = lay.totalHeightForWidth(self.WIDTH) if lay.hasHeightForWidth() else lay.sizeHint().height()
+        self.setFixedHeight(max(need, lay.minimumSize().height()))
+
+    def showEvent(self, e) -> None:  # noqa: N802
+        super().showEvent(e)
+        self._paint_parts()  # (the screen's scale is known now: a sharp tile)
+        self._fit()
+        self._default.setFocus()
+
+
+def choose(parent, title: str, text: str, buttons, **kw) -> str | None:
+    """Shows a message and waits for the answer: the key of the chosen button (Esc: the cancelling
+    one, or None when the message has none)."""
+    box = MessageDialog(parent, title, text, buttons=buttons, **kw)
+    try:
+        box.exec()
+        return box.answer
+    finally:
+        box.deleteLater()
+
+
+def _heading(title: str, heading: str) -> str:
+    # a title that says what the message is about ("iCloud Drive") heads it; the app's name says nothing
+    return heading or ("" if title == APP_NAME else title)
+
+
+def ask(parent, title: str, text: str, *, heading: str = "", yes: str | None = None, no: str | None = None,
+        danger: bool = False, kind: str | None = None, icon: str | None = None, detail: str = "") -> int:
+    """A yes/no question. Returns QMessageBox.Yes or QMessageBox.No (Esc: No). danger: Yes deletes or
+    removes something, so it is red and No has the focus."""
+    got = choose(parent, title, text, [("no", no or t("No"), "cancel"),
+                                       ("yes", yes or t("Yes"), "danger" if danger else "primary")],
+                 heading=_heading(title, heading), detail=detail, icon=icon,
+                 kind=kind or ("danger" if danger else "question"))
+    return QMessageBox.Yes if got == "yes" else QMessageBox.No
+
+
+def inform(parent, title: str, text: str, *, heading: str = "", icon: str | None = None) -> None:
+    choose(parent, title, text, None, heading=_heading(title, heading), kind="info", icon=icon)
+
+
+def warn(parent, title: str, text: str, *, heading: str = "", kind: str = "warning", icon: str | None = None) -> None:
+    choose(parent, title, text, None, heading=_heading(title, heading), kind=kind, icon=icon)
 
 
 class Toggle(QCheckBox):
@@ -1476,38 +1653,24 @@ class SettingsDialog(_Dialog):
             return True
         disk = (probe.anchor or str(probe)).rstrip("\\")
         est = self.drive_estimate()
-        box = QMessageBox(self)
-        box.setTextFormat(Qt.PlainText)  # (folder names from iCloud: never HTML)
-        box.setWindowTitle(t("iCloud Drive"))
-        box.setIcon(QMessageBox.Information)
         if est is None:
-            box.setText(t("All of your iCloud Drive will be downloaded to {folder}.", folder=drive_dir))
-            box.setInformativeText(t("{free} free on {disk}. Large Drives can take a while to download.",
-                                     free=size_text(free), disk=disk))
+            heading = t("All of your iCloud Drive will be downloaded to {folder}.", folder=drive_dir)
+            text = t("{free} free on {disk}. Large Drives can take a while to download.",
+                     free=size_text(free), disk=disk)
         elif est > free - DISK_RESERVE:
-            box.setIcon(QMessageBox.Warning)
-            box.setText(t("Not enough space for iCloud Drive on {disk}.", disk=disk))
-            box.setInformativeText(t("Your iCloud Drive holds up to about {size}, but only {free} is free there. "
-                                     "Choose a folder on a disk with more space.",
-                                     size=size_text(est), free=size_text(free)))
-            box.setStandardButtons(QMessageBox.Ok)
-            box.button(QMessageBox.Ok).setText(t("OK"))
-            box.exec()
+            warn(self, t("iCloud Drive"),
+                 t("Your iCloud Drive holds up to about {size}, but only {free} is free there. "
+                   "Choose a folder on a disk with more space.", size=size_text(est), free=size_text(free)),
+                 heading=t("Not enough space for iCloud Drive on {disk}.", disk=disk))
             return False
         else:
-            box.setText(t("About {size} will be downloaded from iCloud Drive.", size=size_text(est)))
-            box.setInformativeText(t("Folder: {folder}\n{free} free on {disk}, {left} left afterwards.\n\n"
-                                     "The first download of a large Drive can take a few hours.",
-                                     folder=drive_dir, free=size_text(free), disk=disk,
-                                     left=size_text(max(0, free - est))))
-        start = box.addButton(t("Turn on"), QMessageBox.AcceptRole)
-        start.setObjectName("Primary")
-        start.style().unpolish(start)
-        start.style().polish(start)
-        box.addButton(t("Cancel"), QMessageBox.RejectRole)
-        box.setDefaultButton(start)
-        box.exec()
-        return box.clickedButton() is start
+            heading = t("About {size} will be downloaded from iCloud Drive.", size=size_text(est))
+            text = t("Folder: {folder}\n{free} free on {disk}, {left} left afterwards.\n\n"
+                     "The first download of a large Drive can take a few hours.",
+                     folder=drive_dir, free=size_text(free), disk=disk, left=size_text(max(0, free - est)))
+        return choose(self, t("iCloud Drive"), text,
+                      [("cancel", t("Cancel"), "cancel"), ("start", t("Turn on"), "primary")],
+                      heading=heading, kind="info", icon="download") == "start"
 
     def _show_folders(self) -> None:
         f = self.drive_folders
@@ -1539,22 +1702,16 @@ class SettingsDialog(_Dialog):
         """First time Drive is turned on: everything, or only some folders?"""
         if self.folders_chosen:
             return True
-        box = QMessageBox(self)
-        box.setTextFormat(Qt.PlainText)  # (folder names from iCloud: never HTML)
-        box.setWindowTitle(t("iCloud Drive"))
-        box.setIcon(QMessageBox.Question)
-        box.setText(t("What should Skyfold sync from your iCloud Drive?"))
-        box.setInformativeText(t("You can sync everything, or only the folders you need. "
-                                 "This can be changed later in Settings."))
-        everything = box.addButton(t("Everything"), QMessageBox.AcceptRole)
-        some = box.addButton(t("Choose folders…"), QMessageBox.ActionRole)
-        box.addButton(t("Cancel"), QMessageBox.RejectRole)
-        box.setDefaultButton(everything)
-        box.exec()
-        if box.clickedButton() is everything:
+        got = choose(self, t("iCloud Drive"),
+                     t("You can sync everything, or only the folders you need. "
+                       "This can be changed later in Settings."),
+                     [("cancel", t("Cancel"), "cancel"), ("some", t("Choose folders…"), ""),
+                      ("everything", t("Everything"), "primary")],
+                     heading=t("What should Skyfold sync from your iCloud Drive?"), kind="question", icon="folder")
+        if got == "everything":
             self.drive_folders = None
             return True
-        if box.clickedButton() is some:
+        if got == "some":
             return self._choose_folders()
         return False
 
@@ -1566,22 +1723,18 @@ class SettingsDialog(_Dialog):
         self.drive_trash = []
         if not gone:
             return True
-        box = QMessageBox(self)
-        box.setTextFormat(Qt.PlainText)  # (folder names from iCloud: never HTML)
-        box.setWindowTitle(t("iCloud Drive"))
-        box.setIcon(QMessageBox.Question)
-        box.setText(t("{n} folders on this PC will no longer be synced.", n=len(gone)))
-        box.setInformativeText(", ".join(gone[:6]) + (" …" if len(gone) > 6 else "") + "\n\n" + t(
-            "They stay in iCloud either way. Keep the copies on this PC, or move them to the Recycle Bin?"))
-        keep = box.addButton(t("Keep on this PC"), QMessageBox.AcceptRole)
-        trash = box.addButton(t("Move to Recycle Bin"), QMessageBox.DestructiveRole)
-        box.addButton(t("Cancel"), QMessageBox.RejectRole)
-        box.setDefaultButton(keep)
-        box.exec()
-        if box.clickedButton() is trash:
+        # keeping is the main answer and the one Enter picks; moving to the Recycle Bin is the red one
+        got = choose(self, t("iCloud Drive"),
+                     t("They stay in iCloud either way. Keep the copies on this PC, or move them to the Recycle Bin?"),
+                     [("cancel", t("Cancel"), "cancel"), ("trash", t("Move to Recycle Bin"), "danger"),
+                      ("keep", t("Keep on this PC"), "primary")],
+                     heading=t("{n} folders on this PC will no longer be synced.", n=len(gone)),
+                     detail=", ".join(gone[:6]) + (" …" if len(gone) > 6 else ""),
+                     kind="question", icon="folder", default="keep")
+        if got == "trash":
             self.drive_trash = gone
             return True
-        return box.clickedButton() is keep
+        return got == "keep"
 
     def _drive_enabled_changed(self, on: bool) -> None:
         for w in self.drive_cards:
@@ -1715,7 +1868,8 @@ class SettingsDialog(_Dialog):
 
     # actions ------------------------------------------------------------------------------
     def _sign_out(self) -> None:
-        if ask(self, t("Sign out"), t("Sign out of iCloud? Photos on this PC stay.")) == QMessageBox.Yes:
+        if ask(self, t("Sign out"), t("Photos on this PC stay."), heading=t("Sign out of iCloud?"),
+               yes=t("Sign out"), no=t("Cancel"), danger=True, icon="power") == QMessageBox.Yes:
             self.signOut.emit()
             self.reject()
 

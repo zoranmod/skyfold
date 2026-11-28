@@ -94,7 +94,8 @@ def test_find_my_rows_are_cards_with_small_buttons(app, monkeypatch):
 
 
 @pytest.mark.parametrize("answer", ["yes", "escape"])
-def test_message_boxes_stay_message_boxes(app, answer):
+def test_questions_keep_their_answers(app, answer):
+    """ask() still answers QMessageBox.Yes / No, now from the app's own message window."""
     app.setStyleSheet(theme.stylesheet(theme.DARK))
     host = QWidget()
     host.c = theme.DARK
@@ -102,9 +103,9 @@ def test_message_boxes_stay_message_boxes(app, answer):
 
     def act():
         box = app.activeModalWidget()
-        assert isinstance(box, QMessageBox)
-        yes, no = box.button(QMessageBox.Yes), box.button(QMessageBox.No)
-        seen.append((box.icon(), yes.objectName(), yes.x() > no.x()))
+        assert isinstance(box, dialogs.MessageDialog)
+        yes, no = box.button("yes"), box.button("no")
+        seen.append((box.kind, yes.objectName(), yes.x() > no.x()))
         if answer == "yes":
             yes.click()
         else:
@@ -113,23 +114,21 @@ def test_message_boxes_stay_message_boxes(app, answer):
     QTimer.singleShot(0, act)
     got = dialogs.ask(host, "Title", "Question?")
     assert got == (QMessageBox.Yes if answer == "yes" else QMessageBox.No)
-    assert seen == [(QMessageBox.Question, "Primary", True)]  # the main answer on the right
+    assert seen == [("question", "Primary", True)]  # the main answer on the right
 
 
 def test_warn_and_inform_show_their_sign_on_a_tile(app):
-    for fn, icon in ((dialogs.warn, QMessageBox.Warning), (dialogs.inform, QMessageBox.Information)):
+    for fn, kind in ((dialogs.warn, "warning"), (dialogs.inform, "info")):
         seen = []
 
         def act():
             box = app.activeModalWidget()
-            label = box.findChild(QLabel, "qt_msgboxex_icon_label")
-            seen.append((box.icon(), label is not None and not label.pixmap().isNull(),
-                         box.button(QMessageBox.Ok).objectName()))
-            box.button(QMessageBox.Ok).click()
+            seen.append((box.kind, not box.tile.pixmap().isNull(), box.button("ok").objectName()))
+            box.button("ok").click()
 
         QTimer.singleShot(0, act)
         assert fn(None, "T", "Text") is None
-        assert seen == [(icon, True, "Primary")]
+        assert seen == [(kind, True, "Primary")]
 
 
 def test_notifications_list_groups_today_and_earlier(app):

@@ -1257,7 +1257,7 @@ def main() -> int:
     for problem in _config.MIGRATION_PROBLEMS:
         log.warning("Earlier sync database not taken over: %s", problem)
     if not QSystemTrayIcon.isSystemTrayAvailable():
-        QMessageBox.critical(None, APP_NAME, t("The system tray is not available."))
+        warn(None, APP_NAME, t("The system tray is not available."), kind="error")
         return 1
 
     if _config.JOURNAL_PROBLEMS:  # opening the database now would overwrite a journal: never

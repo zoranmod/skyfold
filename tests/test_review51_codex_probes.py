@@ -11,7 +11,7 @@ from pyicloud.common.cloudkit import CKRecord
 from pyicloud.services.notes.client import NotesApiError
 from pyicloud.services.notes.protobuf import notes_pb2
 from PySide6.QtCore import QMetaObject, QTimer, Qt
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 
 from skyfold import notes_engine, worker
 from skyfold.config import Settings
@@ -212,8 +212,8 @@ def test_settings_retry_forgets_a_withdrawn_drive_recycle_choice(qapp, drive_env
 
     def choose_recycle():
         box = QApplication.activeModalWidget()
-        assert isinstance(box, QMessageBox)
-        next(b for b in box.buttons() if box.buttonRole(b) == QMessageBox.DestructiveRole).click()
+        assert isinstance(box, dialogs.MessageDialog)
+        box.button("trash").click()
 
     try:
         dlg.drive_folders = []

@@ -226,18 +226,17 @@ def test_many_hearts_go_as_one_request(qapp, made_up):
 
 
 def _answer_delete(monkeypatch):
-    from PySide6.QtWidgets import QMessageBox
+    from skyfold.ui import dialogs
 
     answer = {"delete": False}
 
     def fake_exec(box):
-        assert box.defaultButton().text() in ("Cancel", "Odustani")  # Enter never deletes by itself
-        target = [b for b in box.buttons() if box.buttonRole(b) == QMessageBox.DestructiveRole][0] \
-            if answer["delete"] else box.defaultButton()
-        box.clickedButton = lambda: target
+        assert box.default_button() is box.button("cancel")  # Enter never deletes by itself
+        assert box.button("delete").objectName() == "Destructive"
+        box.answer = "delete" if answer["delete"] else "cancel"
         return 0
 
-    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+    monkeypatch.setattr(dialogs.MessageDialog, "exec", fake_exec)
     return answer
 
 

@@ -22,14 +22,16 @@ def test_names_from_icloud_are_plain_text_in_the_panel_and_dialogs(qapp):  # noq
 
 
 def test_message_boxes_never_read_html(qapp, monkeypatch):  # noqa: F811
-    from PySide6.QtWidgets import QMessageBox
+    from PySide6.QtWidgets import QLabel
 
     from skyfold.ui import dialogs
 
     seen = []
-    monkeypatch.setattr(QMessageBox, "exec", lambda self: seen.append(self.textFormat()) or 0)
-    dialogs.inform(None, "x", UNC)
-    assert seen == [Qt.PlainText]
+    monkeypatch.setattr(dialogs.MessageDialog, "exec", lambda self: seen.append(
+        [lb.textFormat() for lb in self.findChildren(QLabel) if lb.text()]) or 0)
+    dialogs.inform(None, "x", UNC)  # (a title other than the app's name heads the message: shown too)
+    dialogs.ask(None, UNC, UNC, heading=UNC, detail=UNC)
+    assert seen == [[Qt.PlainText] * 2, [Qt.PlainText] * 3]
 
 
 def test_photo_names_never_run_and_never_take_a_device_name():

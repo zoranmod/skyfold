@@ -23,7 +23,7 @@ from PySide6.QtCore import (QAbstractListModel, QMargins, QEasingCurve, QEvent, 
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetricsF, QGuiApplication, QIcon, QImage, QKeySequence,
                            QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QShortcut)
 from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractScrollArea, QApplication, QFrame, QGridLayout,
-                               QHBoxLayout, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QMenu, QMessageBox,
+                               QHBoxLayout, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QMenu,
                                QPushButton, QScrollArea, QScrollBar, QSizePolicy, QStackedWidget, QStyle,
                                QStyledItemDelegate, QStyleOptionSlider, QToolButton, QVBoxLayout, QWidget)
 from shiboken6 import isValid
@@ -2509,22 +2509,23 @@ class PhotosWindow(LibraryDialog):
         s = self.settings()
         to_cloud = bool(getattr(s, "delete_pc_to_cloud", True))
         n = len(items)
-        box = QMessageBox(self)
-        box.setTextFormat(Qt.PlainText)  # (file names from iCloud: never HTML)
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle(t("Delete"))
-        box.setText(t("Delete {name}?", name=items[0].name) if n == 1 else t("Delete {n} items?", n=n))
-        box.setInformativeText(
-            t("They go to the Recycle Bin on this PC and to Recently Deleted in iCloud, where they stay for "
-              "30 days.") if to_cloud else
-            t("They go to the Recycle Bin on this PC. They stay in iCloud (Settings → Photos)."))
-        delete = box.addButton(t("Delete"), QMessageBox.DestructiveRole)
-        cancel = box.addButton(t("Cancel"), QMessageBox.RejectRole)
-        box.setDefaultButton(cancel)
-        box.setEscapeButton(cancel)
-        cancel.setFocus()
-        box.exec()
-        if box.clickedButton() is not delete:
+        from .dialogs import choose
+
+        videos = sum(1 for it in items if it.is_video)
+        if n == 1:
+            heading = t("Delete this video?") if videos else t("Delete this photo?")
+            text = (t("It goes to the Recycle Bin on this PC and to Recently Deleted in iCloud, where it stays "
+                      "for 30 days.") if to_cloud else
+                    t("It goes to the Recycle Bin on this PC. It stays in iCloud (Settings → Photos)."))
+        else:
+            heading = (t("Delete {n} photos?", n=n) if not videos else t("Delete {n} videos?", n=n)
+                       if videos == n else t("Delete {n} items?", n=n))
+            text = (t("They go to the Recycle Bin on this PC and to Recently Deleted in iCloud, where they stay "
+                      "for 30 days.") if to_cloud else
+                    t("They go to the Recycle Bin on this PC. They stay in iCloud (Settings → Photos)."))
+        # Delete is red and never the answer Enter gives by itself: Cancel has the focus, Esc cancels
+        if choose(self, t("Delete"), text, [("cancel", t("Cancel"), "cancel"), ("delete", t("Delete"), "danger")],
+                  heading=heading, detail=items[0].name if n == 1 else "", kind="delete") != "delete":
             return
         src = self.source()
         if src is None:
