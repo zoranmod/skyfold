@@ -64,16 +64,17 @@ def busy(qapp, monkeypatch):
     """(controller stand-in, worker, its thread, what happened) with the worker inside its slow slot."""
     monkeypatch.setattr(dialogs, "stop_tasks", lambda: None)
     worker, thread = SlowWorker(), QThread()
-    worker.moveToThread(thread)
-    thread.start()
-    worker.go.emit()
-    assert worker.entered.wait(5)
     seen = {"exit": [], "hard": []}
     ctl = SimpleNamespace(worker=worker, thread=thread, tray=SimpleNamespace(hide=lambda: None),
                           app=SimpleNamespace(quit=lambda: seen["exit"].append(
                               (thread.isRunning(), worker.drive_running()))))
-    monkeypatch.setattr(appmod, "_exit_now", lambda: seen["hard"].append(thread.isRunning()))
+    # (never the real one in a test: it ends the process. raising=False: the code before 1.2.1 had none)
+    monkeypatch.setattr(appmod, "_exit_now", lambda: seen["hard"].append(thread.isRunning()), raising=False)
+    worker.moveToThread(thread)
+    thread.start()
     try:
+        worker.go.emit()
+        assert worker.entered.wait(5)
         yield ctl, worker, thread, seen
     finally:
         worker.release.set()
@@ -128,7 +129,7 @@ def test_quit_pressed_twice_leaves_once(qapp, busy):
 
 def test_a_worker_that_never_ends_is_logged_and_left_behind_without_qts_exit(qapp, busy, monkeypatch, caplog):
     ctl, worker, thread, seen = busy
-    monkeypatch.setattr(appmod, "QUIT_WAIT", 0.3)
+    monkeypatch.setattr(appmod, "QUIT_WAIT", 0.3, raising=False)
     with caplog.at_level(logging.WARNING, logger="skyfold"):
         Controller.quit(ctl)
         assert pump(qapp, lambda: seen["hard"])
@@ -140,7 +141,6 @@ def test_a_worker_that_never_ends_is_logged_and_left_behind_without_qts_exit(qap
 def test_an_idle_worker_lets_quit_leave_at_once(qapp, busy):
     ctl, worker, thread, seen = busy
     worker.release.set()
-    assert pump(qapp, lambda: not worker.entered.is_set() or True)
     began = time.monotonic()
     Controller.quit(ctl)
     assert pump(qapp, lambda: seen["exit"]) and time.monotonic() - began < 2
@@ -188,7 +188,7 @@ def update(qapp, monkeypatch, tmp_path):
 
 def test_the_update_is_put_off_while_the_worker_is_busy(qapp, update, monkeypatch, tmp_path):
     ctl, worker, dlg, happened = update
-    monkeypatch.setattr(appmod, "UPDATE_WAIT", 0.3)
+    monkeypatch.setattr(appmod, "UPDATE_WAIT", 0.3, raising=False)
     dlg.ready.emit(tmp_path)  # downloaded and checked
     assert worker.cancelled == 1 and not happened  # the round is asked to stop; nothing is handed over yet
     assert pump(qapp, lambda: dlg.go.isEnabled())
