@@ -63,9 +63,17 @@ def test_worker_signals_reach_ui_on_ui_thread(qapp, tmp_path, monkeypatch):
             ctl.worker.progress.emit(5, 10, "x")
             ctl.worker.notify.emit("a", "b")
 
-        t = threading.Thread(target=from_worker_thread, name="FakeWorker")
+        # From a QThread, as the real worker does: PySide signals emitted from a plain Python thread
+        # occasionally crashed this test (an access violation as the thread started).
+        from PySide6.QtCore import QThread
+
+        class FakeWorker(QThread):
+            def run(self):  # noqa: D401
+                from_worker_thread()
+
+        t = FakeWorker()
         t.start()
-        t.join()
+        assert t.wait(5000)
         assert pump(lambda: len(seen) == 3), seen
         assert set(seen.values()) == {"MainThread"}, seen
     finally:
