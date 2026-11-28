@@ -64,3 +64,21 @@ def test_reserved_names_with_a_space_are_caught():
     from skyfold.drive_engine import windows_name_problem
 
     assert windows_name_problem("con .jpg", Path("C:/x")) and not windows_name_problem("Garden/a.jpg", Path("C:/x"))
+
+
+def test_a_minimized_maximized_window_comes_back_maximized(qapp):  # noqa: F811
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QWidget
+
+    from skyfold.app import Controller
+
+    w = QWidget()
+    w.show()
+    w.setWindowState(Qt.WindowMaximized | Qt.WindowMinimized)
+    qapp.processEvents()
+    ctl = SimpleNamespace(flyout=SimpleNamespace(hide=lambda: None), _dialogs={"notes": w})
+    Controller._show_dialog(ctl, "notes", QWidget())
+    assert not w.isMinimized() and w.windowState() & Qt.WindowMaximized
+    w.close()

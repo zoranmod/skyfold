@@ -747,8 +747,9 @@ class Controller(QObject):
         old = self._dialogs.get(key)
         if old is not None and isValid(old) and old.isVisible():
             log.info("Window %s is already open: brought to the front", key)
-            if old.isMinimized():
-                old.showNormal()
+            if old.isMinimized():  # back as it was: a maximized window comes back maximized
+                old.setWindowState((old.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
+                old.show()
             old.raise_()
             old.activateWindow()
             return
