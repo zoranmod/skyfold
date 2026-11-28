@@ -18,8 +18,8 @@ import os
 import sys
 from typing import Callable, Sequence
 
-from PySide6.QtCore import (QEasingCurve, QPoint, QPointF, QRect, QRectF, Qt, QTimer, QVariantAnimation,
-                            Signal)
+from PySide6.QtCore import (QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer,
+                            QVariantAnimation, Signal)
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPainterPath, QPen, \
     QRadialGradient
 from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QLabel, QVBoxLayout, QWidget
@@ -277,8 +277,8 @@ class ToastCard(QWidget):
         if images:
             from .panel_parts import Thumbs
 
-            strip = QHBoxLayout()
-            strip.setContentsMargins(0, 8, 0, 0)
+            strip = self._strip = QHBoxLayout()
+            strip.setContentsMargins(0, 0, 0, 0)  # (its 8 px above come with the first picture)
             strip.setSpacing(4)
             for _ in images[:3]:
                 shot = QLabel()
@@ -332,6 +332,9 @@ class ToastCard(QWidget):
         before = self.height()  # (read first: showing the picture can already make the card taller)
         shot = self._shots[self._wanted.index(path)]
         shot.setPixmap(rounded(img, 44, 6, max(1.0, self.devicePixelRatioF())))
+        # (not before: an empty strip takes no room on the card. And before show(): that is what makes
+        # the rows above count their heights again)
+        self._strip.setContentsMargins(0, 8, 0, 0)
         shot.show()
         self.adjustSize()
         if self.height() != before:
@@ -388,6 +391,13 @@ class ToastCard(QWidget):
         self.setFixedWidth(self.WIDTH + 2 * self.SHADOW)
         self.adjustSize()
         self.update()
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt naming
+        """The card's fixed width and the height its rows need at exactly that width. (adjustSize()
+        otherwise asks the wrapped labels how wide they would like to be: Qt's guess breaks a short
+        text into two lines the card then keeps room for, and leaves a long one too few lines.)"""
+        w = self.WIDTH + 2 * self.SHADOW
+        return QSize(w, self.layout().totalHeightForWidth(w))
 
     def card_rect(self) -> QRectF:
         """Where the card itself is inside the window (the rest is room for the shadow)."""

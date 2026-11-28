@@ -185,6 +185,100 @@ def test_a_card_that_grows_with_its_photos_stays_above_the_taskbar(qapp, monkeyp
         toasts.close_all()
         flush(qapp)
 
+
+SHORT = "Downloaded: 2, Deleted on PC: 1"  # one line on the card (Qt's own guess breaks it in two)
+LONG = "Your iCloud session has expired. Click to sign in again. " * 3  # several lines
+BUTTONS = [("Open", lambda: None), ("Show in folder", lambda: None)]
+
+
+def _slack(card: ToastCard) -> int:
+    """How many pixels taller the card is than its rows need (negative: something is cut off). Worked
+    out from where the parts ended up, not from any size hint."""
+    low = max(w.geometry().bottom() + 1 for w in [card._tile, card._title, card._text, *card.buttons, *card._shots]
+              if not w.isHidden())
+    spare = card.height() - (low + card.SHADOW + card.PAD)  # under the last row: only the card's own padding
+    need = [lbl.heightForWidth(lbl.width()) for lbl in (card._title, card._text)]
+    have = [card._title.height(), card._text.height()]
+    assert all(h >= n for h, n in zip(have, need)), "a label is cut off"
+    # (any extra height the labels were given is slack too, except what the 32 px tile beside them asks for)
+    return spare + max(0, sum(have) - max(sum(need), card.TILE - 2))
+
+
+@pytest.mark.parametrize("pal", [theme.LIGHT, theme.DARK, theme.OLED], ids=["light", "dark", "oled"])
+@pytest.mark.parametrize("glass", [False, True], ids=["plain", "glass"])
+@pytest.mark.parametrize("title", ["Photos synced", "A title that is long enough to need more than one line on a card"])
+@pytest.mark.parametrize("text", ["x", SHORT, LONG], ids=["one-word", "short", "long"])
+@pytest.mark.parametrize("count", [0, 1, 2])
+def test_card_is_exactly_as_tall_as_its_content(qapp, monkeypatch, pal, glass, title, text, count):
+    """A card with a short text was up to 15 px taller than its rows (17 to 34 px with Windows'
+    fonts), and one with a long text too short for it: its height came from the width Qt guessed for
+    the wrapped labels, not from the card's own width."""
+    from skyfold.ui import backdrop, flyout
+
+    monkeypatch.setattr(backdrop, "glass_supported", lambda: glass)
+    monkeypatch.setattr(backdrop, "blur_behind", lambda *a, **k: None)  # (Windows is not asked for the blur)
+    monkeypatch.setattr(flyout, "round_corners", lambda *a, **k: None)
+    card = ToastCard(title, text, pal, "photo", None, BUTTONS[:count])
+    try:
+        assert card.glass == glass
+        card.show()
+        qapp.processEvents()
+        assert card.width() == card.WIDTH + 2 * card.SHADOW
+        assert _slack(card) == 0
+        assert card.height() == card.layout().totalHeightForWidth(card.width())
+    finally:
+        card.close()
+
+
+@pytest.mark.parametrize("words_in_title", [1, 3, 10])
+def test_card_height_follows_its_text_word_by_word(qapp, words_in_title):
+    """Whatever the length: which texts Qt's guess breaks too early depends on the font, so every
+    length of one sentence is tried (the old cards were too tall for some short ones, too short for
+    the long ones)."""
+    words = ("Downloaded: 2, Deleted on PC: 1, Deleted in iCloud: 3 and some more words that go on for a while "
+             "until the text is long enough to need several lines on the card").split()
+    wrong = []
+    for n in range(1, len(words) + 1):
+        card = ToastCard(" ".join(words[:words_in_title]), " ".join(words[:n]), theme.DARK, "photo", None, BUTTONS)
+        try:
+            card.show()
+            qapp.processEvents()
+            off = card.height() - card.layout().totalHeightForWidth(card.width())
+            if off:
+                wrong.append((n, off))
+        finally:
+            card.close()
+    assert wrong == []  # (words in the text, pixels too tall)
+
+
+@pytest.mark.parametrize("text", [SHORT, LONG], ids=["short", "long"])
+@pytest.mark.parametrize("count", [0, 2])
+def test_card_hugs_its_content_before_and_after_its_photos_arrive(qapp, text, count):
+    from PySide6.QtGui import QColor, QImage
+
+    card = ToastCard("Photos synced", text, theme.DARK, "photo", None, BUTTONS[:count], images=["a.jpg", "b.jpg"])
+    try:
+        card.show()
+        qapp.processEvents()
+        assert _slack(card) == 0  # no room kept for pictures that are not there yet
+        before, grown = card.height(), []
+        card.grown.connect(lambda: grown.append(card.height()))
+        img = QImage(60, 60, QImage.Format_ARGB32)
+        img.fill(QColor("#3366cc"))
+        card._shot_ready("a.jpg", img)
+        qapp.processEvents()
+        first = card._shots[0]
+        assert first.height() == 44 and first.y() == card._text.y() + card._text.height() + 2 + 8  # 8 px above it
+        assert card.height() > before and grown == [card.height()]
+        assert _slack(card) == 0
+        taller = card.height()
+        card._shot_ready("b.jpg", img)  # a second picture sits beside the first: nothing grows
+        qapp.processEvents()
+        assert card.height() == taller and len(grown) == 1 and _slack(card) == 0
+    finally:
+        card.close()
+
+
 # timing and hover --------------------------------------------------------------------------------
 def test_card_goes_after_its_time(qapp, still):
     toasts = Toasts(theme.DARK, quiet=loud)
@@ -640,7 +734,7 @@ def test_card_buttons_share_the_whole_width_equally(qapp):
 
 def test_photo_card_shows_this_syncs_photos_and_their_folder(controller, tmp_path, monkeypatch):
     """A card about downloaded photos shows those photos, and Show in folder selects the newest one in
-    its own folder; a card about deletions shows no photo and opens the photos folder."""
+    its own folder; a card about deletions shows no photo and has no Show in folder (the file is gone)."""
     from skyfold.i18n import t
     from skyfold.ui import flyout
 
@@ -665,8 +759,63 @@ def test_photo_card_shows_this_syncs_photos_and_their_folder(controller, tmp_pat
     ctl._notify(t("Photos synced"), t("Deleted on PC: {n}", n=1))
     (_args, kw), = calls["own"]
     assert kw["images"] == []
-    dict(kw["actions"])[t("Show in folder")]()
-    assert opened == ["photos"]
+    assert [label for label, _fn in kw["actions"]] == [t("Open")]
+    assert not revealed[1:] and not opened
+
+
+def _synced(parts: dict) -> str:
+    """The text of a "… synced" notification, put together as the worker does."""
+    from skyfold.i18n import t
+
+    return ", ".join(t(part, n=n) for part, n in parts.items())
+
+
+@pytest.mark.parametrize("lang", ["en", "bs"])
+@pytest.mark.parametrize("service, parts, folder", [
+    ("photos", {"Downloaded: {n}": 2}, True),
+    ("photos", {"Deleted on PC: {n}": 1}, False),
+    ("photos", {"Deleted in iCloud: {n}": 3}, False),
+    ("photos", {"Deleted on PC: {n}": 1, "Deleted in iCloud: {n}": 3}, False),
+    ("photos", {"Downloaded: {n}": 2, "Deleted on PC: {n}": 1}, True),
+    ("drive", {"Downloaded: {n}": 2}, True),
+    ("drive", {"Uploaded: {n}": 1}, True),  # (the file is still in the folder)
+    ("drive", {"Deleted on PC: {n}": 1}, False),
+    ("drive", {"Deleted on PC: {n}": 1, "Deleted in iCloud: {n}": 3}, False),
+    ("drive", {"Uploaded: {n}": 1, "Deleted in iCloud: {n}": 3}, True),
+])
+def test_show_in_folder_only_when_a_file_came(controller, qapp, lang, service, parts, folder):
+    """A sync that only deleted leaves nothing to show in a folder: neither the card nor the bell's
+    list offers it. Open stays for Photos."""
+    from skyfold import i18n
+    from skyfold.i18n import t
+    from skyfold.ui.notices import NoticeRow
+
+    ctl, calls = controller
+    ctl.settings.drive_enabled = True
+    i18n.set_language(lang)
+    try:
+        title = t("Photos synced") if service == "photos" else t("iCloud Drive synced")
+        ctl._notify(title, _synced(parts))
+        (_args, kw), = calls["own"]
+        want = ([t("Open")] if service == "photos" else []) + ([t("Show in folder")] if folder else [])
+        assert [label for label, _fn in kw["actions"]] == want
+        row = NoticeRow(ctl.notices.items[0], theme.DARK, ctl._notice_action)  # the same notice under the bell
+        assert [b.text() for b in row.buttons] == want
+        row.deleteLater()
+    finally:
+        i18n.set_language("en")
+
+
+def test_first_sync_notices_keep_show_in_folder(controller):
+    """ "Your photos are on this PC" and "iCloud Drive is ready" are about files that came."""
+    from skyfold.i18n import t
+
+    ctl, calls = controller
+    ctl._notify(t("Your photos are on this PC"), "The first download is done: 12 files.")
+    ctl._notify(t("iCloud Drive is ready"), "The first sync is done.")
+    photos, drive = (kw for _args, kw in calls["own"])
+    assert [label for label, _fn in photos["actions"]] == [t("Open"), t("Show in folder")]
+    assert [label for label, _fn in drive["actions"]] == [t("Show in folder")]
 
 
 def test_tray_menu_says_why_a_pass_ended(controller):

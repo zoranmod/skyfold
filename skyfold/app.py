@@ -473,13 +473,28 @@ class Controller(QObject):
     def _notify(self, title: str, text: str) -> None:
         important = title in (t("Sign-in required"), t("Confirmation needed"))
         if self.settings.notifications or important:
-            self._show_notice(title, text, **self._notice_look(title))
+            self._show_notice(title, text, **self._notice_look(title, text))
 
-    def _notice_look(self, title: str) -> dict:
-        """The tile, colour and buttons (keys of _notice_action) of one of the worker's notifications."""
-        if title in (t("Photos synced"), t("Your photos are on this PC")):
+    @staticmethod
+    def _notice_counts(text: str, *counted: str) -> bool:
+        """Whether a "… synced" notification's text counts any of these ("Downloaded: {n}", …). The
+        worker writes its parts with the same translations, so their beginnings are looked for."""
+        starts = [t(part, n=0).split("0")[0].strip() for part in counted]  # ("Downloaded:" / "Preuzeto:")
+        return any(start and start in text for start in starts)
+
+    def _notice_look(self, title: str, text: str = "") -> dict:
+        """The tile, colour and buttons (keys of _notice_action) of one of the worker's notifications.
+        "Show in folder" is offered only when a file came: after a sync that only deleted, there is
+        nothing left to show (the card and the bell's list both take their buttons from here)."""
+        if title == t("Photos synced"):
+            came = self._notice_counts(text, "Downloaded: {n}")
+            return {"icon": "photo", "actions": ("open_photos", "folder_photos") if came else ("open_photos",)}
+        if title == t("Your photos are on this PC"):
             return {"icon": "photo", "actions": ("open_photos", "folder_photos")}
-        if title in (t("iCloud Drive synced"), t("iCloud Drive is ready")):
+        if title == t("iCloud Drive synced"):  # (an uploaded file is still in the folder too)
+            came = self._notice_counts(text, "Downloaded: {n}", "Uploaded: {n}")
+            return {"icon": "folder", "actions": ("folder_drive",) if came else ()}
+        if title == t("iCloud Drive is ready"):
             return {"icon": "folder", "actions": ("folder_drive",)}
         if title == t("Sign-in required"):
             return {"icon": "error", "tone": "err", "actions": ("sign_in",)}
@@ -511,8 +526,7 @@ class Controller(QObject):
             self.tray.showMessage(title, text, app_icon(), timeout)
             return
         images: list[str] = []
-        downloaded = t("Downloaded: {n}", n=0).split("0")[0].strip()  # ("Downloaded:" / "Preuzeto:")
-        if icon == "photo" and downloaded and downloaded in text:
+        if icon == "photo" and self._notice_counts(text, "Downloaded: {n}"):
             # the photos this sync brought, newest first, small on the card (only for downloads: a card
             # about deletions never shows some other photo)
             from .ui.panel_parts import Thumbs
