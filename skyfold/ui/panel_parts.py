@@ -418,7 +418,10 @@ class SoftCard(QFrame):
         return path
 
     def paintEvent(self, _e) -> None:  # noqa: N802
-        p = QPainter(self)
+        self.paint_card(QPainter(self))
+
+    def paint_card(self, p: QPainter) -> None:
+        """The card itself, in its own coordinates (also drawn again by library_frame.PaneCorners)."""
         p.setRenderHint(QPainter.Antialiasing)
         path = self.card_path()
         if self._shade.alpha():  # a faint shadow along the bottom edge, outside the card only

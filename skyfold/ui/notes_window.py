@@ -37,7 +37,7 @@ from ..i18n import t
 from ..notes_engine import local_datetime
 from .. import notes_view as nv
 from .dialogs import Combo
-from .library_frame import LibraryDialog, SearchField, count_font
+from .library_frame import LibraryDialog, PaneCorners, SearchField, count_font
 from .panel_parts import SoftCard
 from .pills import PILL_SHEET, ZoomPill, _tokens
 from .settings_parts import ElidedLabel
@@ -1232,6 +1232,9 @@ class NotesWindow(LibraryDialog):
         columns.setStretchFactor(1, 1)
         columns.setSizes([289, 590])
         content.addWidget(columns)
+        # what reaches the pane's edge (a scroll bar, the selection, the size bar) follows its rounded
+        # corners, smoothly, as the photos do in Photos (16: the bottom right corner's 12 and a little)
+        self.pane, self.corners = pane, PaneCorners(pane, 16)
         self.split.addWidget(pane)
         self.split.setCollapsible(0, True)
         self.split.setCollapsible(1, False)

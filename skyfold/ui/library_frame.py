@@ -1,12 +1,15 @@
 """The shared material, content layer and search field for the two library windows."""
 
-from PySide6.QtCore import QEvent
-from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QStyle, QStyleOption
+import math
+
+from PySide6.QtCore import QEvent, QObject, QPointF, Qt
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QTransform
+from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QStyle, QStyleOption, QWidget
 
 from .backdrop import glass_colours
 from .dialogs import _Dialog
 from .panel_parts import SoftCard
+from .pills import _ui
 from .settings_parts import IconLabel
 
 
@@ -121,3 +124,109 @@ class SearchField(SoftCard):
             p.setRenderHint(QPainter.Antialiasing)
             p.setClipPath(self.card_path())
             p.fillRect(1, self.height() - 3, self.width() - 2, 2, self.focus_color)
+
+
+class PaneCorners(QObject):
+    """The content pane's rounded corners over what reaches its edges (photos, a note's pictures, a
+    scroll bar): a child widget can't be clipped to a rounded shape, so the four corners are drawn
+    again on top of the pane's children. What lies outside the pane or on its hairline is taken out
+    and the window as it looks without it is put back: its tint, the pane's own layer and hairline.
+    Both along the same smooth (antialiased) edge, so the hairline runs round the corner unbroken and
+    the material still shows through."""
+
+    def __init__(self, pane: SoftCard, size: int = 12) -> None:
+        super().__init__(pane)
+        self.pane = pane
+        self.size = size  # (the pane's largest corner radius and a little more)
+        self.parts = [_Corner(pane) for _ in range(4)]
+        pane.installEventFilter(self)
+        self.place()
+
+    def eventFilter(self, obj, e):  # noqa: N802
+        if e.type() in (QEvent.Resize, QEvent.Show):
+            self.place()
+        return False
+
+    def place(self) -> None:
+        w, h = self.pane.width(), self.pane.height()
+        s = self.size
+        for k, part in enumerate(self.parts):
+            part.setGeometry(0 if k in (0, 2) else w - s, 0 if k < 2 else h - s, s, s)
+            part.raise_()
+
+    def refresh(self) -> None:
+        for part in self.parts:
+            part.update()
+
+
+class _Corner(QWidget):
+    def __init__(self, pane: SoftCard) -> None:
+        super().__init__(pane)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._key = None
+        self._cut = self._under = QImage()
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        pane = self.parentWidget()
+        p = QPainter(self)
+        # Where this corner lands on the pixels it is drawn to, and how many of them a point is
+        # (the screen's scaling; a capture may have its own). At 125 % or 150 % a corner can start
+        # between two pixels: the two pictures are made on the pixel grid itself, so they stay sharp.
+        to_device = p.deviceTransform()
+        dpr = to_device.m11()
+        ox, oy = math.floor(to_device.dx() + 1e-6), math.floor(to_device.dy() + 1e-6)
+        fx, fy = max(0.0, to_device.dx() - ox), max(0.0, to_device.dy() - oy)
+        tint = _ui(self)["tint"]
+        key = (self.geometry(), pane.size(), dpr, ox, oy, fx, fy, tint.rgba(), pane.fill.rgba(),
+               pane.stroke.rgba(), pane.shade.rgba())
+        if key != self._key:  # (kept: while photos scroll, a corner is two small pictures to draw)
+            self._key = key
+            self._cut, self._under = self._pictures(pane, dpr, ox, oy, fx, fy, tint)
+        origin = QPointF(-fx / dpr, -fy / dpr)
+        p.setCompositionMode(QPainter.CompositionMode_DestinationOut)
+        p.drawImage(origin, self._cut)
+        p.setCompositionMode(QPainter.CompositionMode_Plus)
+        p.drawImage(origin, self._under)
+
+    def _pictures(self, pane: SoftCard, dpr: float, ox: int, oy: int, fx: float, fy: float,
+                  tint: QColor) -> tuple[QImage, QImage]:
+        """cut: how much of each pixel is taken out (everything but the inside of the pane's
+        hairline). under: the window without the pane's children, as much of it as was taken out."""
+        size = (math.ceil(self.width() * dpr + fx), math.ceil(self.height() * dpr + fy))
+        to_pixels = QTransform.fromTranslate(-self.x(), -self.y()) * QTransform.fromScale(dpr, dpr)             * QTransform.fromTranslate(fx, fy)  # the pane's coordinates to this picture's pixels
+
+        def canvas() -> tuple[QImage, QPainter]:
+            img = QImage(*size, QImage.Format_ARGB32_Premultiplied)
+            img.fill(Qt.transparent)
+            q = QPainter(img)
+            q.setRenderHint(QPainter.Antialiasing)
+            return img, q
+
+        # The edge to cut along: the inside of the hairline. Its straight sides are moved onto whole
+        # screen pixels (less than half a pixel), where Qt ends the pane's children: at 125 % and
+        # 150 % a side between two pixels would take a faint line off the photos beside the corner.
+        card = to_pixels.map(pane.card_path())
+        box, half = card.boundingRect(), dpr / 2
+        left, right = (math.floor(v + ox + 0.5) - ox for v in (box.left() + half, box.right() - half))
+        top, bottom = (math.floor(v + oy + 0.5) - oy for v in (box.top() + half, box.bottom() - half))
+        fit = QTransform.fromTranslate(-box.left(), -box.top())             * QTransform.fromScale((right - left + dpr) / box.width(), (bottom - top + dpr) / box.height())             * QTransform.fromTranslate(left - half, top - half)
+        edge = fit.map(card)
+        solid = QColor(0, 0, 0)
+        cut, q = canvas()
+        q.fillRect(cut.rect(), solid)
+        q.setCompositionMode(QPainter.CompositionMode_DestinationOut)
+        q.fillPath(edge, solid)  # what is inside the pane stays...
+        q.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        q.strokePath(edge, QPen(solid, dpr))  # ...up to its hairline, which the layout leaves free too
+        q.end()
+        under, q = canvas()
+        q.setTransform(to_pixels)
+        q.fillRect(pane.rect(), tint)
+        pane.paint_card(q)
+        q.resetTransform()
+        q.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+        q.drawImage(0, 0, cut)
+        q.end()
+        cut.setDevicePixelRatio(dpr)
+        under.setDevicePixelRatio(dpr)
+        return cut, under

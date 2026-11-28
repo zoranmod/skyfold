@@ -31,7 +31,7 @@ from shiboken6 import isValid
 from .. import photo_library as lib
 from ..i18n import language, t
 from .icons import glyph
-from .library_frame import LibraryDialog, SearchField, count_font
+from .library_frame import LibraryDialog, PaneCorners, SearchField, count_font
 from .panel_parts import SoftCard
 from .settings_parts import NavDelegate, pressable
 from .theme import service_color
@@ -193,6 +193,7 @@ class _QuietButton(QToolButton):
     def paintEvent(self, _e) -> None:  # noqa: N802
         u = _ui(self)
         p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)  # (the focus ring too, also without the hover layer)
         r = QRectF(self.rect())
         if self.underMouse() or self.isDown():
             _round(p, r, u["hover"], None, 6)
@@ -353,67 +354,6 @@ class _OverlayBar(QScrollBar):
         p = QPainter(self)
         p.setOpacity(self.level)
         _round(p, r, u["text2"] if wide else u["text3"], None, w / 2)
-
-
-class _Corners(QObject):
-    """The content pane's rounded corners over the photos that reach its edges: a child widget can't
-    be clipped to a rounded shape, so the four corners are drawn again on top, smooth, with the window's
-    own tint around them (cut out and put back, so the material still shows through)."""
-
-    def __init__(self, pane: "SoftCard") -> None:
-        super().__init__(pane)
-        self.pane = pane
-        self.parts = [_Corner(pane, k) for k in range(4)]
-        pane.installEventFilter(self)
-
-    def eventFilter(self, obj, e):  # noqa: N802
-        if e.type() in (QEvent.Resize, QEvent.Show):
-            self.place()
-        return False
-
-    def place(self) -> None:
-        w, h = self.pane.width(), self.pane.height()
-        s = _Corner.SIZE
-        for k, part in enumerate(self.parts):
-            part.setGeometry(0 if k in (0, 2) else w - s, 0 if k < 2 else h - s, s, s)
-            part.raise_()
-
-    def refresh(self) -> None:
-        for part in self.parts:
-            part.update()
-
-
-class _Corner(QWidget):
-    SIZE = 12
-
-    def __init__(self, pane, k: int) -> None:
-        super().__init__(pane)
-        self.k = k
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-
-    def paintEvent(self, _e) -> None:  # noqa: N802
-        pane = self.parentWidget()
-        u = _ui(self)
-        path = pane.card_path().translated(-self.x(), -self.y())
-        box = QPainterPath()
-        box.addRect(QRectF(self.rect()))
-        outside = box.subtracted(path)
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        tint = u["tint"]
-        if tint.alpha() >= 255:
-            p.fillPath(outside, tint)
-        else:  # the photo out, the window's tint in (partly, along the smooth edge)
-            p.setCompositionMode(QPainter.CompositionMode_DestinationOut)
-            p.fillPath(outside, QColor(0, 0, 0, 255))
-            p.setCompositionMode(QPainter.CompositionMode_Plus)
-            p.fillPath(outside, tint)
-            p.setCompositionMode(QPainter.CompositionMode_SourceOver)
-        stroke = pane.stroke
-        if stroke.alpha():
-            p.setPen(QPen(stroke, 1))
-            p.setBrush(Qt.NoBrush)
-            p.drawPath(path)
 
 
 class _HeaderBand(QWidget):
@@ -637,12 +577,16 @@ class TileDelegate(QStyledItemDelegate):
                 p.setPen(white)
                 p.drawText(tr, Qt.AlignRight | Qt.AlignBottom, text)
         if not small and r.width() >= 90:
+            # the Live mark and the heart are curves: smooth (only here: the photos keep their hard
+            # edges, or neighbouring tiles would blend along their seams at 125 % and 150 %)
+            p.setRenderHint(QPainter.Antialiasing)
             if it.live:
                 _live_mark(p, QPointF(r.left() + 13, r.top() + 13), 7, white)
             if it.favorite:
                 p.setPen(Qt.NoPen)
                 p.setBrush(white)
                 p.drawPath(_heart(QRectF(r.left() + 6, r.bottom() - 18, 13, 12)))
+            p.setRenderHint(QPainter.Antialiasing, False)
         if selected:
             p.fillRect(r, QColor(255, 255, 255, 50))
         if win.selecting or selected:
@@ -1410,7 +1354,7 @@ class PhotosWindow(LibraryDialog):
         pane = self.pane = SoftCard()
         pane.setObjectName("LibraryPane")
         layer = QVBoxLayout(pane)
-        layer.setContentsMargins(1, 1, 1, 2)  # the photos reach the pane's hairline (the corners: _Corners)
+        layer.setContentsMargins(1, 1, 1, 2)  # the photos reach the pane's hairline (the corners: PaneCorners)
         layer.addWidget(self.pages)
         root.addWidget(pane, 1)
 
@@ -1591,7 +1535,7 @@ class PhotosWindow(LibraryDialog):
         self.strip = FilmStrip(self)
         self.strip.picked.connect(self.show_row)
         vl.addWidget(self.strip)
-        self.corners = _Corners(pane)  # (last: over everything in the pane)
+        self.corners = PaneCorners(pane)  # (last: over everything in the pane)
 
         # keys
         def key(seq, fn):
