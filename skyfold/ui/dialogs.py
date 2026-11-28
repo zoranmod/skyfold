@@ -5,10 +5,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 import logging
+import time
 from typing import Any
 
-from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QRunnable, QSize, Qt, QThreadPool, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QRunnable, QSize, Qt, QThreadPool, QTimer, Signal, Slot
+from PySide6.QtGui import (QColor, QFont,
+                           QPainter, QPalette, QPen, QPixmap)
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractSpinBox,
@@ -45,6 +47,7 @@ from ..i18n import LANGUAGES, language, t
 from ..safelog import brief, describe
 from .icons import app_icon, draw_logo, glyph
 from .panel_parts import SoftCard
+from .safe_text import plain_tip
 
 log = logging.getLogger(__name__)
 
@@ -140,7 +143,15 @@ class _ReleaseNotes(QTextBrowser):
     itself (no picture from the internet or from a network share)."""
 
     def loadResource(self, kind, url):  # noqa: N802
-        return None
+        # An empty answer is not enough: Qt then loads the file itself (a picture on a network share
+        # makes Windows connect to that computer). Every picture is a blank pixel, nothing else loads.
+        from PySide6.QtGui import QImage, QTextDocument
+
+        if kind == QTextDocument.ImageResource:
+            blank = QImage(1, 1, QImage.Format_ARGB32)
+            blank.fill(0)
+            return blank
+        return b""
 
     def style_notes(self, palette: dict[str, str]) -> None:
         """Readable as in the 1.1 design: body text 14 px with air between the lines, headings 600
@@ -360,6 +371,22 @@ def _label(text: str, name: str | None = None, wrap: bool = False) -> QLabel:
     return lbl
 
 
+def _as_control(widget: QWidget, kind: str) -> None:
+    """Marks a card that works like a button / radio button / group. Screen readers get its name and
+    description (set by the caller) and Enter/Space work on it; there is no accessibility interface of
+    our own: Qt owns and deletes those, and one written in Python could crash Skyfold."""
+    widget.setProperty("a11y", kind)
+
+
+class _Group(QWidget):
+    """Controls that belong together (a class of its own: Qt answers for a plain QWidget itself)."""
+
+
+def _checked_changed(widget: QWidget) -> None:
+    """A radio card was chosen or unchosen: its description says so ("Chosen"), for screen readers."""
+    widget.setAccessibleDescription(t("Chosen") if widget.property("selected") else "")
+
+
 class _Dialog(QDialog):
     GLASS = False  # a window that shows Windows 11's material behind it (when Windows allows it)
     # acrylic: what is behind the window shows through, blurred, as in the 1.1 design and the tray
@@ -445,9 +472,13 @@ class _Dialog(QDialog):
         if self.glass:
             self._material()
             return
+        self._match_frame()  # the title bar in the window's own colours (dark theme: a dark title bar)
+
+    def _match_frame(self) -> None:
         from .backdrop import match_frame
 
-        match_frame(self)  # the title bar in the window's own colours (dark theme: a dark title bar)
+        c = getattr(self, "c", None) or {}  # the app's theme where the window has it, not the system's
+        match_frame(self, c.get("bg"), c.get("text"))
 
     def changeEvent(self, e) -> None:  # noqa: N802
         super().changeEvent(e)
@@ -458,9 +489,7 @@ class _Dialog(QDialog):
                 if e.type() == QEvent.PaletteChange:
                     self._material()  # (light or dark material, and the layers in the new colours)
                 return
-            from .backdrop import match_frame
-
-            match_frame(self)  # the theme changed while it was open
+            self._match_frame()  # the theme changed while it was open
 
 
 class Toggle(QCheckBox):
@@ -612,11 +641,22 @@ def _field(w: QLineEdit) -> QLineEdit:
 
 # login ------------------------------------------------------------------------
 class LoginDialog(_Dialog):
+    """Signing in: Apple ID and password, then Apple's code. The last step of first run, in the same
+    see-through window as the two before it (same size, same top, same footer band). Also opened on its
+    own, from Settings or when Apple's session ran out: the same window without the step bars."""
+
+    GLASS = True
     loggedIn = Signal(object, str)  # api, apple_id
 
-    def __init__(self, apple_id: str = "") -> None:
+    def __init__(self, apple_id: str = "", palette: dict[str, str] | None = None, first_run: bool = False,
+                 size: QSize | None = None) -> None:
         super().__init__(t("Sign in – {app}", app=APP_NAME))
-        self.setFixedWidth(_fit_screen(480, 0)[0])
+        from .theme import palette as _palette
+
+        self.c = palette or _palette("system")
+        # as large as the first-run window (size: what that window had when it closed), and it stays
+        # so on the code page and with an error: the text may move, the window must not
+        self.setFixedSize(size if size is not None else FolderSetupDialog.usual_size(self.c))
         self.api: Any = None
         self._task: Any = None
         self._cancelled = False
@@ -625,8 +665,20 @@ class LoginDialog(_Dialog):
         self._waiting = False  # either credentials or code verification is in flight
         self._cancel_pressed = False
 
-        frame = QVBoxLayout(self)  # a scrolling body: fits a small screen at high scaling
+        frame = QVBoxLayout(self)
         frame.setContentsMargins(0, 0, 0, 0)
+        frame.setSpacing(0)
+        # the top of first run's last step: the mark, the title, what happens to the password, the steps
+        self.hero = Hero(self.c, 2)
+        self.hero.set_text(t("Sign in to iCloud"),
+                           t("Your password is only used to sign in, with Apple's two-factor code. It is never stored."), 2)
+        if not first_run:  # opened on its own: no "step 3 of 3" (their room stays, so nothing else moves)
+            keep = self.hero.dots.sizePolicy()
+            keep.setRetainSizeWhenHidden(True)
+            self.hero.dots.setSizePolicy(keep)
+            self.hero.dots.hide()
+        frame.addWidget(self.hero)
+        # the fields scroll when the screen is small; the buttons always stay visible
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
@@ -634,22 +686,10 @@ class LoginDialog(_Dialog):
         self._login_body = QWidget()
         self._login_body.setObjectName("Root")
         self._scroll.setWidget(self._login_body)
-        frame.addWidget(self._scroll)
+        frame.addWidget(self._scroll, 1)
         outer = QVBoxLayout(self._login_body)
-        outer.setContentsMargins(0, 0, 0, 22)
+        outer.setContentsMargins(36, 6, 36, 20)  # (as the first-run steps: the fields as wide as the folder field)
         outer.setSpacing(14)
-        from .theme import palette as _palette
-
-        # the top of first run's last step: the mark, the title, the promise about the password, the steps
-        self.hero = Hero(_palette("system"), 2)
-        self.hero.set_text(t("Sign in to iCloud"),
-                           t("Your password is only used to sign in, with Apple's two-factor code. It is never stored."), 2)
-        outer.addWidget(self.hero)
-        inner = QVBoxLayout()
-        inner.setContentsMargins(36, 0, 36, 0)
-        inner.setSpacing(14)
-        outer.addLayout(inner)
-        outer = inner
 
         self.pages = QStackedWidget()
         outer.addWidget(self.pages)
@@ -670,7 +710,7 @@ class LoginDialog(_Dialog):
         l1.addWidget(self.email)
         l1.addWidget(self.password)
         note = _label(
-            t("Your password is never stored. Only Apple's session, which lasts about two months, is kept."),
+            t("Skyfold keeps only Apple's session, which lasts about two months."),
             "Hint",
             True,
         )
@@ -706,10 +746,16 @@ class LoginDialog(_Dialog):
         self.error = _label("", "ErrorText", True)
         self.error.hide()
         outer.addWidget(self.error)
+        outer.addStretch(1)
 
-        btns = QHBoxLayout()
+        # the footer band of first run: a quiet Cancel on the left (where Back is), Sign in on the right
+        foot = QWidget()
+        foot.setObjectName("Footer")
+        foot.setAttribute(Qt.WA_StyledBackground, True)
+        btns = QHBoxLayout(foot)
+        btns.setContentsMargins(36, 14, 36, 14)
         self.cancel = QPushButton(t("Cancel"))
-        self.cancel.setObjectName("Link")  # quiet, on the left, as Back in the design
+        self.cancel.setObjectName("Link")
         self.cancel.setCursor(Qt.PointingHandCursor)
         self.cancel.clicked.connect(self._cancel_sign_in)
         # Enter must never reach Cancel: when the field with the focus is locked while Apple answers,
@@ -723,11 +769,13 @@ class LoginDialog(_Dialog):
         btns.addWidget(self.cancel)
         btns.addStretch(1)
         btns.addWidget(self.ok)
-        outer.addLayout(btns)
+        frame.addWidget(foot)
         self.setTabOrder(self.password, self.ok)
         self.setTabOrder(self.ok, self.cancel)
         (self.password if apple_id else self.email).setFocus()
-        self._shrink()
+
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
 
     def _busy(self, busy: bool, text: str | None = None) -> None:
         if busy:
@@ -739,16 +787,9 @@ class LoginDialog(_Dialog):
         if text:
             self.ok.setText(text)
 
-    def _shrink(self) -> None:
-        lay = self._login_body.layout()
-        lay.activate()
-        h = lay.totalHeightForWidth(self.width()) if lay.hasHeightForWidth() else lay.totalSizeHint().height()
-        self.resize(self.width(), min(h + 2, _fit_screen(0, 100000)[1]))
-
     def _show_error(self, msg: str) -> None:
         self.error.setText(msg)
         self.error.setVisible(bool(msg))
-        self._shrink()
 
     def _next(self) -> None:
         if getattr(self, "_page1", None) is None:  # still on the Apple ID / password page
@@ -766,7 +807,6 @@ class LoginDialog(_Dialog):
         self._show_error("")
         self._busy(True, t("Signing in…"))
         self.wait_note.show()
-        self._shrink()
         self._waiting = True
         self.password.clear()
 
@@ -780,13 +820,12 @@ class LoginDialog(_Dialog):
             if step.needs_code:
                 self._bring_forward()  # Apple has just sent the code: this window must be in sight
                 self.code_info.setText(step.notice)
-                # the stack keeps the tallest page's height: take the sign-in page out
+                # only the code page is left in the stack
                 self._page1 = self.pages.widget(0)
                 self.pages.removeWidget(self._page1)
                 self._page1.hide()
                 self.pages.setCurrentIndex(0)
                 self.wait_note.hide()
-                self._shrink()
                 self._busy(False, t("Confirm"))
                 self.code.setFocus()
             else:
@@ -805,7 +844,6 @@ class LoginDialog(_Dialog):
         self._busy(True, t("Checking…"))
         self._waiting = True
         self.wait_note.show()
-        self._shrink()
         api = self.api  # the task belongs to this attempt, even if Cancel is clicked
 
         def fail(msg: str) -> None:
@@ -1141,7 +1179,10 @@ class SettingsDialog(_Dialog):
 
         card = ClickCard()
         card.setMinimumHeight(56)
+        _as_control(card, "button")  # a button for screen readers: its Press action clicks it, as Enter does
         card.setAccessibleName(title)
+        if sub:
+            card.setAccessibleDescription(sub)
         row = QHBoxLayout(card)
         row.setContentsMargins(16, 10, 14, 10)
         row.setSpacing(16)
@@ -1566,8 +1607,14 @@ class SettingsDialog(_Dialog):
         lay.addWidget(head)
 
         where = self._group(lay, t("Where your data is"))
-        lines = [t("Settings: the 'data' folder next to the app."),
-                 t("Sign-in and sync database: {path}", path=PRIVATE_DIR)]
+        from .. import config
+
+        # the folder really in use: next to the app, or the private folder when that can't be written
+        def breakable(path) -> str:  # a long path wraps at its folders instead of widening the page
+            return str(path).replace("\\", "\\" + chr(0x200B))  # (a zero-width space after each "\")
+
+        lines = [t("Settings: {path}", path=breakable(config.DATA_DIR)),
+                 t("Sign-in and sync database: {path}", path=breakable(PRIVATE_DIR))]
         if APP_IN_CLOUD:
             lines.append(t("The app is in {service}, so the sign-in and database are kept only on this PC.",
                            service=APP_IN_CLOUD))
@@ -1855,6 +1902,8 @@ class DriveFoldersDialog(_Dialog):
         self.c, self.get_api, self.sizes = palette, get_api, sizes or {}
         self.initial = list(selection) if selection is not None else None
         self._items: dict[str, Any] = {}  # path -> DriveItem, for reading deeper levels
+        self._incomplete: set[str] = set()  # folders ("" = the top) whose list from iCloud left folders out
+        self._noted = False  # the line below the tree says so
         self._tasks: list = []
         self._updating = False
         self.setMinimumWidth(480)
@@ -1923,23 +1972,42 @@ class DriveFoldersDialog(_Dialog):
         folder = self._items.get(path) or DriveItem("", ROOT_ID, "root", "com.apple.CloudDocs", None, True)
 
         def fetch():
-            listed = ICloudDrive(api).walk(folders=[folder])
+            drive = ICloudDrive(api)
+            listed = drive.walk(folders=[folder])
             return sorted((it for p, it in listed.items() if it.is_dir and p != path
                            and (p.rsplit("/", 1)[0] if "/" in p else "") == path),
-                          key=lambda it: it.path.casefold())
+                          key=lambda it: it.path.casefold()), path in drive.incomplete
 
-        def done(children) -> None:
-            self.add_children(parent, children)
+        def done(answer) -> None:
+            children, incomplete = answer
+            self.add_children(parent, children, incomplete=incomplete)
 
         def fail(msg: str) -> None:
-            self.info.setText(t("Couldn't read iCloud Drive: {error}", error=msg))
+            if parent is None:
+                self.info.setText(t("Couldn't read iCloud Drive: {error}", error=msg))
+            else:
+                self.load_failed(parent, msg)
 
         self._tasks.append(run_async(fetch, done, fail))
 
-    def add_children(self, parent, children) -> None:
+    def load_failed(self, parent, msg: str) -> None:
+        """A folder inside couldn't be read: say so in it, and read it again when it is opened again."""
+        parent.setData(0, self.LOADED, False)
+        if parent.childCount() and parent.child(0).data(0, self.PATH) is None:
+            note = parent.child(0)  # (the "Loading…" line)
+            note.setText(0, t("Couldn't read this folder. Close and open it again to try again."))
+            note.setToolTip(0, plain_tip(msg))
+        self.info.setText(t("Couldn't read iCloud Drive: {error}", error=msg))
+
+    def add_children(self, parent, children, incomplete: bool = False) -> None:
         from ..ui_text import count_text, size_text
 
         self._updating = True
+        path = parent.data(0, self.PATH) if parent is not None else ""
+        if incomplete:
+            self._incomplete.add(path)  # iCloud named fewer folders than it holds: Save never widens here
+        else:
+            self._incomplete.discard(path)
         if parent is not None:
             parent.takeChildren()
             parent.setData(0, self.LOADED, True)
@@ -1964,8 +2032,9 @@ class DriveFoldersDialog(_Dialog):
                 parent.addChild(node)
             else:
                 self.tree.addTopLevelItem(node)
-        if parent is not None and inherited == Qt.PartiallyChecked:
+        if parent is not None and inherited == Qt.PartiallyChecked and not incomplete:
             # the earlier choice inside may name folders that no longer exist: show what is real
+            # (not from an incomplete list: the folders it left out may be the ones chosen)
             kids = [parent.child(i).checkState(0) for i in range(parent.childCount())]
             if kids and all(k == kids[0] for k in kids):
                 parent.setCheckState(0, kids[0])
@@ -1976,10 +2045,14 @@ class DriveFoldersDialog(_Dialog):
             self.ok.setEnabled(True)
             self.info.setText(t("Open a folder to choose only some of the folders inside it.") if children
                               else t("There are no folders in your iCloud Drive."))
+        self._update_ok()
 
     def _expand(self, item) -> None:
         if not item.data(0, self.LOADED):
             item.setData(0, self.LOADED, True)
+            if item.childCount() and item.child(0).data(0, self.PATH) is None:  # (again, after a failed try)
+                item.child(0).setText(0, t("Loading…"))
+                item.child(0).setToolTip(0, "")
             self._load(item)
 
     # ticking -------------------------------------------------------------------------------
@@ -1998,22 +2071,106 @@ class DriveFoldersDialog(_Dialog):
         while parent is not None:  # the folders above show "some"
             kids = [parent.child(i).checkState(0) for i in range(parent.childCount())
                     if parent.child(i).data(0, self.PATH) is not None]
-            parent.setCheckState(0, kids[0] if kids and all(k == kids[0] for k in kids) else Qt.PartiallyChecked)
+            state = kids[0] if kids and all(k == kids[0] for k in kids) else Qt.PartiallyChecked
+            path = parent.data(0, self.PATH)
+            if path in self._incomplete and state != self._unseen_state(path):
+                state = Qt.PartiallyChecked  # the folders the list left out are set otherwise
+            parent.setCheckState(0, state)
             parent = parent.parent()
         self._updating = False
+        self._update_ok()
+
+    # an incomplete list ----------------------------------------------------------------------
+    # When iCloud names fewer folders than a folder holds, the folders left out keep their current
+    # setting: Save never adds one (never "all folders, also future ones"), and drops one only with
+    # the whole folder around it.
+    def _covered(self, path: str) -> bool:
+        """Is everything in this folder synced now (so also the folders the list left out)?"""
+        if self.initial is None:
+            return True
+        return bool(path) and any(path == s or path.startswith(s + "/") for s in self.initial)
+
+    def _tops(self) -> list:
+        return [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
+
+    def _unseen_state(self, path: str):
+        """How the folders inside path that the list left out are set now."""
+        if self._covered(path):
+            return Qt.Checked
+        return Qt.PartiallyChecked if any(s.startswith(path + "/") for s in self.initial or []) else Qt.Unchecked
+
+    def _drops_unseen(self) -> bool:
+        """Would saving now leave out folders that the incomplete list didn't show (and that are synced
+        now)? A list of chosen folders can't say "all of it except this one"."""
+        for path in self._incomplete:
+            if not self._covered(path):
+                continue
+            if path == "":
+                if not all(it.checkState(0) == Qt.Checked for it in self._tops()):
+                    return True
+                continue
+            node = self._node(path)  # (unticked as a whole: all of it goes, which a list can say)
+            if node is not None and node.checkState(0) == Qt.PartiallyChecked:
+                return True
+        return False
+
+    def _node(self, path: str):
+        stack = self._tops()
+        while stack:
+            it = stack.pop()
+            if it.data(0, self.PATH) == path:
+                return it
+            stack.extend(it.child(i) for i in range(it.childCount()))
+        return None
+
+    def _update_ok(self) -> None:
+        if not self._incomplete:  # (Save is enabled once the first list is in; a complete list never stops it)
+            if self._noted:  # a folder read again, completely this time
+                self._noted = False
+                self.ok.setEnabled(True)
+                self.info.setText(t("Open a folder to choose only some of the folders inside it."))
+            return
+        self._noted = True
+        stuck = self._drops_unseen()
+        self.ok.setEnabled(not stuck)
+        self.info.setText(t("iCloud didn't list every folder, so this choice can't be saved now: it would leave out "
+                            "folders that aren't shown. Try again later.") if stuck else
+                          t("iCloud didn't list every folder. Folders that aren't shown keep their current setting."))
 
     def selection(self) -> list[str] | None:
         """None when every folder is checked (= all of iCloud Drive, including future folders)."""
-        tops = [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
+        tops = self._tops()
         if not tops:
             return self.initial  # nothing to choose from: keep what was set
-        if all(it.checkState(0) == Qt.Checked for it in tops):
+        partial_root = "" in self._incomplete
+        if all(it.checkState(0) == Qt.Checked for it in tops) and (not partial_root or self.initial is None):
             return None
         out: list[str] = []
 
+        def shown_below(it) -> list[str]:
+            return [it.child(i).data(0, self.PATH) for i in range(it.childCount())
+                    if it.child(i).data(0, self.PATH) is not None]
+
+        def unseen(path: str, shown: list[str]) -> list[str]:
+            """The earlier choices inside path that the (incomplete) list didn't show."""
+            return [s for s in (self.initial or []) if (s.startswith(path + "/") if path else True)
+                    and not any(s == k or s.startswith(k + "/") for k in shown)]
+
         def visit(it) -> None:
             path, state = it.data(0, self.PATH), it.checkState(0)
-            if path is None or state == Qt.Unchecked:
+            if path is None:
+                return
+            if path in self._incomplete:  # its list left folders out
+                if state == Qt.Unchecked:
+                    return  # unticked as a whole
+                if state == Qt.Checked and self._covered(path):
+                    out.append(path)  # as it was: all of it
+                    return
+                for i in range(it.childCount()):  # never more than the folders shown and chosen
+                    visit(it.child(i))
+                out.extend(unseen(path, shown_below(it)))
+                return
+            if state == Qt.Unchecked:
                 return
             if state == Qt.Checked:
                 out.append(path)
@@ -2025,10 +2182,54 @@ class DriveFoldersDialog(_Dialog):
 
         for it in tops:
             visit(it)
-        return out
+        if partial_root:
+            out.extend(unseen("", [it.data(0, self.PATH) for it in tops]))
+        return list(dict.fromkeys(out))
 
 
 # pending deletions ------------------------------------------------------------------
+def _room_for(window: QWidget) -> int:
+    """The tallest the inside of a window can be on its screen (above the taskbar, below the title bar)."""
+    from PySide6.QtGui import QGuiApplication
+
+    screen = window.screen() or QGuiApplication.primaryScreen()
+    if screen is None:
+        return 1 << 20
+    title = window.frameGeometry().height() - window.height() if window.isVisible() else 0
+    return screen.availableGeometry().height() - max(title, 32)
+
+
+class _FitScroll(QScrollArea):
+    """Scrolls its content only when the window can't be tall enough for it: it asks for the whole
+    height of the content (at its width), and can give way to a small part of it."""
+
+    LEAST = 96
+
+    def __init__(self, content: QWidget) -> None:
+        super().__init__()
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.setWidget(content)
+        self.viewport().setAutoFillBackground(False)
+        content.setAutoFillBackground(False)
+
+    def _content_height(self) -> int:
+        w = self.widget()
+        lay = w.layout()
+        width = self.viewport().width() if self.isVisible() else w.sizeHint().width()
+        if lay is not None and lay.hasHeightForWidth():
+            return lay.totalHeightForWidth(max(width, 1))
+        return w.sizeHint().height()
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(self.widget().sizeHint().width(), self._content_height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(super().minimumSizeHint().width(), min(self.LEAST, self._content_height()))
+
+
 class PendingDialog(_Dialog):
     """The deletion question, compact as in the 1.1 design: what was deleted where (as a title), a
     short explanation, the photos themselves in a small strip (or the first names), the whole list
@@ -2050,7 +2251,7 @@ class PendingDialog(_Dialog):
         body = QWidget()
         lay = QVBoxLayout(body)
         lay.setContentsMargins(24, 22, 24, 18)
-        lay.setSpacing(8)
+        lay.setSpacing(0)
         outer.addWidget(body, 1)
         self._icon = QLabel()  # (kept for apply_palette; the title says it all)
         self._thumbs = None
@@ -2090,17 +2291,39 @@ class PendingDialog(_Dialog):
         fl.addLayout(self._answers)
         outer.addWidget(foot)
         self.adjustSize()
+        self._fit(shrink=True)
 
-    def _fit(self) -> None:
-        """Tall enough for the wrapped lines at this width, measured with the real fonts."""
+    def _fit(self, shrink: bool = False) -> None:
+        """Tall enough for the wrapped lines at this width, measured with the real fonts, but never
+        taller than the screen: then the text and lists scroll and the answers stay in view."""
         for w in self.findChildren(QWidget):
             w.ensurePolished()
+        # a list just shown or hidden: the layouts inside the scroll areas measure it now, not at the
+        # next event (their old size made the window stay as it was and the list stay out of view)
+        for s in self.findChildren(_FitScroll):
+            inner = s.widget().layout()
+            if inner is not None:
+                for w in s.widget().findChildren(QWidget):
+                    if w.layout() is not None:
+                        w.layout().invalidate()
+                inner.invalidate()
+                inner.activate()
+            s.updateGeometry()
         lay = self.layout()
         lay.invalidate()
         lay.activate()
-        need = lay.totalHeightForWidth(self.width())
-        if need > self.height():
+        room = _room_for(self)
+        self.setMaximumHeight(max(room, self.minimumSizeHint().height()))
+        need = lay.totalHeightForWidth(self.width()) if lay.hasHeightForWidth() else lay.sizeHint().height()
+        need = min(need, self.maximumHeight())
+        if need > self.height() or (shrink and need < self.height()):
             self.resize(self.width(), need)
+        if self.isVisible():  # a taller window may now reach below the screen: move it up
+            screen = self.screen()
+            if screen is not None:
+                avail, frame = screen.availableGeometry(), self.frameGeometry()
+                if frame.bottom() > avail.bottom():
+                    self.move(self.x(), max(avail.top(), self.y() - (frame.bottom() - avail.bottom())))
 
     def showEvent(self, e) -> None:  # noqa: N802
         super().showEvent(e)
@@ -2111,12 +2334,17 @@ class PendingDialog(_Dialog):
 
     def _section(self, lay, pending, ids, title, question, yes, no, pictures: bool) -> None:
         if getattr(self, "_sections", 0):  # a second question: set it clearly apart from the first
-            lay.addSpacing(10)
+            lay.addSpacing(18)
             sep = QFrame()
             sep.setObjectName("Sep")
             lay.addWidget(sep)
-            lay.addSpacing(8)
+            lay.addSpacing(16)
         self._sections = getattr(self, "_sections", 0) + 1
+        # what the question is about scrolls when the screen is short; the answers stay in view
+        outer_lay, content = lay, QWidget()
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
         lay.addWidget(_label(title, "Title", True))
         why = t("More than your limit ({n}) at once, so Skyfold asks first.", n=self.limit) if self.limit else \
             t("More than your limit at once, so Skyfold asks first.")
@@ -2139,7 +2367,7 @@ class PendingDialog(_Dialog):
                     continue
                 shot = QLabel()
                 shot.setFixedSize(56, 56)
-                shot.setToolTip(name)
+                shot.setToolTip(plain_tip(name))
                 shot.hide()  # shown once its picture is read
                 strip.addWidget(shot)
                 self._strips[path] = shot
@@ -2156,17 +2384,15 @@ class PendingDialog(_Dialog):
             text = "\n".join(first) + ("\n" + t("… and {n} more", n=len(names) - 3) if len(names) > 3 else "")
             lay.addWidget(_label(text, "Mono", True))
 
-        # the whole list, on request
+        # the whole list, on request: every item the answer covers (a list view holds thousands)
         lst = QListWidget()
-        for name in names[:500]:
-            lst.addItem(name)
-        if len(ids) > 500:
-            lst.addItem(t("… and {n} more", n=len(ids) - 500))
+        lst.setUniformItemSizes(True)
+        lst.addItems(names)
         lst.setTextElideMode(Qt.ElideMiddle)
         lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         lst.setMinimumHeight(120)
-        for k in range(lst.count()):
-            lst.item(k).setToolTip(lst.item(k).text())
+        # The global help handler offers the full name only when this list elides it.
+        lst.setProperty("tipForClippedItems", True)
         lst.hide()
         toggle = QPushButton(t("Show the list"))
         toggle.setObjectName("Link")
@@ -2175,15 +2401,26 @@ class PendingDialog(_Dialog):
         def flip() -> None:
             lst.setVisible(not lst.isVisible())
             toggle.setText(t("Hide the list") if lst.isVisible() else t("Show the list"))
-            self.adjustSize()
+            self._fit(shrink=True)
+
+            def settle() -> None:  # once Qt has laid the list out: measure again, then show it
+                self._fit(shrink=True)
+                if lst.isVisible():  # (where the window can't grow enough, the text scrolls to the list)
+                    area = next((a for a in self.findChildren(_FitScroll) if a.isAncestorOf(lst)), None)
+                    if area is not None:
+                        area.ensureWidgetVisible(lst, 0, 0)
+
+            QTimer.singleShot(0, self, settle)
 
         toggle.clicked.connect(flip)
         lay.addWidget(toggle, 0, Qt.AlignLeft)
         lay.addWidget(lst, 1)
+        outer_lay.addWidget(_FitScroll(content), 1)
 
         row = self._answers if self._one else QHBoxLayout()
+        row.setSpacing(8)  # (the two answers never touch)
         if not self._one:
-            row.setContentsMargins(0, 6, 0, 0)
+            row.setContentsMargins(0, 14, 0, 0)
         b_no = QPushButton(no)
         b_yes = QPushButton(yes)
         b_yes.setObjectName("Danger")
@@ -2196,7 +2433,7 @@ class PendingDialog(_Dialog):
         row.addWidget(b_yes)
         row.addWidget(b_no)
         if not self._one:
-            lay.addLayout(row)
+            outer_lay.addLayout(row)
 
     def _shot_ready(self, path: str, img) -> None:
         shot = self._strips.get(path)
@@ -2266,6 +2503,7 @@ class LayoutOption(QFrame):
         self.setObjectName("Option")
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)  # Tab reaches it; Space or Enter chooses it
+        _as_control(self, "radio")  # a screen reader hears a radio button, and whether it is the chosen one
         self.setAccessibleName(f"{title}: {example}")
         col = QVBoxLayout(self)
         col.setContentsMargins(12, 12, 12, 12)
@@ -2278,7 +2516,6 @@ class LayoutOption(QFrame):
         name = _label(title, "OptionTitle", True)
         col.addWidget(name)
         ex = _label(example, "Mono")
-        ex.setToolTip(example)
         col.addWidget(ex)
         self.dot = QLabel()  # (kept for older callers; the card's border shows the choice)
         self.dot.hide()
@@ -2289,11 +2526,14 @@ class LayoutOption(QFrame):
         self.picture.update()
 
     def set_selected(self, on: bool) -> None:
+        was = bool(self.property("selected"))
         self.setProperty("selected", on)
         self.dot.setObjectName("DotOn" if on else "DotOff")
         for w in (self, self.dot):
             w.style().unpolish(w)
             w.style().polish(w)
+        if was != on:
+            _checked_changed(self)
 
     def mousePressEvent(self, e) -> None:  # noqa: N802
         self.clicked.emit()
@@ -2422,6 +2662,7 @@ class FolderSetupDialog(_Dialog):
         row.setSpacing(8)
         self.path = QLineEdit(current or default_photos_dir())
         self.path.setObjectName("PathField")
+        self.path.setAccessibleName(t("Photos folder"))
         from .theme import service_color
 
         self.path.addAction(glyph("folder", service_color(palette, "photo") or palette["accent"], 16),
@@ -2445,14 +2686,19 @@ class FolderSetupDialog(_Dialog):
             "year": (t("By year"), "2025\\IMG_4411.HEIC"),
             "year_month": (t("By year and month"), "2025\\11\\IMG_4411.HEIC"),
         }
-        cards = QHBoxLayout()
+        group = _Group()  # the three cards are one choice: a radio group for screen readers
+        _as_control(group, "group")
+        group.setAccessibleName(t("Layout"))
+        cards = QHBoxLayout(group)
+        cards.setContentsMargins(0, 0, 0, 0)
         cards.setSpacing(8)
         for key, (title, example) in examples.items():
             opt = LayoutOption(title, example, key, palette)
             opt.clicked.connect(lambda k=key: self._pick_layout(k))
             self.options[key] = opt
             cards.addWidget(opt, 1)
-        lay.addLayout(cards)
+        lay.addWidget(group)
+        self.layout_group = group
         self._pick_layout("flat")
         lay.addWidget(_label(t("An empty folder works best. Folder and layout can be changed later in Settings."),
                              "Hint", True))
@@ -2543,7 +2789,20 @@ class FolderSetupDialog(_Dialog):
         self._body.adjustSize()
         want = self.hero.sizeHint().height() + max(self.steps.widget(i).sizeHint().height()
                                                     for i in range(self.steps.count())) + 26 + 62
-        self.setFixedHeight(min(want, room))
+        self.setFixedHeight(_fit_screen(0, min(want, room))[1])
+
+    @classmethod
+    def usual_size(cls, palette: dict[str, str]) -> QSize:
+        """The window's size with nothing to say about the folder: signing in opens just as large."""
+        import shiboken6
+
+        dlg = cls("", palette)
+        dlg.msg.hide()
+        dlg._had_msg = False
+        dlg._fit_height()
+        size = dlg.size()
+        shiboken6.delete(dlg)  # (never shown; not left among the app's windows)
+        return size
 
     def chosen_path(self) -> str:
         return str(Path(self.path.text().strip()).expanduser())
@@ -2693,6 +2952,8 @@ class DeviceRow(SoftCard):
         QDesktopServices.openUrl(QUrl(f"https://www.google.com/maps/search/?api=1&query={d.lat},{d.lon}"))
 
     def _sound(self) -> None:
+        from shiboken6 import isValid
+
         from .. import extras
 
         api = self.get_api()
@@ -2702,14 +2963,18 @@ class DeviceRow(SoftCard):
         self.sound_btn.setText(t("Sending…"))
 
         def done(_r) -> None:
-            self.sound_btn.setText(t("Sound sent ✓"))
+            if isValid(self) and self.isVisible():
+                self.sound_btn.setText(t("Sound sent ✓"))
 
         def fail(msg: str) -> None:
+            if not isValid(self) or not self.isVisible():
+                return
             self.sound_btn.setEnabled(True)
             self.sound_btn.setText(t("Play sound"))
             warn(self, t("Find My"), msg)
 
-        self._task = run_async(lambda: extras.play_sound(api, self.dev.id), done, fail)
+        device_id = self.dev.id
+        self._task = run_async(lambda: extras.play_sound(api, device_id), done, fail)
 
 
 class _Progress(QObject):
@@ -2902,6 +3167,8 @@ class FindMyDialog(_Dialog):
 
     def __init__(self, palette: dict[str, str], get_api) -> None:
         super().__init__(t("Find My – {app}", app=APP_NAME))
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self._closed = False
         self.c, self.get_api = palette, get_api
         self.setMinimumWidth(560)
         outer = QVBoxLayout(self)
@@ -2965,6 +3232,10 @@ class FindMyDialog(_Dialog):
         self.signInAgain.emit()
         self.accept()
 
+    def done(self, result: int) -> None:
+        self._closed = True
+        super().done(result)
+
     def load(self) -> None:
         from .. import extras
 
@@ -2980,6 +3251,8 @@ class FindMyDialog(_Dialog):
         self.info.show()
 
         def done(devs) -> None:
+            if self._closed:
+                return  # a reply for the previous window or account
             self.refresh_btn.setEnabled(True)
             while self.rows.count():
                 w = self.rows.takeAt(0).widget()
@@ -2987,6 +3260,7 @@ class FindMyDialog(_Dialog):
                     w.deleteLater()
             for d in devs:
                 self.rows.addWidget(DeviceRow(d, self.c, self.get_api))
+            self._shown_at = time.strftime("%H:%M")  # (said when a later refresh fails)
             self.card.setVisible(bool(devs))
             self._devices_scroll.setVisible(bool(devs))
             self.info.setVisible(not devs)
@@ -2994,8 +3268,15 @@ class FindMyDialog(_Dialog):
             self.adjustSize()
 
         def fail(msg: str) -> None:
+            if self._closed:
+                return
             self.refresh_btn.setEnabled(True)
-            self.info.setText(msg)
+            text = msg
+            if self._devices_scroll.isVisibleTo(self) and getattr(self, "_shown_at", None):
+                # the devices below are still the earlier answer: their battery and "online" may be old
+                text = t("Couldn't refresh: {error}", error=msg) + "\n" + \
+                    t("Shown as of the last refresh at {time}.", time=self._shown_at)
+            self.info.setText(text)
             self.info.show()
             if msg == extras.sign_in_again_text():
                 self.signin_btn.show()

@@ -51,3 +51,34 @@ def test_maximized_the_content_keeps_a_gap_under_the_title_bar(kind):
     finally:
         window.close()
         app.processEvents()
+
+
+def test_the_material_never_extends_the_frame_from_the_top(monkeypatch):
+    """With the whole window made frame (-1 all round), Windows drew a maximized window's caption
+    buttons as tall as a normal window's: lower than the thinner title bar, hanging over the content
+    (measured at 200 %: the close sign 6 px lower, buttons 57 px in a 45 px title bar)."""
+    import ctypes
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QWidget
+
+    QApplication.instance() or QApplication([])
+    asked = []
+
+    class Dwm:
+        def DwmSetWindowAttribute(self, *_a):
+            return 0
+
+        def DwmExtendFrameIntoClientArea(self, _hwnd, margins):
+            m = margins._obj
+            asked.append((m.l, m.r, m.t, m.b))
+            return 0
+
+    monkeypatch.setattr(backdrop, "native_window", lambda: True)
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(dwmapi=Dwm()), raising=False)
+    widget = QWidget()
+    assert backdrop.apply_backdrop(widget, "acrylic", True)
+    (left, right, top, bottom), = asked
+    assert top == 0  # nothing from the top: the caption buttons stay where Windows puts them
+    assert (left, right) == (0, 0) and bottom >= 16384  # from the bottom, over the whole window
+    assert backdrop.frame_margins() == (left, right, top, bottom)

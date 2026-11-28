@@ -24,7 +24,39 @@ def language() -> str:
 
 def t(text: str, **kw) -> str:
     s = _CATALOGS.get(_lang, {}).get(text, text)
+    forms = _FORMS.get(_lang, {}).get(text)
+    if forms and kw:
+        s = forms(kw, s) if callable(forms) else _form(kw.get(forms[0]), forms[1], forms[2], s)
     return Text(s.format(**kw) if kw else s)  # marked as Skyfold's own wording (see safelog)
+
+
+def _count(value) -> int | None:
+    """The number a count was given as: 7, or "1,284" / "1.284" / "1 284" as the app writes them."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    return int(digits) if digits and len(digits) < 16 else None
+
+
+def _form(value, one: str | None, few: str | None, many: str) -> str:
+    """The wording for this number. Bosnian has three: 1, 21, 31… / 2-4, 22-24… / 5-20, 25-30…
+    (11-14 always take the last); English has two (1 / everything else)."""
+    n = _count(value)
+    if n is None:
+        return many
+    if _lang == "bs":
+        if n % 10 == 1 and n % 100 != 11:
+            return one or many
+        if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+            return few or many
+        return many
+    return one if (n == 1 and one) else many
+
+
+def _word(n, one: str, few: str, many: str) -> str:
+    return _form(n, one, few, many)
 
 
 BS: dict[str, str] = {
@@ -70,7 +102,7 @@ BS: dict[str, str] = {
     "Choose folder": "Izaberi folder",
     "Signing in to iCloud is required to sync.": "Za sinhronizaciju je potrebna prijava na iCloud.",
     "Last check: {when}": "Zadnja provjera: {when}",
-    "{n} deleted in iCloud": "{n} obrisanih u iCloud-u",
+    "{n} deleted in iCloud": "{n} obrisanih u iCloudu",
     "{n} deleted on this PC": "{n} obrisanih na PC-u",
     "A large deletion is waiting for your OK: {what}.": "Veliko brisanje čeka potvrdu: {what}.",
     " and ": " i ",
@@ -83,8 +115,8 @@ BS: dict[str, str] = {
     "Choose where your photos should be kept before the first sync.":
         "Prije prve sinhronizacije izaberi gdje će se čuvati slike.",
     "Sign in with your Apple ID to start syncing.": "Prijavi se svojim Apple ID-jem da počne sinhronizacija.",
-    "Connecting to iCloud…": "Povezujem se sa iCloud-om…",
-    "Can't reach iCloud. Will retry shortly.": "Nema veze sa iCloud-om. Pokušaću ponovo uskoro.",
+    "Connecting to iCloud…": "Povezujem se sa iCloudom…",
+    "Can't reach iCloud. Will retry shortly.": "Nema veze sa iCloudom. Pokušaću ponovo uskoro.",
     "Your session has expired. Please sign in again.": "Sesija je istekla. Prijavi se ponovo.",
     "Your iCloud session has expired. Click to sign in again.": "iCloud sesija je istekla. Klikni da se prijaviš ponovo.",
     "Syncing is paused.": "Sinhronizacija je pauzirana.",
@@ -96,7 +128,7 @@ BS: dict[str, str] = {
     "{n} items are waiting for your OK to be deleted.": "Čeka se tvoja potvrda za brisanje {n} stavki.",
     "Downloaded: {n}": "Preuzeto: {n}",
     "Deleted on PC: {n}": "Obrisano na PC-u: {n}",
-    "Deleted in iCloud: {n}": "Obrisano u iCloud-u: {n}",
+    "Deleted in iCloud: {n}": "Obrisano u iCloudu: {n}",
     "Photos synced": "Slike sinhronizovane",
     "Finished with {n} errors. Will retry.": "Završeno uz {n} grešaka. Pokušaću ponovo.",
     "Photos you deleted only on this PC will be downloaded again.": "Ručno obrisane slike će biti ponovo preuzete.",
@@ -107,14 +139,14 @@ BS: dict[str, str] = {
         "Folder za slike ne izgleda kao ranije (nedostaje oznaka sinhronizacije). "
         "Sinhronizacija je zaustavljena da se ništa ne bi obrisalo greškom.",
     "Followed {n} files moved inside the folder": "Praćeno premještanje {n} fajlova unutar foldera",
-    "Checking iCloud for changes…": "Provjeravam promjene u iCloud-u…",
+    "Checking iCloud for changes…": "Provjeravam promjene u iCloudu…",
     "Reading your iCloud library…": "Čitam iCloud biblioteku…",
     "Reading your iCloud library… {n}": "Čitam iCloud biblioteku… {n}",
     "Deleted on this PC only: {name}": "Obrisano samo na PC-u: {name}",
-    "Deleting in iCloud…": "Brišem u iCloud-u…",
-    "Couldn't delete in iCloud ({name}): {error}": "Brisanje u iCloud-u nije uspjelo ({name}): {error}",
-    "Deleted in iCloud: {name}": "Obrisano u iCloud-u: {name}",
-    "Deleted in iCloud, kept on this PC: {name}": "Obrisano u iCloud-u, zadržano na PC-u: {name}",
+    "Deleting in iCloud…": "Brišem u iCloudu…",
+    "Couldn't delete in iCloud ({name}): {error}": "Brisanje u iCloudu nije uspjelo ({name}): {error}",
+    "Deleted in iCloud: {name}": "Obrisano u iCloudu: {name}",
+    "Deleted in iCloud, kept on this PC: {name}": "Obrisano u iCloudu, zadržano na PC-u: {name}",
     "Moving deleted photos to the Recycle Bin…": "Premještam obrisane u Recycle Bin…",
     "Couldn't delete {name}: {error}": "Ne mogu obrisati {name}: {error}",
     "Deleted on this PC (Recycle Bin): {name}": "Obrisano na PC-u (u Recycle Bin): {name}",
@@ -374,8 +406,8 @@ BS: dict[str, str] = {
     "Use the Apple ID you use on your iPhone and iPad.": "Prijavi se Apple ID-jem koji koristiš na iPhone-u i iPad-u.",
     "Apple ID (email)": "Apple ID (e-mail)",
     "Password": "Lozinka",
-    "Your password is never stored. Only Apple's session, which lasts about two months, is kept.":
-        "Lozinka se ne čuva. Čuva se samo Apple-ova sesija, koja traje otprilike dva mjeseca.",
+    "Skyfold keeps only Apple's session, which lasts about two months.":
+        "Skyfold čuva samo Appleovu sesiju, koja traje otprilike dva mjeseca.",
     "Cancel": "Otkaži",
     "Signing in…": "Prijavljujem…",
     "Confirm": "Potvrdi",
@@ -401,14 +433,14 @@ BS: dict[str, str] = {
     "DELETING": "BRISANJE",
     "Deleted on the phone → delete on this PC too": "Obrisano na telefonu → obriši i na PC-u",
     "The file goes to the Recycle Bin, where it can be restored.": "Fajl ide u Recycle Bin, odakle se može vratiti.",
-    "Deleted on this PC → delete in iCloud too": "Obrisano na PC-u → obriši i u iCloud-u",
+    "Deleted on this PC → delete in iCloud too": "Obrisano na PC-u → obriši i u iCloudu",
     "The photo goes to 'Recently Deleted' on the phone and can be restored for 30 days.":
         "Slika ide u 'Nedavno obrisano' na telefonu i može se vratiti 30 dana.",
     "Send deletions on this PC right away (watch the folder)": "Brisanje na PC-u šalji odmah (prati folder)",
     "Ask before deleting more than": "Traži potvrdu ako se briše više od",
     "Bring back photos I deleted only on this PC": "Vrati slike koje sam obrisao samo na PC-u",
     "Downloads again the photos deleted on this PC while deleting in iCloud was off.":
-        "Ponovo preuzima slike koje su obrisane na PC-u dok je brisanje u iCloud-u bilo isključeno.",
+        "Ponovo preuzima slike koje su obrisane na PC-u dok je brisanje u iCloudu bilo isključeno.",
     "SYSTEM": "SISTEM",
     # 1.1 Settings: cards, sentence-case group titles
     "Windows": "Windows",
@@ -463,14 +495,14 @@ BS: dict[str, str] = {
     " The app is in {service}, so the sign-in and database are kept only on this PC ({path}).":
         " Program je u {service}-u, pa se prijava i baza čuvaju samo na ovom računaru ({path}).",
     "Choose a folder for photos": "Izaberi folder za slike",
-    "Sign out of iCloud? Photos on this PC stay.": "Odjaviti se sa iCloud-a? Slike na PC-u ostaju.",
+    "Sign out of iCloud? Photos on this PC stay.": "Odjaviti se sa iClouda? Slike na PC-u ostaju.",
     "Photos deleted only on this PC will be downloaded again.": "Slike obrisane samo na PC-u biće ponovo preuzete.",
     "Photos folder": "Folder za slike",
     "Use this folder anyway?": "Ipak koristiti ovaj folder?",
     "New folder": "Novi folder",
     "You changed the photos folder.\n\nPhotos won't be moved: the new location is filled from iCloud, "
     "and the old folder stays untouched and is no longer synced. Continue?":
-        "Promijenio si folder za slike.\n\nSlike se neće premještati: nova lokacija se puni iz iCloud-a, "
+        "Promijenio si folder za slike.\n\nSlike se neće premještati: nova lokacija se puni iz iClouda, "
         "a stari folder ostaje netaknut i više se ne sinhronizuje. Nastaviti?",
     "Restart to change the language?": "Ponovo pokrenuti program da se promijeni jezik?",
     # pending dialog ----------------------------------------------------------------
@@ -480,13 +512,13 @@ BS: dict[str, str] = {
     "Nothing is deleted permanently.":
         "Radi sigurnosti, kad se odjednom briše više stavki nego što je dozvoljeno u postavkama, "
         "Skyfold prvo pita. Ništa se ne briše trajno.",
-    "{n} photos were deleted in iCloud": "{n} slika je obrisano u iCloud-u",
+    "{n} photos were deleted in iCloud": "{n} slika je obrisano u iCloudu",
     "{n} files or folders were deleted in iCloud Drive": "Obrisano na iCloud Driveu (fajlova ili foldera): {n}",
     "{n} files or folders were deleted on this PC": "Obrisano na ovom PC-u (fajlova ili foldera): {n}",
     "{n} photos were deleted on this PC": "{n} slika je obrisano na PC-u",
     "Delete on this PC too": "Obriši i na PC-u",
     "Keep on this PC": "Zadrži na PC-u",
-    "Delete in iCloud too": "Obriši i u iCloud-u",
+    "Delete in iCloud too": "Obriši i u iCloudu",
     "Bring them back to this PC": "Vrati ih na PC",
     "Decide later": "Odluči kasnije",
     "… and {n} more": "… i još {n}",
@@ -515,13 +547,13 @@ BS: dict[str, str] = {
     "Changed on both sides, kept both: {name}": "Promijenjeno na obje strane, sačuvane obje verzije: {name}",
     "Checking iCloud Drive…": "Provjeravam iCloud Drive…",
     "Choose a folder for iCloud Drive": "Izaberi folder za iCloud Drive",
-    "Couldn't create folder in iCloud ({name}): {error}": "Ne mogu napraviti folder u iCloud-u ({name}): {error}",
+    "Couldn't create folder in iCloud ({name}): {error}": "Ne mogu napraviti folder u iCloudu ({name}): {error}",
     "Couldn't resolve conflict ({name}): {error}": "Ne mogu riješiti konflikt ({name}): {error}",
     "DOWNLOAD": "PREUZIMANJE",
     "DRIVE FOLDER": "FOLDER ZA DRIVE",
-    "Deleted in iCloud → delete on this PC too": "Obrisano u iCloud-u → obriši i na PC-u",
+    "Deleted in iCloud → delete on this PC too": "Obrisano u iCloudu → obriši i na PC-u",
     "Drive folder is not available: {path}": "Drive folder nije dostupan: {path}",
-    "Drive: deleted in iCloud: {name}": "Drive: obrisano u iCloud-u: {name}",
+    "Drive: deleted in iCloud: {name}": "Drive: obrisano u iCloudu: {name}",
     "Drive: deleted on this PC (Recycle Bin): {name}": "Drive: obrisano na PC-u (u Recycle Bin): {name}",
     "Drive: downloaded {n} files": "Drive: preuzeto fajlova: {n}",
     "Drive: downloading {i} of {n}": "Drive: preuzimam {i} od {n}",
@@ -540,9 +572,23 @@ BS: dict[str, str] = {
     "Reading iCloud Drive…": "Čitam iCloud Drive…",
     "Reading iCloud Drive… {n}": "Čitam iCloud Drive… {n}",
     "Settings: the 'data' folder next to the app.": "Postavke: folder 'data' pored aplikacije.",
+    "Settings: {path}": "Postavke: {path}",
+    "Chosen": "Izabrano",
+    "Some notes are still to come. They follow with the next sync.":
+        "Još nekoliko bilješki je na putu. Stići će sa sljedećom sinhronizacijom.",
+    "Couldn't read this folder. Close and open it again to try again.":
+        "Ovaj folder se ne može pročitati. Zatvori ga i ponovo otvori da pokušaš opet.",
+    "iCloud didn't list every folder. Folders that aren't shown keep their current setting.":
+        "iCloud nije izlistao sve foldere. Folderi koji nisu prikazani zadržavaju trenutnu postavku.",
+    "iCloud didn't list every folder, so this choice can't be saved now: it would leave out folders that aren't "
+    "shown. Try again later.":
+        "iCloud nije izlistao sve foldere, pa se ovaj izbor sada ne može sačuvati: izostavio bi foldere koji nisu "
+        "prikazani. Pokušaj ponovo kasnije.",
+    "Couldn't refresh: {error}": "Osvježavanje nije uspjelo: {error}",
+    "Shown as of the last refresh at {time}.": "Prikazano stanje sa zadnjeg osvježavanja u {time}.",
     "Sign-in and sync database: {path}": "Prijava i baza sinhronizacije: {path}",
     "Skyfold is not made by Apple. It uses the same web services as iCloud.com.":
-        "Skyfold nije Apple-ov program. Koristi iste web servise kao iCloud.com.",
+        "Skyfold nije Appleov program. Koristi iste web servise kao iCloud.com.",
     "The Drive folder and the photos folder must be separate.": "Drive folder i folder sa slikama moraju biti odvojeni.",
     "The Drive folder doesn't look like before (its sync marker is missing). "
     "Syncing has stopped so nothing gets deleted by mistake.":
@@ -561,9 +607,9 @@ BS: dict[str, str] = {
     "You changed the folder.\n\nFiles won't be moved: the new location is filled from iCloud, and the old folder "
     "stays untouched and is no longer synced. Files in the new folder are synced both ways: deleting one there "
     "deletes it in iCloud too. Continue?":
-        "Promijenio si folder.\n\nFajlovi se neće premještati: nova lokacija se puni iz iCloud-a, a stari folder "
+        "Promijenio si folder.\n\nFajlovi se neće premještati: nova lokacija se puni iz iClouda, a stari folder "
         "ostaje netaknut i više se ne sinhronizuje. Fajlovi u novom folderu se sinhronizuju u oba smjera: "
-        "kad obrišeš jedan tamo, briše se i u iCloud-u. Nastaviti?",
+        "kad obrišeš jedan tamo, briše se i u iCloudu. Nastaviti?",
     "iCloud Drive": "iCloud Drive",
     "iCloud Drive synced": "iCloud Drive sinhronizovan",
     "iCloud Drive: finished with {n} errors. Will retry.": "iCloud Drive: završeno uz {n} grešaka. Pokušaću ponovo.",
@@ -960,3 +1006,105 @@ BS: dict[str, str] = {
 }
 
 _CATALOGS = {"bs": BS}
+
+
+# Wordings that change with the number in them: text -> (the count's name, the form for 1, the
+# form for 2-4 (Bosnian only), or a function of the values for texts with two counts). The
+# catalog itself holds the form for 5 and more (Bosnian) or for every other number (English).
+def _photos_videos_bs(kw, _s):
+    return (_word(kw.get("photos"), "{photos} slika", "{photos} slike", "{photos} slika") + " · "
+            + _word(kw.get("videos"), "{videos} video", "{videos} videa", "{videos} videa") + " · {size}")
+
+
+def _photos_videos_en(kw, s):
+    return (_word(kw.get("photos"), "{photos} photo", None, "{photos} photos") + " · "
+            + _word(kw.get("videos"), "{videos} video", None, "{videos} videos") + " · {size}")
+
+
+_FORMS_BS = {
+    "{n} deleted in iCloud": ("n", "{n} obrisan u iCloudu", "{n} obrisana u iCloudu"),
+    "{n} deleted on this PC": ("n", "{n} obrisan na PC-u", "{n} obrisana na PC-u"),
+    "{n} items are waiting for your OK to be deleted.": (
+        "n", "Čeka se tvoja potvrda za brisanje {n} stavke.", "Čeka se tvoja potvrda za brisanje {n} stavke."),
+    "Finished with {n} errors. Will retry.": (
+        "n", "Završeno uz {n} grešku. Pokušaću ponovo.", "Završeno uz {n} greške. Pokušaću ponovo."),
+    "iCloud Drive: finished with {n} errors. Will retry.": (
+        "n", "iCloud Drive: završeno uz {n} grešku. Pokušaću ponovo.",
+        "iCloud Drive: završeno uz {n} greške. Pokušaću ponovo."),
+    "Notes: finished with {n} errors. Will retry.": (
+        "n", "Bilješke: završeno uz {n} grešku. Pokušaću ponovo.", "Bilješke: završeno uz {n} greške. Pokušaću ponovo."),
+    "Followed {n} files moved inside the folder": (
+        "n", "Praćeno premještanje {n} fajla unutar foldera", "Praćeno premještanje {n} fajla unutar foldera"),
+    "Photos: {n} missing files are kept until {folder} can be read. Fix its access rights, or move that folder "
+    "out of the photos folder.": (
+        "n", "Fotografije: {n} fajl koji nedostaje zadržan je dok se {folder} ne može pročitati. Popravi prava "
+             "pristupa ili premjesti taj folder iz foldera s fotografijama.",
+        "Fotografije: {n} fajla koja nedostaju zadržana su dok se {folder} ne može pročitati. Popravi prava "
+        "pristupa ili premjesti taj folder iz foldera s fotografijama."),
+    "Photos: {n} missing files are kept for now, part of the photos folder couldn't be read": (
+        "n", "Fotografije: {n} fajl koji nedostaje zasad se ne dira, dio foldera s fotografijama se ne može pročitati",
+        "Fotografije: {n} fajla koja nedostaju zasad se ne diraju, dio foldera s fotografijama se ne može pročitati"),
+    "The first download is done: {n} files. From now on only changes are synced.": (
+        "n", "Prvo preuzimanje je gotovo: {n} fajl. Od sada se sinhronizuju samo izmjene.",
+        "Prvo preuzimanje je gotovo: {n} fajla. Od sada se sinhronizuju samo izmjene."),
+    "The first sync is done: {n} files downloaded. From now on only changes are synced.": (
+        "n", "Prva sinhronizacija je gotova: preuzet {n} fajl. Od sada se sinhronizuju samo izmjene.",
+        "Prva sinhronizacija je gotova: preuzeta {n} fajla. Od sada se sinhronizuju samo izmjene."),
+    "Drive: {name} is no longer synced; {n} files that aren't in iCloud were kept on this PC": (
+        "n", "Drive: {name} se više ne sinhronizuje; {n} fajl kojeg nema u iCloudu ostao je na računaru",
+        "Drive: {name} se više ne sinhronizuje; {n} fajla kojih nema u iCloudu ostala su na računaru"),
+    "{prefix}{i} of {n} files": ("n", "{prefix}{i} od {n} fajla", "{prefix}{i} od {n} fajla"),
+    "{n} photos were deleted in iCloud": ("n", "{n} slika je obrisana u iCloudu", "{n} slike su obrisane u iCloudu"),
+    "{n} photos were deleted on this PC": ("n", "{n} slika je obrisana na PC-u", "{n} slike su obrisane na PC-u"),
+    "Drive: uploading, {i} of {n} files done": (
+        "n", "Drive: šaljem, gotovo {i} od {n} fajla", "Drive: šaljem, gotovo {i} od {n} fajla"),
+    "{files} files · {size}": ("files", "{files} fajl · {size}", "{files} fajla · {size}"),
+    "{photos} photos · {videos} videos · {size}": _photos_videos_bs,
+    "Notes: moved {n} notes to other folders": (
+        "n", "Bilješke: {n} premještena u drugi folder", "Bilješke: {n} premještene u druge foldere"),
+    "{n} files": ("n", "{n} fajl", "{n} fajla"),
+    "Safari bookmarks: {n} saved for Firefox and Chrome": (
+        "n", "Safari oznake: {n} sačuvana za Firefox i Chrome", "Safari oznake: {n} sačuvane za Firefox i Chrome"),
+    "{n} days": ("n", "{n} dan", "{n} dana"),
+    "{n} items": ("n", "{n} stavka", "{n} stavke"),
+    "{n} months": ("n", "{n} mjesec", "{n} mjeseca"),
+    "{n} notes": ("n", "{n} bilješka", "{n} bilješke"),
+    "Deleting {n} items…": ("n", "Brišem {n} stavku…", "Brišem {n} stavke…"),
+    "{n} items couldn't be deleted: {error}": (
+        "n", "{n} stavka nije obrisana: {error}", "{n} stavke nisu obrisane: {error}"),
+}
+
+_FORMS_EN = {
+    "{n} items are waiting for your OK to be deleted.": ("n", "{n} item is waiting for your OK to be deleted.", None),
+    "Finished with {n} errors. Will retry.": ("n", "Finished with {n} error. Will retry.", None),
+    "iCloud Drive: finished with {n} errors. Will retry.": ("n", "iCloud Drive: finished with {n} error. Will retry.", None),
+    "Notes: finished with {n} errors. Will retry.": ("n", "Notes: finished with {n} error. Will retry.", None),
+    "Followed {n} files moved inside the folder": ("n", "Followed {n} file moved inside the folder", None),
+    "Photos: {n} missing files are kept until {folder} can be read. Fix its access rights, or move that folder "
+    "out of the photos folder.": (
+        "n", "Photos: {n} missing file is kept until {folder} can be read. Fix its access rights, or move that "
+             "folder out of the photos folder.", None),
+    "Photos: {n} missing files are kept for now, part of the photos folder couldn't be read": (
+        "n", "Photos: {n} missing file is kept for now, part of the photos folder couldn't be read", None),
+    "The first download is done: {n} files. From now on only changes are synced.": (
+        "n", "The first download is done: {n} file. From now on only changes are synced.", None),
+    "The first sync is done: {n} files downloaded. From now on only changes are synced.": (
+        "n", "The first sync is done: {n} file downloaded. From now on only changes are synced.", None),
+    "Drive: {name} is no longer synced; {n} files that aren't in iCloud were kept on this PC": (
+        "n", "Drive: {name} is no longer synced; {n} file that isn't in iCloud was kept on this PC", None),
+    "{prefix}{i} of {n} files": ("n", "{prefix}{i} of {n} file", None),
+    "{n} photos were deleted in iCloud": ("n", "{n} photo was deleted in iCloud", None),
+    "{n} photos were deleted on this PC": ("n", "{n} photo was deleted on this PC", None),
+    "Drive: uploading, {i} of {n} files done": ("n", "Drive: uploading, {i} of {n} file done", None),
+    "{files} files · {size}": ("files", "{files} file · {size}", None),
+    "{photos} photos · {videos} videos · {size}": _photos_videos_en,
+    "Notes: moved {n} notes to other folders": ("n", "Notes: moved {n} note to another folder", None),
+    "{n} days": ("n", "{n} day", None),
+    "{n} items": ("n", "{n} item", None),
+    "{n} months": ("n", "{n} month", None),
+    "{n} notes": ("n", "{n} note", None),
+    "Deleting {n} items…": ("n", "Deleting {n} item…", None),
+    "{n} items couldn't be deleted: {error}": ("n", "{n} item couldn't be deleted: {error}", None),
+}
+
+_FORMS = {"bs": _FORMS_BS, "en": _FORMS_EN}

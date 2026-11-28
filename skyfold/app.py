@@ -22,6 +22,7 @@ from .ui.dialogs import ask, inform, warn
 from .ui.dialogs import (FindMyDialog, FolderSetupDialog, LoginDialog, PendingDialog, SettingsDialog, UpdateDialog,
                          make_popup_round)
 from .ui.flyout import STATE_TITLES, Flyout
+from .ui.glow import animations_on
 from .ui.icons import app_icon, tray_icon
 from .ui.notices import Notice, NoticeLog
 from .ui.toast import Toasts
@@ -253,6 +254,18 @@ def _close_stale_settings(controller) -> None:
                 pass  # already destroyed
 
 
+def _load_icloud_library() -> None:
+    """Import the iCloud library (pyicloud and pydantic, which loads a compiled module) on the UI
+    thread before the worker starts. Otherwise the worker thread imports it while the UI thread is
+    building the panel; a crash at start-up was once seen right there."""
+    try:
+        import pyicloud  # noqa: F401
+        import pyicloud.session  # noqa: F401
+        import pyicloud.exceptions  # noqa: F401
+    except Exception as exc:  # noqa: BLE001 - the worker reports a real problem when it signs in
+        log.info("iCloud library not loaded ahead: %s", type(exc).__name__)
+
+
 class Controller(QObject):
     """Lives on the UI thread. Being a QObject matters: worker signals connected to its
     methods are queued onto the UI thread instead of running inside the worker thread."""
@@ -357,6 +370,7 @@ class Controller(QObject):
             QTimer.singleShot(60_000, f, lambda: self.check_updates(False))
             self.update_clock.start()
 
+        _load_icloud_library()  # here, before the worker thread imports it at the same time as the UI
         self.thread.start()
 
     # plumbing ---------------------------------------------------------------
@@ -413,10 +427,17 @@ class Controller(QObject):
         self.state = state
         self.flyout.set_state(state, text)
         title = STATE_TITLES.get(state, state)
+        if state == "idle" and text and text.rstrip(".") != t("Everything is in sync.").rstrip("."):
+            # a pass that ended for a reason ("Sync stopped.", uploads waiting): the menu says so too
+            first = text.split(". ")[0].rstrip(".")
+            title = first if len(first) <= 48 else first[:47].rstrip() + "…"
         self.m_status.setText(title)
         self.tray.setToolTip(f"{APP_NAME}\n{text or title}"[:120])
         if state == "syncing":
-            if not self.anim.isActive():
+            if not animations_on():  # Windows' animation effects are off: the syncing mark stands still
+                self.anim.stop()
+                self.tray.setIcon(tray_icon("syncing"))
+            elif not self.anim.isActive():
                 self.anim.start()
         else:
             self.anim.stop()
@@ -432,7 +453,9 @@ class Controller(QObject):
 
         refresh_palette(self.c, skip=(self.flyout,))  # open Settings, Find My, … too
         # the tray mark is black or white depending on the taskbar colour
-        QTimer.singleShot(500, lambda: self._on_state(self.state, self.flyout.status_text.text()))
+        # (the worker's own words, not what the card shows now: that may be the progress numbers, and
+        # the description above them was replaced by a plain "Syncing…")
+        QTimer.singleShot(500, lambda: self._on_state(self.state, self.flyout.state_text))
 
     def _on_progress(self, done, total, text: str) -> None:
         self.flyout.set_progress(int(done), int(total), text)
@@ -445,18 +468,33 @@ class Controller(QObject):
         self._pending = pending
         self.flyout.set_pending(pending)
         if self.state != "syncing":
-            self._on_state(self.state, self.flyout.status_text.text())
+            self._on_state(self.state, self.flyout.state_text)
 
     def _notify(self, title: str, text: str) -> None:
         important = title in (t("Sign-in required"), t("Confirmation needed"))
         if self.settings.notifications or important:
-            self._show_notice(title, text, **self._notice_look(title))
+            self._show_notice(title, text, **self._notice_look(title, text))
 
-    def _notice_look(self, title: str) -> dict:
-        """The tile, colour and buttons (keys of _notice_action) of one of the worker's notifications."""
-        if title in (t("Photos synced"), t("Your photos are on this PC")):
+    @staticmethod
+    def _notice_counts(text: str, *counted: str) -> bool:
+        """Whether a "… synced" notification's text counts any of these ("Downloaded: {n}", …). The
+        worker writes its parts with the same translations, so their beginnings are looked for."""
+        starts = [t(part, n=0).split("0")[0].strip() for part in counted]  # ("Downloaded:" / "Preuzeto:")
+        return any(start and start in text for start in starts)
+
+    def _notice_look(self, title: str, text: str = "") -> dict:
+        """The tile, colour and buttons (keys of _notice_action) of one of the worker's notifications.
+        "Show in folder" is offered only when a file came: after a sync that only deleted, there is
+        nothing left to show (the card and the bell's list both take their buttons from here)."""
+        if title == t("Photos synced"):
+            came = self._notice_counts(text, "Downloaded: {n}")
+            return {"icon": "photo", "actions": ("open_photos", "folder_photos") if came else ("open_photos",)}
+        if title == t("Your photos are on this PC"):
             return {"icon": "photo", "actions": ("open_photos", "folder_photos")}
-        if title in (t("iCloud Drive synced"), t("iCloud Drive is ready")):
+        if title == t("iCloud Drive synced"):  # (an uploaded file is still in the folder too)
+            came = self._notice_counts(text, "Downloaded: {n}", "Uploaded: {n}")
+            return {"icon": "folder", "actions": ("folder_drive",) if came else ()}
+        if title == t("iCloud Drive is ready"):
             return {"icon": "folder", "actions": ("folder_drive",)}
         if title == t("Sign-in required"):
             return {"icon": "error", "tone": "err", "actions": ("sign_in",)}
@@ -487,12 +525,26 @@ class Controller(QObject):
         if self.settings.notification_style == "windows":
             self.tray.showMessage(title, text, app_icon(), timeout)
             return
-        buttons = [(found[0], found[1]) for found in map(self._notice_action, actions) if found]
         images: list[str] = []
-        if icon == "photo":  # the newest photos in the panel's activity, small, on the card
+        if icon == "photo" and self._notice_counts(text, "Downloaded: {n}"):
+            # the photos this sync brought, newest first, small on the card (only for downloads: a card
+            # about deletions never shows some other photo)
             from .ui.panel_parts import Thumbs
 
-            images = [r.target for r in self.flyout._activity_rows() if r.target and Thumbs.wanted(r.target)][:3]
+            images = [r.target for r in self.flyout._activity_rows()
+                      if r.kind == "download" and r.target and Thumbs.wanted(r.target)
+                      and Path(r.target).is_file()][:3]
+        buttons = []
+        for key in actions:
+            found = self._notice_action(key)
+            if not found:
+                continue
+            if key == "folder_photos" and images:  # its folder, with the newest new photo selected
+                from .ui.flyout import reveal
+
+                buttons.append((found[0], lambda target=images[0]: reveal(target)))
+            else:
+                buttons.append((found[0], found[1]))
         self.toasts.show(title, text, icon=icon, tone=tone, actions=buttons,
                          on_click=on_click or self._on_message_clicked, timeout=timeout, images=images)
 
@@ -695,8 +747,9 @@ class Controller(QObject):
         old = self._dialogs.get(key)
         if old is not None and isValid(old) and old.isVisible():
             log.info("Window %s is already open: brought to the front", key)
-            if old.isMinimized():
-                old.showNormal()
+            if old.isMinimized():  # back as it was: a maximized window comes back maximized
+                old.setWindowState((old.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
+                old.show()
             old.raise_()
             old.activateWindow()
             return
@@ -726,7 +779,12 @@ class Controller(QObject):
             log.info("Sign-in window reopened (existing attempt)")
             return
         self._dialogs.pop("login", None)
-        dlg = LoginDialog(self.settings.apple_id)
+        # right after first run's two steps: step 3 of 3, as large as that window and where it stood
+        first = getattr(self, "_first_run_login", None)
+        self._first_run_login = None
+        dlg = LoginDialog(self.settings.apple_id, getattr(self, "c", None), first is not None, first[0] if first else None)
+        if first:
+            dlg.move(first[1])
 
         def commit(api, apple_id: str) -> None:
             _RedactEmails.remember(apple_id)
@@ -857,9 +915,11 @@ class Controller(QObject):
         avatar.forget_all()  # the account picture leaves with the account
         netdiag.delete()  # and the connection diagnostics file
         try:  # and the copy of the Safari bookmarks the browser extension reads
-            from . import native_host
+            from . import bookmarks
 
-            native_host.cache_file().unlink(missing_ok=True)
+            # (under the cache's lock, after account_gen moved on in _close_photos: a read finishing
+            # now either wrote before this or sees the account is gone and writes nothing)
+            bookmarks.remove_cache()
         except OSError as exc:
             log.info("Bookmarks copy not removed: %s", exc.__class__.__name__)
         self._login_api = None
@@ -879,12 +939,23 @@ class Controller(QObject):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(LOG_FILE.parent)))
 
     def open_find_my(self) -> None:
+        from shiboken6 import isValid
+
+        old = self._dialogs.get("findmy")
+        if old is not None and isValid(old) and old.isVisible():
+            self._show_dialog("findmy", old)
+            return
         dlg = FindMyDialog(self.c, lambda: getattr(self, "_login_api", None) or self.worker.api)
 
         def again() -> None:
             self._find_my_after_login = True
             QTimer.singleShot(150, self.open_login)
 
+        def gone(*_args) -> None:
+            if self._dialogs.get("findmy") is dlg:
+                self._dialogs.pop("findmy", None)
+
+        dlg.finished.connect(gone)
         dlg.signInAgain.connect(again)
         self._show_dialog("findmy", dlg)
 
@@ -946,6 +1017,7 @@ class Controller(QObject):
             self.settings.save()
             self.req.applySettings.emit(self.settings.copy(), False, False)
             if not self.settings.apple_id:
+                self._first_run_login = (dlg.size(), dlg.pos())  # signing in takes this window's place
                 QTimer.singleShot(200, self.open_login)
             else:
                 self.req.syncNow.emit(True)
@@ -977,7 +1049,13 @@ class Controller(QObject):
         elif not self.settings.apple_id:
             QTimer.singleShot(400, self.open_login)
         elif show:
-            QTimer.singleShot(300, lambda: self.flyout.show_at(self.tray.geometry()))
+            from shiboken6 import isValid
+
+            def show_panel() -> None:
+                if isValid(self.tray):
+                    self.flyout.show_at(self.tray.geometry())
+
+            QTimer.singleShot(300, self.flyout, show_panel)
         QTimer.singleShot(8000, self._warm_up)
 
     def _warm_up(self) -> None:
@@ -1095,6 +1173,10 @@ def main() -> int:
             log.info("Start cancelled: the earlier database is tried again next time")
             return 0
 
+    from .ui.tooltips import ToolTips
+
+    tooltips = ToolTips(app)
+    app.aboutToQuit.connect(tooltips.dismiss)
     ctl = Controller(app)
     ctl.server = server
 

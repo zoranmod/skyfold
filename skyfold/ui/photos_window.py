@@ -33,13 +33,16 @@ from ..i18n import language, t
 from .icons import glyph
 from .library_frame import LibraryDialog, SearchField, count_font
 from .panel_parts import SoftCard
-from .settings_parts import NavDelegate
+from .settings_parts import NavDelegate, pressable
 from .theme import service_color
 from .photo_images import ImageLoader, fit_short_side
+from .pills import (ZoomPill, _alpha, _css_colour, _is_light, _Pill, _PillButton, _qc, _round, _shadow,  # noqa: F401
+                    _tokens, _ui)
 
 log = logging.getLogger(__name__)
 
 COLUMNS = (3, 5, 7, 9, 13)  # the five grid sizes, as pinching on an iPad
+ZOOM_DEFAULT = 1  # five columns: the design's photo size (100 %)
 GAP = 2
 ITEM = Qt.UserRole + 1
 MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July", "August", "September",
@@ -75,111 +78,14 @@ def _size(n: int) -> str:
     return ""
 
 
-def _is_light(c: dict) -> bool:
-    return QColor(c["bg"]).lightness() > 128
-
-
 # --- the look (the 1.1 design's tokens) --------------------------------------------------------------
 # Everything the window draws over the material is a see-through layer (rgba), in every theme: OLED
 # too is see-through like Dark (the user's choice). Only the photos themselves are solid.
 HEAD = 74  # the title band over the photos: they scroll on under it
 
 
-def _qc(r: int, g: int, b: int, a: float = 1.0) -> QColor:
-    c = QColor(r, g, b)
-    c.setAlphaF(a)
-    return c
-
-
-def _alpha(colour, a: float) -> QColor:
-    c = QColor(colour)
-    c.setAlphaF(a)
-    return c
-
-
-def _tokens(c: dict, glass: bool) -> dict:
-    """The design's layers for this palette: mica (the floating bars), solid (the chosen segment, the
-    title band), layer / layer2 (cards, buttons), hover, stroke / stroke2 (hairlines), text2 / text3,
-    shadows, and the window's own tint (what lies around the content pane)."""
-    from .backdrop import glass_colours
-
-    light = _is_light(c)
-    text = QColor(c["text"])
-    oled_solid = not light and QColor(c["bg"]).lightness() < 8 and not glass  # OLED without the material
-    if light:
-        t = {"mica": _qc(244, 245, 248, .84), "solid": _qc(244, 245, 248), "layer": _qc(255, 255, 255, .72),
-             "layer2": _qc(255, 255, 255, .92), "hover": _qc(0, 0, 0, .04), "stroke": _qc(0, 0, 0, .06),
-             "stroke2": _qc(0, 0, 0, .11), "shadow1": _qc(0, 0, 0, .07), "shadow2": _qc(20, 30, 60, .13),
-             "text2": _alpha(text, .72), "text3": _alpha(text, .52)}
-    else:
-        solid = QColor(c["surface"]) if oled_solid else _qc(30, 33, 39)
-        t = {"mica": _alpha(solid, .84), "solid": solid, "layer": _qc(255, 255, 255, .045),
-             "layer2": _qc(255, 255, 255, .08), "hover": _qc(255, 255, 255, .09), "stroke": _qc(255, 255, 255, .07),
-             "stroke2": _qc(255, 255, 255, .12), "shadow1": _qc(0, 0, 0, .3), "shadow2": _qc(0, 0, 0, .35),
-             "text2": _alpha(text, .74), "text3": _alpha(text, .52)}
-    t["text"] = text
-    # the chosen segment: the solid material (dark); on the light one plain white, or it would vanish
-    t["chosen"] = QColor("#ffffff") if light else t["solid"]
-    t["accent"] = QColor(c["accent"])
-    t["accent_soft"] = _alpha(c["accent"], .16 if not light else .10)
-    t["focus"] = QColor(c["focus_ring"])
-    t["head"] = _alpha(t["solid"] if (glass or light) else QColor(c["bg"]), .92)
-    tint = glass_colours(c, not light)["tint"] if glass else c["bg"]
-    t["tint"] = _css_colour(tint)
-    return t
-
-
-def _css_colour(css: str) -> QColor:
-    if css.startswith("rgba("):
-        r, g, b, a = (float(x) for x in css[5:-1].split(","))
-        return QColor(int(r), int(g), int(b), int(a if a > 1 else a * 255))
-    return QColor(css)
-
-
 def _css(c: QColor) -> str:
     return f"rgba({c.red()}, {c.green()}, {c.blue()}, {c.alpha()})"
-
-
-def _ui(w: QWidget) -> dict:
-    u = getattr(w.window(), "_ui", None)
-    if u is None:
-        from .theme import DARK
-
-        u = _tokens(DARK, False)
-    return u
-
-
-def _round(p: QPainter, r: QRectF, fill, ring=None, radius: float = 8) -> None:
-    """A smooth rounded shape (Qt's style sheets draw these corners without anti-aliasing)."""
-    p.setRenderHint(QPainter.Antialiasing)
-    rad = min(radius, r.width() / 2, r.height() / 2)
-    if ring is not None and QColor(ring).alpha():
-        p.setPen(QPen(QColor(ring), 1))
-        r = r.adjusted(0.5, 0.5, -0.5, -0.5)
-    else:
-        p.setPen(Qt.NoPen)
-    p.setBrush(QColor(fill) if fill is not None else Qt.NoBrush)
-    p.drawRoundedRect(r, rad, rad)
-
-
-def _shadow(p: QPainter, r: QRectF, radius: float, blur: float, dy: float, colour: QColor) -> None:
-    """A soft drop shadow (CSS box-shadow 0 dy blur colour): rounded shapes stacked from wide and faint
-    to the shape itself, so the edge fades out smoothly."""
-    if not colour.alpha():
-        return
-    p.save()
-    p.setRenderHint(QPainter.Antialiasing)
-    p.setPen(Qt.NoPen)
-    steps = max(3, int(blur / 2))
-    per = 1 - (1 - colour.alphaF()) ** (1 / steps)
-    c = QColor(colour)
-    c.setAlphaF(per)
-    p.setBrush(c)
-    for i in range(steps):
-        grow = blur * (steps - i) / steps * 0.75
-        rr = r.adjusted(-grow, -grow + dy, grow, grow + dy)
-        p.drawRoundedRect(rr, radius + grow, radius + grow)
-    p.restore()
 
 
 def _layer_button(p: QPainter, w: QWidget, r: QRectF, radius: float, checked: bool = False) -> None:
@@ -199,107 +105,6 @@ def _layer_button(p: QPainter, w: QWidget, r: QRectF, radius: float, checked: bo
         p.setPen(QPen(u["focus"], 2))
         p.setBrush(Qt.NoBrush)
         p.drawRoundedRect(r.adjusted(1, 1, -1, -1), radius - 1, radius - 1)
-
-
-class _Shadow(QWidget):
-    """The soft shadow under a floating bar, drawn beside it (so the bar itself takes clicks only where
-    it is drawn): follows the bar wherever it moves, shows and hides with it."""
-
-    BLUR, DY = 24, 8
-
-    def __init__(self, target: QWidget, radius: float) -> None:
-        super().__init__(target.parentWidget())
-        self.target, self.radius = target, radius
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        target.installEventFilter(self)
-        self.hide()
-
-    def eventFilter(self, obj, e):  # noqa: N802
-        kind = e.type()
-        if kind in (QEvent.Move, QEvent.Resize, QEvent.Show, QEvent.Hide, QEvent.ZOrderChange):
-            self.follow()
-        return False
-
-    def follow(self) -> None:
-        t = self.target
-        b = self.BLUR
-        self.setGeometry(t.geometry().adjusted(-b, -b, b, b + self.DY))
-        self.setVisible(not t.isHidden())
-        self.stackUnder(t)
-
-    def paintEvent(self, _e) -> None:  # noqa: N802
-        u = _ui(self)
-        p = QPainter(self)
-        inner = QRectF(self.rect()).adjusted(self.BLUR, self.BLUR, -self.BLUR, -self.BLUR - self.DY)
-        hole = QPainterPath()
-        hole.addRoundedRect(inner.adjusted(1, 1, -1, -1), self.radius, self.radius)
-        outside = QPainterPath()
-        outside.addRect(QRectF(self.rect()))
-        p.setClipPath(outside.subtracted(hole))  # (the see-through bar never darkens what is under it)
-        _shadow(p, inner, self.radius, self.BLUR, self.DY, u["shadow2"])
-        _shadow(p, inner, self.radius, 3, 1, _alpha(u["shadow1"], min(1.0, u["shadow1"].alphaF())))
-
-
-class _Pill(QWidget):
-    """The floating bars (Years / Months / All Photos, − +, the selection bar): see-through, a hairline
-    and a soft shadow (drawn by its _Shadow), as in the design."""
-
-    RADIUS = 10
-
-    def __init__(self, parent: QWidget) -> None:
-        super().__init__(parent)
-        self.shadow = _Shadow(self, self.RADIUS)
-
-    def paintEvent(self, e) -> None:  # noqa: N802
-        u = _ui(self)
-        p = QPainter(self)
-        _round(p, QRectF(self.rect()), u["mica"], u["stroke2"], self.RADIUS)
-
-
-class _PillButton(QPushButton):
-    """A button on a pill: 13 px semibold in the quieter text colour; the chosen one a neutral raised
-    layer (not blue), red for Delete."""
-
-    def __init__(self, text: str, danger: bool = False) -> None:
-        super().__init__(text)
-        self.danger = danger
-        self.setObjectName("PhotoPillButton")
-        self.setCursor(Qt.PointingHandCursor)
-        self.setAttribute(Qt.WA_Hover)
-        f = self.font()
-        f.setPixelSize(13)
-        f.setWeight(QFont.DemiBold)
-        self.setFont(f)
-
-    def sizeHint(self) -> QSize:  # noqa: N802
-        fm = QFontMetricsF(self.font())
-        return QSize(int(fm.horizontalAdvance(self.text()) + 26.5), 28)
-
-    def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return self.sizeHint()
-
-    def paintEvent(self, e) -> None:  # noqa: N802
-        u = _ui(self)
-        p = QPainter(self)
-        r = QRectF(self.rect())
-        if self.danger:
-            _round(p, r, QColor("#d13438" if self.underMouse() else "#c42b1c"), None, 7)
-        elif self.isChecked():  # the chosen view: the solid material, raised a little
-            p.setRenderHint(QPainter.Antialiasing)
-            p.setPen(Qt.NoPen)
-            p.setBrush(u["shadow1"])
-            p.drawRoundedRect(r.adjusted(0, 1, 0, 1), 7, 7)
-            _round(p, r, u["chosen"], None, 7)
-        elif self.underMouse() or self.isDown():
-            _round(p, r, u["hover"], None, 7)
-        if self.hasFocus() and getattr(self.window(), "keyboard_used", False):
-            p.setPen(QPen(u["focus"], 1.5))
-            p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 6, 6)
-        p.setPen(QColor("#ffffff") if self.danger else u["text"] if self.isChecked() or self.underMouse()
-                 else u["text2"])
-        p.setFont(self.font())
-        p.drawText(self.rect(), Qt.AlignCenter, self.text())
 
 
 class _Toast(QLabel):
@@ -655,7 +460,12 @@ class PhotoModel(QAbstractListModel):
             return it
         if role in (Qt.AccessibleTextRole, Qt.ToolTipRole):
             kind = t("Video") if it.is_video else t("Live Photo") if it.live else t("Photo")
-            return f"{kind}, {_day(it.date)} {it.date:%H:%M}, {it.name}"
+            text = f"{kind}, {_day(it.date)} {it.date:%H:%M}, {it.name}"
+            if role == Qt.ToolTipRole:
+                from .safe_text import plain_tip
+
+                return plain_tip(text)
+            return text
         return None
 
 
@@ -1112,6 +922,7 @@ class Grid(QListView):
 
 
 # --- Years and Months --------------------------------------------------------------------------------
+@pressable  # (a screen reader gets a button to press; Enter/Space open it too)
 class Card(QWidget):
     clicked = Signal()
 
@@ -1513,7 +1324,7 @@ class PhotosWindow(LibraryDialog):
     RELOAD_GAP = 10.0  # seconds at least between two reads of the library while the sync adds photos
 
     # kept while Skyfold runs
-    zoom_level = 1  # (five columns: the design's photo size)
+    zoom_level = ZOOM_DEFAULT
     sidebar_open = True
 
     def __init__(self, palette: dict[str, str], source, settings) -> None:
@@ -1663,21 +1474,12 @@ class PhotosWindow(LibraryDialog):
             b.clicked.connect(lambda _=False, k=key: self.set_view(k))
             pl.addWidget(b)
             self.view_buttons[key] = b
-        self.zoom_pill = _Pill(self.browse)
-        zl = QHBoxLayout(self.zoom_pill)
-        zl.setContentsMargins(4, 4, 4, 4)
-        zl.setSpacing(0)
-        self.zoom_out = _PillButton("−")
-        self.zoom_out.setToolTip(t("Smaller") + " (Ctrl −)")
-        self.zoom_out.setAccessibleName(t("Smaller"))
-        self.zoom_out.clicked.connect(lambda: self.set_zoom(PhotosWindow.zoom_level + 1))
-        self.zoom_in = _PillButton("+")
-        self.zoom_in.setToolTip(t("Larger") + " (Ctrl +)")
-        self.zoom_in.setAccessibleName(t("Larger"))
-        self.zoom_in.clicked.connect(lambda: self.set_zoom(PhotosWindow.zoom_level - 1))
-        for b in (self.zoom_out, self.zoom_in):
-            b.setFixedWidth(30)
-            zl.addWidget(b)
+        # the photos' size: − 100% + (the same bar as the text's size in Notes)
+        self.zoom_pill = ZoomPill(self.browse, t("Smaller"), t("Larger"))
+        self.zoom_out, self.zoom_in = self.zoom_pill.minus, self.zoom_pill.plus
+        self.zoom_pill.stepped.connect(lambda step: self.set_zoom(PhotosWindow.zoom_level - step))
+        self.zoom_pill.reset.connect(lambda: self.set_zoom(ZOOM_DEFAULT))
+        self._zoom_shown()
 
         self.selbar = _Pill(self.browse)
         sl = QHBoxLayout(self.selbar)
@@ -1812,7 +1614,15 @@ class PhotosWindow(LibraryDialog):
             if (d < 0) != self.picture.zoom or d == 0 and self.picture.zoom:
                 self.picture.toggle_zoom()
             return
-        self.set_zoom(2 if d == 0 else PhotosWindow.zoom_level + d)
+        self.set_zoom(ZOOM_DEFAULT if d == 0 else PhotosWindow.zoom_level + d)
+
+    def _zoom_shown(self) -> None:
+        """The bar's percentage: a photo's side against the normal size. A photo is as wide as the
+        window divided by the columns, so it is the normal number of columns over the number now
+        (3, 5, 7, 9, 13 columns: 167, 100, 71, 56, 38 %)."""
+        level = max(0, min(len(COLUMNS) - 1, PhotosWindow.zoom_level))
+        self.zoom_pill.show_zoom(round(100 * COLUMNS[ZOOM_DEFAULT] / COLUMNS[level]),
+                                 smaller=level < len(COLUMNS) - 1, larger=level > 0)
 
     # --- look ----------------------------------------------------------------------------------
     def apply_palette(self, palette: dict[str, str]) -> None:
@@ -2260,6 +2070,7 @@ class PhotosWindow(LibraryDialog):
             idx = self.grid.indexAt(QPoint(4, at.y()))
         end = pos is None and self._at_end()
         PhotosWindow.zoom_level = level
+        self._zoom_shown()
         self._layout_grid()
         self.grid.doItemsLayout()
         if end:
@@ -2769,7 +2580,9 @@ class PhotosWindow(LibraryDialog):
         self._viewer_opened_at = time.monotonic()
         label = t("Search results") if self.query else self._set_name()
         self.back.setText(self.back.fontMetrics().elidedText(label, Qt.ElideRight, 132))
-        self.back.setToolTip(label)
+        from .safe_text import plain_tip
+
+        self.back.setToolTip(plain_tip(label) if self.back.text() != label else "")
         self.back.setAccessibleName(label)
         self.pages.setCurrentWidget(self.viewer)
         self._set_bare(False)

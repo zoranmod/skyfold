@@ -24,7 +24,7 @@ from . import auth
 from .config import STATE_DB, Settings
 from .drive_engine import MARKER as DRIVE_MARKER
 from .drive_engine import TMP_PREFIX as DRIVE_TMP
-from .drive_engine import DriveState, DriveSyncer, ignored
+from .drive_engine import DriveState, DriveSyncer, affected_file_count, ignored
 from .drive_remote import ICloudDrive
 from .notes_engine import ICloudNotes, NotesState, NotesSyncer
 from . import extras
@@ -138,6 +138,7 @@ class SyncWorker(QObject):
         self.busy = False
         self._again: tuple[bool, bool] | None = None  # (full photos check, force drive)
         self._watchers: dict[str, _Watcher] = {}
+        self._watchers_lock = threading.Lock()  # Quit can drain these from the UI thread
         self._pending: Pending | None = None
         self._drive_pending: Pending | None = None
         self._drive_last = 0.0
@@ -153,6 +154,11 @@ class SyncWorker(QObject):
         self._drive_thread: threading.Thread | None = None
         self._drive_deferred: set[str] = set()  # follow-ups waiting for the debounce timer
         self._drive_want_full = False
+        self._drive_exiting = False  # the Drive thread has decided to end: a new request starts another
+        self._stops = 0  # raised by every Stop (any thread)
+        self._round = 0  # the value of _stops when the running round began: a change means it was stopped
+        self._again_at = 0  # the value of _stops when a follow-up round was asked for
+        self._notes_more = False  # Notes stopped at its per-pass limit this round: more follow
         self._closing = False  # set first thing on Quit: nothing is started after that
         self._pause_now = False  # set by the UI thread the moment Pause is pressed
         self._last_silent_refresh = -1e9
@@ -211,23 +217,44 @@ class SyncWorker(QObject):
         return bool(self.settings.paused or getattr(self, "_pause_now", False))
 
     def _halt(self) -> bool:
-        """Between the services of a cycle: has Quit or Pause been asked for meanwhile?"""
+        """Between the services of a cycle: has Quit, Pause or Stop been asked for meanwhile?"""
         if self._closing_now():
             return True
         if self._paused() and not getattr(self, "_sync_now_while_paused", False):
             self._set_state("paused", t("Syncing is paused."))
             return True
+        if self._round_stopped():
+            # Stop ends the whole round: Photos had finished, but Notes, bookmarks and Drive were
+            # still started (and Notes wrote a note) after the user had asked to stop.
+            self._set_state("idle", t("Sync stopped."))
+            return True
         return False
 
+    def _round_stopped(self) -> bool:
+        return getattr(self, "_round", 0) != getattr(self, "_stops", 0)
+
+    def _start_round(self) -> None:
+        """A new round begins: a Stop pressed before now belonged to an earlier one."""
+        notes = getattr(self, "notes", None)
+        if notes is not None:
+            # Notes keeps a Stop for the whole round (it no longer clears its flag when its pass starts)
+            notes.cancel_flag.clear()
+        self._round = getattr(self, "_stops", 0)
+
     def _stop_requested(self, service: str) -> bool:
-        """Was the pass of this service asked to stop (quit, pause)? Each pass clears its flag when it starts."""
+        """Was the pass of this service asked to stop (quit, pause)? Photos and Drive clear their flag when a
+        pass starts, Notes when a round starts (see _start_round)."""
         s = {t("iCloud Drive"): self.drive, t("Notes"): self.notes}.get(service, self.syncer)
         return self._closing_now() or (s is not None and s.cancel_flag.is_set())
 
     def cancel(self) -> None:
         """Thread-safe: may be called directly from the UI thread."""
-        if not self._paused():  # (paused: Resume is what starts work again)
-            self._drive_stopped = True  # queued Drive work waits for the next request to sync
+        self._stops = getattr(self, "_stops", 0) + 1  # the round running now ends at its next check
+        with self._drive_lock:  # (the lock under which the Drive thread decides to start a pass)
+            if not self._paused():  # (paused: Resume is what starts work again)
+                self._drive_stopped = True  # queued Drive work waits for the next request to sync
+            if self.drive is not None:
+                self.drive.cancel_flag.set()
         for s in (self.syncer, self.drive, self.notes):
             if s:
                 if self._closing_now() and hasattr(s, "closing"):
@@ -391,6 +418,7 @@ class SyncWorker(QObject):
                                      s.delete_threshold, _Bridge(self, "drive"),
                                      cache_file=STATE_DB.parent / "drive_cache.json")
             self.drive.on_pending = self._drivePendingSeen.emit
+            self.drive.cancel_cleared_by_caller = True  # (cleared in _drive_passes, under _drive_lock)
             import hashlib
 
             # whose Drive this is comes from the session actually in use, not from the settings
@@ -438,6 +466,13 @@ class SyncWorker(QObject):
     @Slot(object, bool, bool)
     def apply_settings(self, settings: Settings, reset_state: bool, reset_drive: bool = False) -> None:
         old_folders = self.settings.drive_folders
+        if self.settings.bookmarks_enabled and not settings.bookmarks_enabled:
+            try:  # Safari bookmarks switched off: the copy for the browser extension goes too
+                from . import bookmarks
+
+                bookmarks.remove_cache()
+            except Exception as exc:  # noqa: BLE001
+                log.info("Bookmarks copy not removed: %s", type(exc).__name__)
         albums_changed = settings.albums_as_folders != self.settings.albums_as_folders
         # videos switched on: the ones skipped so far come now, not at the next daily full check
         more_videos = ((settings.include_videos and not self.settings.include_videos)
@@ -468,9 +503,16 @@ class SyncWorker(QObject):
                        if not in_scope(path, row.is_dir, settings.drive_folders)}
             # (kept for a moment: if you chose to recycle those PC copies, only the ones that are
             # really what iCloud has may go; see trash_drive_paths)
-            self._forgotten_drive_rows = leaving
-            self.drive_state.drop_many(list(leaving))
-            self._drive_last = 0.0  # read Drive again with the new choice
+            try:
+                self.drive_state.drop_many(list(leaving))  # (all of them or, on a failure, none)
+            except Exception as exc:  # noqa: BLE001
+                # The rows are all still there, so the new choice must not apply yet: a narrower choice
+                # with the old rows kept could take the files outside it for deletions in iCloud.
+                log.warning("Drive: the new folder choice is not applied yet (%s)", type(exc).__name__)
+                self.settings.drive_folders = old_folders
+            else:
+                self._forgotten_drive_rows = leaving
+                self._drive_last = 0.0  # read Drive again with the new choice
         if albums_changed and self.state and not reset_state:
             self.state.set("last_full_scan", None)  # next check reads the library and the albums
             self.state.set("albums_refreshed", None)
@@ -543,23 +585,37 @@ class SyncWorker(QObject):
         wanted = {"photos": (self.settings.photos_dir, self._photos_hit)}
         if self.settings.drive_enabled:
             wanted["drive"] = (self.settings.drive_dir, self._drive_hit)
-        for key in list(self._watchers):
-            w = self._watchers[key]
-            if key not in wanted or w.root != wanted[key][0] or not w.alive():
-                w.stop()
-                del self._watchers[key]
-        for key, (root, hit) in wanted.items():
-            if key in self._watchers or not Path(root).exists():
+        with self._watchers_lock:
+            stale = [key for key, w in self._watchers.items()
+                     if key not in wanted or w.root != wanted[key][0] or not w.alive()]
+            retiring = [self._watchers.pop(key) for key in stale]
+            missing = {key: entry for key, entry in wanted.items() if key not in self._watchers}
+        for watcher in retiring:
+            watcher.stop()
+        for key, (root, hit) in missing.items():
+            if self._closing_now():
+                return
+            if not Path(root).exists():
                 continue
             try:
-                self._watchers[key] = _Watcher(root, hit)
+                watcher = _Watcher(root, hit)
             except (OSError, ImportError) as exc:
                 log.warning("Watcher for %s failed: %s", root, exc)
+                continue
+            with self._watchers_lock:
+                if not self._closing_now():
+                    self._watchers[key] = watcher
+                    continue
+            # Quit may have drained the registry while watchdog was starting.
+            watcher.stop()
+            return
 
     def _stop_watchers(self) -> None:
-        for w in self._watchers.values():
+        with self._watchers_lock:
+            watchers = list(self._watchers.values())
+            self._watchers.clear()
+        for w in watchers:
             w.stop()
-        self._watchers.clear()
 
     # sync -------------------------------------------------------------------
     @Slot(bool)
@@ -592,8 +648,14 @@ class SyncWorker(QObject):
             self._drive_stopped = False  # a new request to sync
             if full:
                 self._drive_want_full = True
-            if self._drive_thread is not None and self._drive_thread.is_alive():
+            if self._drive_thread is not None and self._drive_thread.is_alive() \
+                    and not getattr(self, "_drive_exiting", False):
                 return  # the running pass picks the request up when it finishes
+            # (a thread that has already decided to end would leave this request with no one to run it)
+            with self._state_lock:  # (shown at once: the Photos pass ending meanwhile must not flash "done")
+                if self._drive_ui[0] not in ("error", "offline"):
+                    self._drive_ui = ("syncing", t("Checking iCloud Drive…"))
+            self._drive_exiting = False
             self._drive_thread = threading.Thread(target=self._drive_loop, name="SkyfoldDrive", daemon=True)
             self._drive_thread.start()
 
@@ -601,22 +663,49 @@ class SyncWorker(QObject):
         t_ = self._drive_thread
         return t_ is not None and t_.is_alive()
 
+    def _drive_mine(self) -> bool:
+        """Is the calling thread the current Drive thread (or one run directly, with none started)?"""
+        mine = getattr(self, "_drive_thread", None)
+        return mine is None or mine is threading.current_thread()
+
     def _drive_loop(self) -> None:
+        try:
+            self._drive_passes()
+        finally:
+            with self._drive_lock:
+                if self._drive_mine():
+                    self._drive_exiting = True  # (also when a pass ended in an error)
+                    # Left without a pass: never stay at "syncing". Only while no newer thread has taken
+                    # over: that one already shows "syncing" for its own pass.
+                    if self._drive_ui[0] == "syncing":
+                        self._set_state("idle", "", "drive")
+
+    def _drive_passes(self) -> None:
         while True:
             with self._drive_lock:
-                if self.drive is None:
-                    break
-                if (self._paused() and not getattr(self, "_drive_once", False)) or getattr(self, "_closing", False) \
-                        or getattr(self, "_drive_stopped", False):
-                    break  # paused, stopped or quitting meanwhile: the waiting changes stay queued
-                self._drive_once = False  # (Sync now while paused: this one pass)
-                if self._drive_want_full:
-                    self._drive_want_full, changed = False, None
-                elif self._drive_changes:
-                    changed, self._drive_changes = self._drive_changes | self._drive_retry, set()
-                    self._drive_retry = set()
-                else:
-                    break
+                changed: set[str] | None = None
+                leave = self.drive is None
+                if not leave and ((self._paused() and not getattr(self, "_drive_once", False))
+                                  or getattr(self, "_closing", False) or getattr(self, "_drive_stopped", False)):
+                    leave = True  # paused, stopped or quitting meanwhile: the waiting changes stay queued
+                elif not leave:
+                    self._drive_once = False  # (Sync now while paused: this one pass)
+                    if not self._closing_now():
+                        self.drive.cancel_flag.clear()  # a new pass; a Stop from now on reaches it
+                    if self._drive_want_full:
+                        self._drive_want_full, changed = False, None
+                    elif self._drive_changes:
+                        changed, self._drive_changes = self._drive_changes | self._drive_retry, set()
+                        self._drive_retry = set()
+                    else:
+                        leave = True
+                if leave:
+                    # Said under the same lock requests are queued under: a request that comes a moment
+                    # after the queue was found empty starts a new thread instead of waiting for this
+                    # one (a manual full read stayed queued with no thread left to run it).
+                    if self._drive_mine():
+                        self._drive_exiting = True
+                    return
             problems: list[str] = []
             ok = self._run_drive(problems, changed)
             self._emit_stats()
@@ -678,8 +767,10 @@ class SyncWorker(QObject):
         if self.busy:
             prev = self._again or (False, False)
             self._again = (prev[0] or full, prev[1] or force_drive)
+            self._again_at = getattr(self, "_stops", 0)
             return
         self.busy = True
+        self._start_round()
         # Sync now from the tray while paused: this one cycle runs through (Photos, Notes, bookmarks)
         # (only Sync now itself; a full check asked for by answering a Photos question stays Photos only)
         self._sync_now_while_paused = everything and self._paused()
@@ -687,6 +778,9 @@ class SyncWorker(QObject):
             self._cycle(full, force_drive)
             while self._again is not None:
                 (again_full, again_drive), self._again = self._again, None
+                if getattr(self, "_again_at", 0) != getattr(self, "_stops", 0):
+                    continue  # asked for before Stop was pressed: that Stop ended it as well
+                self._start_round()
                 self._cycle(again_full, again_drive)
         finally:
             self.busy = False
@@ -694,6 +788,7 @@ class SyncWorker(QObject):
 
     def _cycle(self, full: bool, force_drive: bool) -> None:
         problems: list[str] = []
+        self._notes_more = False
         if self._closing_now():
             return
         if not self._run_photos(full, problems):
@@ -713,8 +808,8 @@ class SyncWorker(QObject):
                 or time.monotonic() - self._bookmarks_last >= BOOKMARKS_INTERVAL):  # force_drive: Sync now
             if not self._run_bookmarks(problems):
                 return
-            if self._halt():
-                return
+        if self._halt():
+            return  # (checked again right before Drive starts: Stop during the bookmarks)
         drive_due = self.drive is not None and (
             # 0 = never read yet (monotonic() counts from boot, so it may still be < the interval)
             force_drive or not self._drive_last or time.monotonic() - self._drive_last >= DRIVE_FULL_INTERVAL)
@@ -728,6 +823,9 @@ class SyncWorker(QObject):
             self._set_state("paused", t("Syncing is paused."))
         elif getattr(self, "_photos_uploads_waiting", False):
             self._set_state("idle", t("Downloads are up to date. Uploads to iCloud Photos are waiting."))
+        elif getattr(self, "_notes_more", False):
+            # (said as it is: the panel showed "Up to date" while notes were still to be downloaded)
+            self._set_state("idle", t("Some notes are still to come. They follow with the next sync."))
         else:
             self._set_state("idle", t("Everything is in sync."))
 
@@ -742,6 +840,12 @@ class SyncWorker(QObject):
             log.info("%s stopped while quitting/pausing (%s)", service, type(exc).__name__)
             exc = Cancelled()
         if isinstance(exc, Cancelled):
+            if svc == "drive" and getattr(self, "_drive_stopped", False):
+                # Stop pressed while only Drive was running: the panel shows the Photos state then,
+                # which still said "Everything is in sync." from the round before
+                with self._state_lock:
+                    if self._last_state[0] == "idle":
+                        self._last_state = ("idle", t("Sync stopped."))
             self._set_state("idle", t("Sync stopped."), svc)
             return False
         if isinstance(exc, AuthRequired):
@@ -849,8 +953,19 @@ class SyncWorker(QObject):
         """Safari bookmarks → "Safari Bookmarks.html" (read-only in iCloud)."""
         from . import bookmarks
 
+        api, gen = self.api, self.account_gen
+
+        def current() -> bool:
+            # Sign out removes the extension's copy at once (window side): a read that ends after that,
+            # or after Quit, must not put it back
+            return (not self._closing_now() and gen == self.account_gen and self.api is api
+                    and not auth.signed_out())
+
         try:
-            path, n, changed = bookmarks.export(self.api, Path(self.settings.bookmarks_dir))
+            path, n, changed = bookmarks.export(api, Path(self.settings.bookmarks_dir), current)
+        except bookmarks.NotCurrent:
+            log.info("Safari bookmarks: signed out or quitting meanwhile; nothing written")
+            return True  # (the rest of the round ends at its next check)
         except bookmarks.BookmarksUnavailable as exc:
             self._bookmarks_last = time.monotonic()  # tried; not again before the next interval
             problems.append(str(exc))
@@ -871,6 +986,7 @@ class SyncWorker(QObject):
         # A note that couldn't be downloaded (now, or again) is missing from the folder: never "in sync"
         if res is not None and (getattr(res, "errors", 0) or getattr(res, "held", False)):
             problems.append(t("Notes: finished with {n} errors. Will retry.", n=max(1, res.errors)))
+        self._notes_more = bool(getattr(res, "more", False))  # the per-pass limit: the rest comes next time
         return True
 
     def _run_drive(self, problems: list[str], changed: set[str] | None = None) -> bool:
@@ -947,23 +1063,8 @@ class SyncWorker(QObject):
             if self.drive_state is not None:  # a folder counts with all the files inside it
                 rows = self.drive_state.all()
 
-                def files(tops: list[str]) -> int:
-                    top = set(tops)
-
-                    def under(p: str) -> bool:
-                        while True:
-                            if p in top:
-                                return True
-                            if "/" not in p:
-                                return False
-                            p = p.rsplit("/", 1)[0]
-
-                    # every file inside, and each item with no file at all (an empty folder) as one
-                    files = {p for p, b in rows.items() if not b.is_dir and under(p)}
-                    return len(files) + sum(1 for q in top if not any(f == q or f.startswith(q + "/")
-                                                                       for f in files))
-
-                pend.files_to_pc, pend.files_to_cloud = files(pend.to_pc), files(pend.to_cloud)
+                pend.files_to_pc = affected_file_count(pend.to_pc, rows)
+                pend.files_to_cloud = affected_file_count(pend.to_cloud, rows)
         if pend != self._drive_pending or getattr(pend, "gen", None) != getattr(self._drive_pending, "gen", None):
             self._drive_pending = pend
             if pend:

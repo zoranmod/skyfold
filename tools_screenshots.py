@@ -424,14 +424,14 @@ def update_window() -> None:
 
     c = use("dark")
     notes = "\n".join([
-        "## A new look, everywhere", "",
-        "- See-through, in the style of Windows 11, in light, dark or OLED.",
-        "- Skyfold's own notifications, with a bell that keeps them.",
-        "- Settings as cards, with your picture.", "",
+        "## Polished, steadier, safer", "",
+        "- The tray panel keeps one size; Stop is a clear red button.",
+        "- Notifications in Windows 11's own layout.",
+        "- Zoom you can see: − 100% + in Notes and Photos.", "",
         "## Smaller things", "",
-        "- First run in three short steps.",
-        "- The deletion question shows the photos."])
-    rel = Release("1.1.0", notes, "https://github.com/zoranmod/skyfold/releases/tag/v1.1.0", "", "")
+        "- Signing in looks like the first-run steps.",
+        "- Counts read naturally in Bosnian and English."])
+    rel = Release("1.2.0", notes, "https://github.com/zoranmod/skyfold/releases/tag/v1.2.0", "", "")
     save(dialogs.UpdateDialog(rel, True, c), "update.png")
 
 

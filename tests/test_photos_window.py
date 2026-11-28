@@ -1004,3 +1004,41 @@ def test_viewer_commands_follow_current_photo_and_live_theme(qapp, made_up, monk
         assert w.v_open.isVisible() and w.v_show.isVisible() and not w.v_more.isVisible()
     finally:
         w.close()
+
+
+def test_the_size_bar_shows_the_photo_size_as_a_percentage(qapp, made_up):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from skyfold.ui import photos_window as pw
+
+    w = window(qapp, made_up)
+    try:
+        w.resize(1200, 800)
+        qapp.processEvents()
+        pill = w.zoom_pill
+        assert pill.isVisible() and pill.percent.text() == "100%"  # five columns: the normal size
+        assert (w.zoom_out, w.zoom_in) == (pill.minus, pill.plus)
+        shown = {}
+        for level in range(len(pw.COLUMNS)):
+            w.set_zoom(level)
+            shown[pw.COLUMNS[level]] = (pill.percent.text(), pill.minus.isEnabled(), pill.plus.isEnabled())
+        # a photo's side against the normal one: the normal five columns over the columns now
+        assert shown == {3: ("167%", True, False), 5: ("100%", True, True), 7: ("71%", True, True),
+                         9: ("56%", True, True), 13: ("38%", False, True)}
+        w.grid.setFocus()
+        QTest.mouseClick(pill.percent, Qt.LeftButton)  # the percentage: back to the normal size
+        assert pw.PhotosWindow.zoom_level == pw.ZOOM_DEFAULT and pill.percent.text() == "100%"
+        assert w.grid.hasFocus()  # (a click on the bar leaves the keys with the photos)
+        QTest.mouseClick(pill.plus, Qt.LeftButton)
+        assert pill.percent.text() == "167%" and w.grid.hasFocus()
+        w._zoom_key(0)  # Ctrl+0: the same normal size as the percentage shows
+        assert pw.PhotosWindow.zoom_level == pw.ZOOM_DEFAULT and pill.percent.text() == "100%"
+        w._zoom_key(1)  # Ctrl −
+        assert pill.percent.text() == "71%"
+        assert pill.percent._font().families()[0] == "Cascadia Mono"
+        assert (pill.minus.accessibleName(), pill.plus.accessibleName()) == ("Smaller", "Larger")
+        assert pill.percent.accessibleName() == "Normal size (now 71%)"
+        assert all(b.focusPolicy() == Qt.TabFocus for b in (pill.minus, pill.percent, pill.plus))
+    finally:
+        pw.PhotosWindow.zoom_level = pw.ZOOM_DEFAULT
+        w.close()

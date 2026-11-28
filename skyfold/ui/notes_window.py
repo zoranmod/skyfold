@@ -21,16 +21,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import (QDateTime, QEasingCurve, QLocale, QObject, QPoint, QPointF, QPropertyAnimation, QRectF,
-                            QSize, Qt, QTimer, QUrl, Signal)
+from PySide6.QtCore import (QDateTime, QEvent, QLocale, QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, QUrl,
+                            Signal)
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QCursor, QDesktopServices, QFont, QFontMetricsF, QImage,
                            QImageIOHandler, QImageReader, QKeySequence, QPainter, QPainterPath, QPalette, QPen,
                            QShortcut, QTextCharFormat, QTextCursor, QTextBlockFormat, QTextDocument,
                            QTextFormat, QTextFrameFormat, QTextLayout, QTextTable)
-from PySide6.QtWidgets import (QApplication, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QMenu, QSizePolicy, QSplitter, QStyle, QStyledItemDelegate,
-                               QTextBrowser, QTextEdit, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
+                               QSizePolicy, QSplitter, QStyle, QStyledItemDelegate, QTextBrowser, QTextEdit,
+                               QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from shiboken6 import isValid
 
@@ -40,6 +39,7 @@ from .. import notes_view as nv
 from .dialogs import Combo
 from .library_frame import LibraryDialog, SearchField, count_font
 from .panel_parts import SoftCard
+from .pills import PILL_SHEET, ZoomPill, _tokens
 from .settings_parts import ElidedLabel
 from .icons import glyph
 from .theme import service_color
@@ -60,6 +60,8 @@ RETRY_INDEX = 30.0  # seconds before pages that couldn't be read are tried again
 RETRY_NOTE = 5.0
 DOC_SIDE = 40  # the note's padding left and right (the design: 26 above, 40 at the sides)
 DOC_LEFT = DOC_SIDE - 4  # (on the left, 4 px of it are the room to grab the line between list and note)
+ZOOM_BOTTOM, ZOOM_RIGHT = 14, 24  # the size bar over the note: from its foot, and from its right (the scroll bar)
+DOC_BOTTOM = 26 + 36  # under the note's last line: the design's 26, and the size bar's height
 HEAD_MARK = "#010203"  # a table's head cells carry this background from the style sheet until polished
 MAX_TABLES = 200  # tables of one note drawn as cards (any further ones: text only)
 
@@ -631,7 +633,7 @@ class _Reader(QTextBrowser):
         fmt.setLeftMargin(DOC_LEFT)
         fmt.setRightMargin(DOC_SIDE)
         fmt.setTopMargin(0)
-        fmt.setBottomMargin(26)
+        fmt.setBottomMargin(DOC_BOTTOM)  # (the end of a note scrolls clear of the size bar)
         root.setFrameFormat(fmt)
         # checklists: 28 px rows (8 px between items), a ticked item struck through in the quiet colour
         done = QTextCharFormat()
@@ -1050,70 +1052,6 @@ class _StatusLabel(ElidedLabel):
         p.drawText(r, Qt.AlignRight | Qt.AlignVCenter, self.fontMetrics().elidedText(self.text(), self.mode, r.width()))
 
 
-class _ZoomHint(QWidget):
-    """The note's text size, shown for a moment while it changes ("110%"), then it fades away."""
-
-    SHOWN_MS = 1300
-
-    def __init__(self, win: "NotesWindow") -> None:
-        super().__init__()
-        self.win = win
-        self._text = ""
-        self.setFixedHeight(24)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.effect = QGraphicsOpacityEffect(self)
-        self.effect.setOpacity(1.0)
-        self.setGraphicsEffect(self.effect)
-        self.fade = QPropertyAnimation(self.effect, b"opacity", self)
-        self.fade.setDuration(220)
-        self.fade.setEasingCurve(QEasingCurve.OutCubic)
-        self.fade.finished.connect(self._faded)
-        self.timer = QTimer(self)
-        self.timer.setSingleShot(True)
-        self.timer.timeout.connect(self._fade_out)
-        self.hide()
-
-    def text(self) -> str:
-        return self._text
-
-    def _font(self) -> QFont:
-        return _px_font(self.font(), 12, families=MONO)
-
-    def flash(self, text: str) -> None:
-        self._text = text
-        self.setAccessibleName(text)
-        self.setFixedWidth(round(QFontMetricsF(self._font()).horizontalAdvance(text)) + 20)
-        self.fade.stop()
-        self.effect.setOpacity(1.0)
-        self.show()
-        self.update()
-        self.timer.start(self.SHOWN_MS)
-
-    def _fade_out(self) -> None:
-        self.fade.stop()
-        self.fade.setStartValue(self.effect.opacity())
-        self.fade.setEndValue(0.0)
-        self.fade.start()
-
-    def _faded(self) -> None:
-        if self.fade.endValue() == 0.0:
-            self.hide()
-
-    def paintEvent(self, _e) -> None:  # noqa: N802
-        k = _layers(self.win.c)
-        hc = contrast_colors()
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        p.setPen(QPen(hc["text"] if hc else k["stroke2"], 1))
-        p.setBrush(hc["window"] if hc else k["layer2"])
-        p.drawRoundedRect(r, 6, 6)
-        p.setFont(self._font())
-        p.setPen(hc["text"] if hc else k["text2"])
-        p.drawText(r, Qt.AlignCenter, self._text)
-        p.end()
-
-
 class NotesWindow(LibraryDialog):
     """source() gives (Notes database, Notes folder), or None when Notes isn't set up or nobody
     is signed in."""
@@ -1180,6 +1118,7 @@ class NotesWindow(LibraryDialog):
         self.split = QSplitter(Qt.Horizontal)
         self.split.setHandleWidth(4)
         self.folders = _FolderTree()
+        self.folders.setProperty("tipForClippedItems", True)
         self.folders.setHeaderHidden(True)
         self.folders.setIndentation(0)  # the delegate indents; the highlight spans the whole row
         self.folders.setRootIsDecorated(False)
@@ -1235,9 +1174,6 @@ class NotesWindow(LibraryDialog):
         self.meta.setObjectName("NoteMeta")
         self.meta.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)  # long folder paths never widen the window
         bar.addWidget(self.meta, 1)
-        # the text size: Ctrl + wheel, Ctrl +/−/0 and the menu; a quiet "110%" shows while it changes
-        self.zoom_hint = _ZoomHint(self)
-        bar.addWidget(self.zoom_hint)
         # the rest in one menu, so the window fits small screens and the note stays clean
         self.more = _QuietButton(self)
         self.more.setToolTip(t("More"))
@@ -1245,13 +1181,6 @@ class NotesWindow(LibraryDialog):
         self.more.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(self.more)
         self.act_browser = menu.addAction(t("Open in browser"), self._open_in_browser)
-        menu.addSeparator()
-        self.zoom_in = menu.addAction(t("Larger text"), lambda: self.set_zoom(1))
-        self.zoom_out = menu.addAction(t("Smaller text"), lambda: self.set_zoom(-1))
-        self.zoom_reset = menu.addAction("", lambda: self.set_zoom(0))
-        for act, keys in ((self.zoom_in, "Ctrl++"), (self.zoom_out, "Ctrl+-"), (self.zoom_reset, "Ctrl+0")):
-            act.setShortcut(QKeySequence(keys))  # shown in the menu; the keys themselves are handled below
-            act.setShortcutContext(Qt.WidgetShortcut)
         menu.addSeparator()
         self.act_full = menu.addAction(t("Full screen"), self.toggle_full_screen)
         self.act_full.setShortcut(QKeySequence("F11"))
@@ -1266,13 +1195,20 @@ class NotesWindow(LibraryDialog):
             self.theme_actions[key] = act
         self.theme_actions[NotesWindow.own_theme].setChecked(True)
         self.more.setMenu(menu)
-        self._zoom_labels()
         bar.addWidget(self.more)
         rl.addLayout(bar)
         self.reader = _Reader(self)
         self.reader.setAccessibleName(t("Note"))
         self.reader.anchorClicked.connect(self._on_link)
         rl.addWidget(self.reader, 1)
+        # the text size: − 100% +, the same bar as in Photos, floating at the note's foot on the right
+        # (beside the scroll bar, where lines end early; it shows and hides with the note). Also
+        # Ctrl + wheel and Ctrl + / − / 0.
+        self.zoom_pill = ZoomPill(self.reader, t("Smaller text"), t("Larger text"))
+        self.zoom_pill.stepped.connect(self.set_zoom)
+        self.zoom_pill.reset.connect(lambda: self.set_zoom(0))
+        self.reader.installEventFilter(self)  # (the bar follows the note's size)
+        self._zoom_shown()
         self.empty = QLabel("")
         self.empty.setObjectName("Muted")
         self.empty.setAlignment(Qt.AlignCenter)
@@ -1446,7 +1382,10 @@ class NotesWindow(LibraryDialog):
             it.setData(0, FOLDER_COUNT, counts[path])
             it.setIcon(0, folder_icon)
             full = path.replace("/", " › ")
-            it.setData(0, Qt.ToolTipRole, full)
+            from .safe_text import plain_tip
+
+            if parent_path:
+                it.setData(0, Qt.ToolTipRole, plain_tip(full) if "<" in full else full)
             it.setData(0, Qt.AccessibleDescriptionRole, full)
             it.setData(0, Qt.AccessibleTextRole, t("{name}, {n} notes", name=name, n=counts[path]))
             parent = items.get(parent_path) if parent_path else None
@@ -1606,9 +1545,6 @@ class NotesWindow(LibraryDialog):
         when = _long_when(row.modified) if row.modified else ""
         folder = row.folder.replace("/", " \u203a ")
         self.meta.setText(" \u00b7 ".join(x for x in (folder, when) if x))  # "Home \u00b7 24 November 2026, 07:15"
-        from .safe_text import plain_tip
-
-        self.meta.setToolTip(plain_tip(self.meta.text()))
         self._note_failed = 0.0
         if row.locked:
             self.reader.clear_note()
@@ -1836,20 +1772,24 @@ class NotesWindow(LibraryDialog):
         if it is not None:
             self.notes.scrollToItem(it)
 
-    def _zoom_labels(self) -> None:
-        pct = round(NotesWindow.zoom * 100)
-        self.zoom_reset.setText(t("Normal size (now {n}%)", n=pct))
-        self.zoom_reset.setEnabled(pct != 100)
-        self.zoom_in.setEnabled(NotesWindow.zoom < NotesWindow.ZOOMS[-1])
-        self.zoom_out.setEnabled(NotesWindow.zoom > NotesWindow.ZOOMS[0])
+    def _zoom_shown(self) -> None:
+        """The bar's percentage: the text's size against the normal one."""
+        self.zoom_pill.show_zoom(round(NotesWindow.zoom * 100), smaller=NotesWindow.zoom > NotesWindow.ZOOMS[0],
+                                 larger=NotesWindow.zoom < NotesWindow.ZOOMS[-1])
+
+    def _place_zoom(self) -> None:
+        pill, r = self.zoom_pill, self.reader
+        pill.adjustSize()
+        pill.move(max(0, r.width() - ZOOM_RIGHT - pill.width()), max(0, r.height() - ZOOM_BOTTOM - pill.height()))
+        pill.shadow.follow()
+        pill.raise_()
 
     def set_zoom(self, step: int) -> None:
         """Text of the note larger (1), smaller (-1) or back to normal (0)."""
         zooms = NotesWindow.ZOOMS
         now = min(range(len(zooms)), key=lambda i: abs(zooms[i] - NotesWindow.zoom))
         NotesWindow.zoom = 1.0 if step == 0 else zooms[max(0, min(len(zooms) - 1, now + step))]
-        self._zoom_labels()
-        self.zoom_hint.flash(f"{round(NotesWindow.zoom * 100)}%")
+        self._zoom_shown()
         self.current_key = None  # same note: its pictures are kept, only the text changes size
         self._show_current()
 
@@ -1891,8 +1831,8 @@ class NotesWindow(LibraryDialog):
             order[(now + step) % len(order)].setFocus()
 
     def eventFilter(self, obj, e) -> bool:  # noqa: N802
-        from PySide6.QtCore import QEvent
-
+        if obj is getattr(self, "reader", None) and e.type() in (QEvent.Resize, QEvent.Show):
+            self._place_zoom()
         if e.type() in (QEvent.KeyPress, QEvent.MouseButtonPress) and obj in getattr(self, "_watched", ()):
             used = e.type() == QEvent.KeyPress
             if used != self.keyboard_used:
@@ -1935,9 +1875,10 @@ class NotesWindow(LibraryDialog):
         if own is not None:
             palette = theme.palette(own)
         self.c = palette
+        self._ui = _tokens(palette, self.glass)  # (the size bar's layers, as in Photos)
         self.setPalette(theme.qpalette(palette) if own else QApplication.palette())
         k = _layers(palette)
-        self.setStyleSheet((theme.stylesheet(palette) if own else "") + self.frame_style() +
+        self.setStyleSheet((theme.stylesheet(palette) if own else "") + self.frame_style() + PILL_SHEET +
                            # the design's search field: a lighter layer, a stronger hairline, 13.5 px
                            f"SoftCard#LibrarySearch {{ qproperty-fill:{_rgba(k['layer2'])};"
                            f" qproperty-stroke:{_rgba(k['stroke2'])}; }}"
@@ -1963,7 +1904,7 @@ class NotesWindow(LibraryDialog):
         self.folders.setStyleSheet("QTreeView{background:transparent;border:none;padding:0;outline:0;"
                                    "show-decoration-selected:0} QTreeView::item,QTreeView::branch"
                                    "{border:none;background:transparent}")
-        for w in (self.more, self.sorter, self.zoom_hint):
+        for w in (self.more, self.sorter, self.zoom_pill, self.zoom_pill.shadow):
             w.update()
         if not self.closed:
             self._fill_folders()

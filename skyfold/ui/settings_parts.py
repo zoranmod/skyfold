@@ -4,7 +4,7 @@ shorten long folder paths in the middle, and setting cards you can click."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPalette
 from PySide6.QtWidgets import QLabel, QSizePolicy, QStyle, QStyledItemDelegate, QWidget
 
@@ -111,14 +111,26 @@ class ElidedLabel(QLabel):
     start and its last folder); the whole text is in the tooltip."""
 
     def __init__(self, text: str = "", mode=Qt.ElideMiddle) -> None:
-        super().__init__(text)
+        super().__init__()
+        self.setTextFormat(Qt.PlainText)
         self.mode = mode
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.setToolTip(text)
+        self.setText(text)
 
     def setText(self, text: str) -> None:  # noqa: N802
         super().setText(text)
-        self.setToolTip(text)
+        self._update_tip()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._update_tip()
+
+    def _update_tip(self) -> None:
+        from .safe_text import plain_tip
+
+        text = self.text()
+        clipped = self.fontMetrics().horizontalAdvance(text) > self.contentsRect().width()
+        self.setToolTip(plain_tip(text) if clipped else "")
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return QSize(60, super().minimumSizeHint().height())
@@ -136,6 +148,34 @@ class ElidedLabel(QLabel):
         p.drawText(r, Qt.AlignLeft | Qt.AlignVCenter, self.fontMetrics().elidedText(self.text(), self.mode, r.width()))
 
 
+# --- cards a screen reader can press ----------------------------------------------------------------------
+def pressable(cls: type) -> type:
+    """Class decorator for a QWidget with a `clicked` signal that acts like a button. It gives each one
+    an accessible name from its visible text when none is set (Enter/Space already click it), and
+    keeps that name in step with the text: a card whose labels change later is not read out with
+    its old words. No accessibility interface of our own: Qt owns and deletes those, and one written
+    in Python could crash Skyfold."""
+    handle = cls.event
+    # shown; a label got another text or was added (its new size is a layout request to the card);
+    # and when the keyboard arrives, which is when a screen reader reads the name
+    renamed_by = (QEvent.Show, QEvent.LayoutRequest, QEvent.FocusIn)
+
+    def event(self, e, _handle=handle) -> bool:
+        done = _handle(self, e)
+        if e.type() in renamed_by:
+            given = self.accessibleName()
+            if not given or given == getattr(self, "_name_from_labels", None):  # (a name set by hand stays)
+                name = ", ".join(x.text() for x in self.findChildren(QLabel) if x.text() and not x.isHidden())
+                if name != given:
+                    self._name_from_labels = name
+                    self.setAccessibleName(name)
+        return done
+
+    cls.event = event
+    return cls
+
+
+@pressable
 class ClickCard(SoftCard):
     """A setting card that does something when clicked (or with Enter/Space): opens a page, a file or
     a question. Lights up under the pointer like Windows' own."""
@@ -186,4 +226,4 @@ class ClickCard(SoftCard):
             p.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 7, 7)
 
 
-__all__ = ["Avatar", "ClickCard", "ElidedLabel", "IconLabel", "NavDelegate"]
+__all__ = ["Avatar", "ClickCard", "ElidedLabel", "IconLabel", "NavDelegate", "pressable"]

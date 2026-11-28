@@ -27,7 +27,7 @@
 
 ## Features
 
-- **Made for Windows 11.** A see-through tray panel and windows in the style of Windows 11, with Light, Dark and a pure black OLED theme, and Skyfold's own notification cards (a bell keeps the ones that went away).
+- **Made for Windows 11.** A see-through tray panel and windows in the style of Windows 11, with Light, Dark and a nearly black OLED theme, and Skyfold's own notification cards (a bell keeps the ones that went away).
 - **iCloud Photos.** Downloads your whole library (photos, videos, Live Photo videos) to a folder you choose: all in one folder, by year, or by year and month. **Deletions travel both ways:** delete on the iPhone and the PC copy goes to the Recycle Bin; delete on the PC and the photo goes to "Recently Deleted" in iCloud.
 - **Upload from the PC (optional).** Turn on *Upload photos and videos I add to this folder to iCloud Photos* (**Settings → Photos**) and photos and videos in the photos folder that Skyfold didn't download go up to iCloud Photos and appear on your iPhone, **including ones already there when you turn it on**. A file is sent once it has stayed unchanged for two minutes. Sending is **one-way**: the file stays an ordinary file on the PC, deleting it on the PC or on the iPhone doesn't delete it on the other side, and Skyfold doesn't download it back as a second copy. Album folders, hidden files and cloud placeholders are never sent.
 - **One photos folder per Apple ID.** If you sign in with another Apple ID, Skyfold asks you to choose a photos folder for it; a folder that belongs to another Apple ID isn't synced. Downloaded photos sync deletions both ways; photos you send are one-way. Skyfold follows renamed and moved photos by their Windows file id; an editor that replaces the file plus a rename before the next check can still look like a deletion.
@@ -40,7 +40,7 @@
 - **iCloud storage** at a glance in the tray panel.
 - **Built to be safe.** Nothing is deleted permanently, big deletions wait for your OK, and a missing or unplugged folder is never read as "delete everything".
 - **Updates itself.** Skyfold tells you when a new version is out, shows what's new, and updates with one click (your settings and files stay as they are).
-- **Portable and light.** Unzip and run. Follows the Windows light/dark theme, or pick Light, Dark or a pure black OLED theme. English and Bosnian.
+- **Portable and light.** Unzip and run. Follows the Windows light/dark theme, or pick Light, Dark or a nearly black OLED theme. English and Bosnian.
 
 > **Skyfold is a public beta.** Two-way iCloud Drive sync is new and has been through many rounds of independent review, but it hasn't met every real-world folder yet. Skyfold always asks before deleting more items than your limit, and nothing it deletes is permanent (Recycle Bin / "Recently Deleted"). Please keep a backup of anything important and [report problems](https://github.com/zoranmod/skyfold/issues).
 
@@ -250,7 +250,7 @@ Skyfold is not affiliated with, endorsed by or sponsored by Apple Inc. Apple, iC
 <details>
 <summary><b>Na bosanskom (kratko)</b></summary>
 
-**Skyfold** sinhronizuje tvoje iCloud slike, iCloud Drive i Apple bilješke s Windowsom, bez Apple-ove aplikacije.
+**Skyfold** sinhronizuje tvoje iCloud slike, iCloud Drive i Apple bilješke s Windowsom, bez Appleove aplikacije.
 
 - **Brisanje slika ide u oba smjera, a Drive se sinhronizuje u oba smjera** (i preimenovanja i premještanja). Obrisani fajlovi idu u Recycle Bin ili u "Nedavno obrisano", pa se mogu vratiti.
 - **Skyfold je javna beta.** Dvosmjerna Drive sinhronizacija je nova: Skyfold uvijek pita prije većeg brisanja, ali čuvaj rezervnu kopiju važnih stvari.

@@ -370,23 +370,23 @@ def test_sort_zoom_full_screen_and_keys(qapp, library):
     assert ids(w) == ["l", "d", "g"]  # Bank, Diary, Groceries
     w.sorter.setCurrentIndex(w.sorter.findData("new"))
     before = w.reader.document().defaultFont().pointSizeF()
-    # the size is shown for a moment ("110%") and in the "More" menu, which also changes it
-    assert not w.zoom_hint.isVisible() and not w.zoom_reset.isEnabled()
+    # the size bar (− 100% +) shows the size all the time, and changes it; the keys do too
+    pill = w.zoom_pill
+    assert pill.isVisible() and pill.percent.text() == "100%"
     QTest.keyClick(w, Qt.Key_Plus, Qt.ControlModifier)
-    assert w.reader.document().defaultFont().pointSizeF() > before and w.zoom_hint.text() == "110%"
-    assert w.zoom_hint.isVisible() and "110%" in w.zoom_reset.text() and w.zoom_reset.isEnabled()
-    assert pump(qapp, lambda: not w.zoom_hint.isVisible())  # then it fades away
+    assert w.reader.document().defaultFont().pointSizeF() > before and pill.percent.text() == "110%"
     for _ in range(30):
         w.set_zoom(1)
-    assert w.zoom_hint.text() == "240%" and "Buy" in w.reader.toPlainText() and not w.zoom_in.isEnabled()
+    assert pill.percent.text() == "240%" and "Buy" in w.reader.toPlainText() and not pill.plus.isEnabled()
     QTest.keyClick(w, Qt.Key_0, Qt.ControlModifier)
-    assert w.zoom_hint.text() == "100%" and not w.zoom_reset.isEnabled()
+    assert pill.percent.text() == "100%" and pill.plus.isEnabled()
     assert abs(w.reader.document().defaultFont().pointSizeF() - before) < 0.01
-    w.zoom_out.trigger()
-    assert w.zoom_hint.text() == "90%" and NotesWindow.zoom == 0.9
-    w.zoom_reset.trigger()
+    pill.minus.click()
+    assert pill.percent.text() == "90%" and NotesWindow.zoom == 0.9
+    pill.percent.click()
     assert NotesWindow.zoom == 1.0
-    assert all(a in w.more.menu().actions() for a in (w.zoom_in, w.zoom_out, w.zoom_reset))
+    # (the "More" menu no longer repeats what the bar does)
+    assert not any("text" in a.text().lower() or "%" in a.text() for a in w.more.menu().actions())
     # Enter in the search box: to the results, never a button
     w.search.setFocus()
     QTest.keyClick(w.search, Qt.Key_Return)
@@ -904,7 +904,7 @@ def test_sidebar_list_and_controls_like_the_design(qapp, library):
         assert pump(qapp, lambda: rows["e"].data(ROW_COMPACT))
         assert not rows["g"].data(ROW_COMPACT) and not rows["l"].data(ROW_COMPACT)  # (locked: "Locked note")
         assert w.notes.visualItemRect(rows["e"]).height() < w.notes.visualItemRect(rows["g"]).height()
-        # no visible zoom buttons; the quiet "More" button and the order of the list stay
+        # the quiet "More" button and the order of the list stay
         assert w.more.isVisible() and w.sorter.isVisible() and w.sorter.height() <= 28
         assert w.search.placeholderText() == "Search notes" and "Ctrl+K" in w.search.toolTip()
         # the layers are see-through in every theme, OLED as Dark (over the window's material)
@@ -924,3 +924,81 @@ def test_list_dates_are_short():
     assert _list_date("2026-11-22T09:15:00", now) == "Sun"  # this week: the day
     assert _list_date("2026-11-18T18:40:00", now) == "18 Nov"  # this year: day and month
     assert "Nov" not in _list_date("2025-11-18T18:40:00", now)  # before: the date as Windows writes it
+
+
+# --- the size bar (− 100% +), the same one as in Photos ------------------------------------------
+
+def test_the_size_bar_floats_at_the_notes_foot_beside_the_scroll_bar(qapp, library):
+    from skyfold.ui import photos_window, pills
+    from skyfold.ui.notes_window import DOC_BOTTOM
+    w = window(qapp, library)
+    try:
+        select(w, "g")
+        qapp.processEvents()
+        pill, reader = w.zoom_pill, w.reader
+        assert type(pill) is pills.ZoomPill is photos_window.ZoomPill  # one bar for both windows
+        assert pill.parentWidget() is reader and pill.isVisible()
+
+        def placed():
+            bar = reader.verticalScrollBar()
+            assert pill.geometry().right() < reader.width() - bar.sizeHint().width() - 6  # clear of the scroll bar
+            assert reader.height() - pill.geometry().bottom() - 1 == 14  # as far from the foot as in Photos
+            assert pill.geometry().left() > reader.width() // 2  # at the right, where lines end early
+            assert pill.shadow.geometry().contains(pill.geometry())
+
+        placed()
+        w.resize(900, 560)
+        qapp.processEvents()
+        placed()
+        assert (pill.height(), pill.minus.width(), pill.plus.width(), pill.minus.height()) == (36, 30, 30, 28)
+        # the note's last line can always be scrolled clear of the bar
+        assert reader.document().rootFrame().frameFormat().bottomMargin() == DOC_BOTTOM >= 14 + pill.height()
+        select(w, "l")  # a locked note: nothing to read, no bar
+        qapp.processEvents()
+        assert not pill.isVisible() and not pill.shadow.isVisible()
+        select(w, "g")
+        qapp.processEvents()
+        assert pill.isVisible()
+    finally:
+        w.close()
+
+
+def test_the_size_bar_follows_the_wheel_and_names_its_buttons(qapp, library):
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from skyfold.ui.notes_window import NotesWindow
+    w = window(qapp, library)
+    try:
+        select(w, "g")
+        pill = w.zoom_pill
+        at = QPointF(50, 50)
+        wheel = QWheelEvent(at, QPointF(w.reader.viewport().mapToGlobal(at.toPoint())), QPoint(), QPoint(0, 120),
+                            Qt.NoButton, Qt.ControlModifier, Qt.NoScrollPhase, False)
+        QApplication.sendEvent(w.reader.viewport(), wheel)
+        assert pump(qapp, lambda: pill.percent.text() == "110%")  # Ctrl + wheel: the percentage follows
+        assert pill.percent._font().families()[0] == "Cascadia Mono"  # a number, in the app's number font
+        assert (pill.minus.accessibleName(), pill.plus.accessibleName()) == ("Smaller text", "Larger text")
+        assert pill.percent.accessibleName() == "Normal size (now 110%)" and "Ctrl 0" in pill.percent.toolTip()
+        assert "Ctrl +" in pill.plus.toolTip() and "Ctrl \u2212" in pill.minus.toolTip()
+        # reached with Tab, but a click leaves the focus in the note
+        chain, x = [], w.nextInFocusChain()
+        while x is not w and len(chain) < 500:
+            chain.append(x)
+            x = x.nextInFocusChain()
+        assert all(b in chain and b.focusPolicy() == Qt.TabFocus for b in (pill.minus, pill.percent, pill.plus))
+        w.reader.setFocus()
+        QTest.mouseClick(pill.plus, Qt.LeftButton)
+        assert NotesWindow.zoom == 1.25 and pill.percent.text() == "125%" and w.reader.hasFocus()
+        QTest.mouseClick(pill.percent, Qt.LeftButton)  # the percentage: back to the normal size
+        assert NotesWindow.zoom == 1.0 and pill.percent.text() == "100%" and w.reader.hasFocus()
+        NotesWindow.zoom = NotesWindow.ZOOMS[0]
+        w.set_zoom(-1)
+        assert pill.percent.text() == "70%" and not pill.minus.isEnabled() and pill.plus.isEnabled()
+        for mode in ("light", "dark", "oled"):  # drawn in every theme
+            w.set_theme(mode)
+            qapp.processEvents()
+            assert not pill.grab().toImage().isNull() and w._ui["text"].name() == w.c["text"].lower()
+    finally:
+        w.close()

@@ -44,7 +44,7 @@ class StateBadge(QWidget):
     offline, or a warning that needs the user."""
 
     GLYPH = {"idle": "check", "paused": "pause", "offline": "cloud", "error": "error", "auth": "error",
-             "setup": "folder", "attention": "shield"}
+             "setup": "folder", "attention": "shield", "note": "info"}
 
     def __init__(self, palette: dict[str, str], size: int = 44) -> None:
         super().__init__()
@@ -70,7 +70,7 @@ class StateBadge(QWidget):
     def _colour(self) -> str:
         c = self.c
         return {"idle": c["ok"], "paused": c["warn"], "offline": c["offline"], "error": c["err"], "auth": c["err"],
-                "setup": c["accent_fg"], "attention": c["warn"]}.get(self.state, c["accent_fg"])
+                "setup": c["accent_fg"], "attention": c["warn"], "note": c["offline"]}.get(self.state, c["accent_fg"])
 
     def paintEvent(self, _e) -> None:  # noqa: N802
         p = QPainter(self)
@@ -159,6 +159,53 @@ def thumb_size() -> QSize:
     return QSize(32, 32)
 
 
+class FootTime(QWidget):
+    """Beside the panel's main button: a small caption over its value ("Last checked" over
+    "just now", "Started" over "22:04"), left-aligned and centred on the buttons' height."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        from PySide6.QtWidgets import QVBoxLayout
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.caption, self.value = QLabel(), QLabel()
+        self.caption.setObjectName("FootCap")
+        self.value.setObjectName("FootVal")
+        lay.addStretch(1)
+        for lbl in (self.caption, self.value):
+            lbl.setTextFormat(Qt.PlainText)
+            lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            lay.addWidget(lbl)
+        lay.addStretch(1)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - "caption\nvalue", as the label it replaces
+        cap, _, val = (text or "").partition("\n")
+        self._full = (cap, val)
+        self._elide()
+        self.value.setVisible(bool(val))
+
+    def _elide(self) -> None:
+        """Never cut off mid-character: wider than the space, it ends in "…" (the whole is its tooltip)."""
+        cap, val = getattr(self, "_full", ("", ""))
+        width = max(1, self.contentsRect().width()) if self.isVisible() else 1 << 20
+        self.caption.setText(self.caption.fontMetrics().elidedText(cap, Qt.ElideRight, width))
+        shown = self.value.fontMetrics().elidedText(val, Qt.ElideRight, width)
+        self.value.setText(shown)
+        from .safe_text import plain_tip
+
+        self.setToolTip(plain_tip(val) if shown != val else "")
+
+    def resizeEvent(self, e) -> None:  # noqa: N802
+        super().resizeEvent(e)
+        self._elide()
+
+    def text(self) -> str:
+        cap, val = getattr(self, "_full", ("", ""))
+        return cap + ("\n" + val if val else "")
+
+
 class TwoLineLabel(QLabel):
     """A label that shows at most two lines and ends the second with "…"; text() is still the
     whole text, which is also its tooltip. The status card keeps one height this way."""
@@ -176,11 +223,9 @@ class TwoLineLabel(QLabel):
     def text(self) -> str:  # noqa: D102 - the whole text, as set
         return self._full
 
-    def setText(self, text: str) -> None:  # noqa: N802
-        from .safe_text import plain_tip
-
+    def setText(self, text: str, extra: str = "") -> None:  # noqa: N802
         self._full = text or ""
-        self.setToolTip(plain_tip(self._full))
+        self._extra = extra
         self._render()
 
     def resizeEvent(self, e) -> None:  # noqa: N802
@@ -204,7 +249,12 @@ class TwoLineLabel(QLabel):
                 cur = " ".join([w] + words[i + 1:])
                 break
         lines.append(fm.elidedText(cur, Qt.ElideRight, width) if len(lines) == self._lines - 1 else cur)
-        super().setText("\n".join(x for x in lines if x))
+        shown = "\n".join(x for x in lines if x)
+        super().setText(shown)
+        from .safe_text import plain_tip
+
+        clipped = shown.split() != self._full.split() or any(fm.horizontalAdvance(x) > width for x in lines)
+        self.setToolTip(plain_tip(self._extra or (self._full if clipped else "")))
 
     def sizeHint(self) -> QSize:  # noqa: N802
         fm = QFontMetrics(self.font())
@@ -226,19 +276,25 @@ class CenteredButton(QToolButton):
         opt.icon = QIcon()
         sp.drawComplexControl(QStyle.CC_ToolButton, opt)  # the background and border from the style sheet
         colour = self.palette().buttonText().color()
-        fm = QFontMetrics(self.font())
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QFontMetricsF
+
+        fm = QFontMetricsF(self.font())
         icon = 16 if self.icon_name else 0
-        gap = 8 if icon else 0
+        gap = 7 if icon else 0
         w = icon + gap + fm.horizontalAdvance(self.text())
         x = (self.width() - w) / 2
+        mid = self.height() / 2
         if icon:
             from .svgicons import pixmap
 
             pm = pixmap(self.icon_name, colour.name(), icon, max(1.0, self.devicePixelRatioF()), stroke=1.8)
-            sp.drawPixmap(int(round(x)), int(round((self.height() - icon) / 2)), pm)
+            sp.drawPixmap(QPointF(round(x), mid - icon / 2), pm)
         sp.setPen(colour)
         sp.setFont(self.font())
-        sp.drawText(QRectF(x + icon + gap, 0, w, self.height()), Qt.AlignVCenter | Qt.AlignLeft, self.text())
+        # the capitals centred on the button's middle, like the icon (centring the whole line, with
+        # room for descenders, put a word like "Stop" a pixel above its icon)
+        sp.drawText(QPointF(round(x) + icon + gap, round(mid + fm.capHeight() / 2)), self.text())
 
     icon_name = ""
 

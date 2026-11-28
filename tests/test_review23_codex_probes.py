@@ -193,6 +193,7 @@ def test_stale_settings_cannot_upload_alices_drive_into_bobs_account(tmp_path, m
     # the session in use is Bob's), which is the designed outcome; the worker shows the message.
     from skyfold.engine import SyncError
     with pytest.raises(SyncError):
+        worker.drive.cancel_flag.clear()  # (as the worker does when it starts a pass)
         worker.drive.run()  # the normal next pass against the fake account B
     observed = (c.settings.apple_id, worker.api.account_name, remote_b.uploads)
     for dlg in c._dialogs.values(): dlg.close()

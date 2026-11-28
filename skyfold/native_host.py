@@ -59,14 +59,28 @@ def _std_binary():
     return sys.stdin.buffer, sys.stdout.buffer
 
 
+def _read_exact(stream, n: int) -> bytes | None:
+    """n bytes, gathered over as many reads as the pipe needs; None when it ends first."""
+    parts, left = [], n
+    while left:
+        chunk = stream.read(left)
+        if not chunk:
+            return None  # the browser closed the pipe mid-frame
+        parts.append(chunk)
+        left -= len(chunk)
+    return b"".join(parts)
+
+
 def read_message(stream) -> dict | None:
-    head = stream.read(4)
-    if len(head) < 4:
+    head = _read_exact(stream, 4)
+    if head is None:
         return None
     n = struct.unpack("<I", head)[0]
     if n > MAX_MESSAGE:
         return None
-    data = stream.read(n)
+    data = _read_exact(stream, n)
+    if data is None:
+        return None
     try:
         msg = json.loads(data.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
@@ -93,8 +107,8 @@ def answer(msg: dict) -> dict:
 
         if auth.signed_out():
             return {"ok": False, "error": "no-bookmarks"}  # signed out: nobody's bookmarks are handed out
-    except Exception:  # noqa: BLE001 - (only a check; the copy is removed at sign-out too)
-        pass
+    except Exception:  # noqa: BLE001 - sign-out state unknown: answer as if signed out, never from the cache
+        return {"ok": False, "error": "no-bookmarks"}
     try:
         data = json.loads(cache_file().read_text(encoding="utf-8"))
     except FileNotFoundError:

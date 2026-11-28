@@ -12,6 +12,7 @@ STATE_COLORS = {
     "syncing": "#2563eb",
     "paused": "#b45309",
     "offline": "#64748b",
+    "note": "#64748b",  # idle, but the pass ended for a reason (stopped, uploads waiting): neutral, not green
     "error": "#dc2626",
     "auth": "#dc2626",
     "setup": "#b45309",

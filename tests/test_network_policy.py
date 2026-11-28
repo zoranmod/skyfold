@@ -132,7 +132,31 @@ def test_the_update_dialog_loads_no_pictures_from_outside():
     QApplication.instance() or QApplication([])
     view = _ReleaseNotes()
     for url in ("file://server/share/a.png", "https://example.com/a.png", "C:/Windows/a.png"):
-        assert view.loadResource(QTextDocument.ImageResource, QUrl(url)) is None
+        got = view.loadResource(QTextDocument.ImageResource, QUrl(url))
+        assert got.width() == 1 and got.height() == 1  # a blank pixel: Qt doesn't go and load it itself
+
+
+def test_release_notes_never_show_a_picture_from_this_pc(tmp_path):
+    """Rendered, not only asked: a picture next to the notes stays out of the document."""
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QColor, QImage, QTextDocument
+    from PySide6.QtWidgets import QApplication
+
+    from skyfold.ui.dialogs import _ReleaseNotes
+
+    QApplication.instance() or QApplication([])
+    pic = QImage(400, 400, QImage.Format_ARGB32)
+    pic.fill(QColor("#ff0000"))
+    path = tmp_path / "a.png"
+    pic.save(str(path))
+    view = _ReleaseNotes()
+    view.resize(400, 300)
+    url = QUrl.fromLocalFile(str(path))
+    view.setMarkdown("Notes" + chr(10) * 2 + f"![x]({url.toString()})")
+    view.document().setTextWidth(380)
+    assert view.document().size().height() < 150  # (a 400 px picture would make it far taller)
+    loaded = view.document().resource(QTextDocument.ImageResource, url)
+    assert loaded is None or loaded.width() <= 1
 
 
 # --- connection diagnostics ---

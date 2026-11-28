@@ -4,6 +4,32 @@ Some tests open real windows, worker threads and thread-pool tasks. Left to the 
 own teardown, Qt sometimes crashes after all tests have passed, which fails CI at random.
 """
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import pytest
+
+
+def _isolate_profile(root, monkeypatch):
+    home = root / "profile"
+    local = home / "AppData" / "Local"
+    app = root / "app"
+    for key, path in (("HOME", home), ("USERPROFILE", home), ("LOCALAPPDATA", local),
+                      ("APPDATA", home / "AppData" / "Roaming"), ("_SKYFOLD_TEST_DATA_DIR", app / "data")):
+        monkeypatch.setenv(key, str(path))
+    return app, local
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config):
+    # config probes its portable folder and loads the language while modules are being imported.
+    # Set the roots before collection, and let subprocesses inherit them.
+    session_folder = TemporaryDirectory(prefix="skyfold-tests-", ignore_cleanup_errors=True)
+    config.add_cleanup(session_folder.cleanup)
+    env = pytest.MonkeyPatch()
+    config.add_cleanup(env.undo)
+    _isolate_profile(Path(session_folder.name), env)
+
 
 def pytest_sessionfinish(session, exitstatus):
     try:
@@ -23,9 +49,6 @@ def pytest_sessionfinish(session, exitstatus):
         app.shutdown()
 
 
-import pytest  # noqa: E402
-
-
 @pytest.fixture(autouse=True)
 def _bookmarks_cache_in_tmp(tmp_path, monkeypatch):
     """No test ever writes the real Safari bookmarks cache (it lives in the user's private folder)."""
@@ -37,11 +60,33 @@ def _bookmarks_cache_in_tmp(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _signed_in_memory_reset(monkeypatch):
-    """A Sign out in one test (kept in memory for the rest of that run) doesn't carry into the next."""
-    from skyfold import auth
+def _account_files_in_tmp(tmp_path_factory, monkeypatch):
+    """Account-switch and sign-out tests run the real cleanup code, including its default paths."""
+    from skyfold import auth, avatar, config, worker
+    from skyfold.ui import dialogs
 
+    # Keep application data separate: many tests expect their own tmp_path to start empty.
+    root = tmp_path_factory.mktemp("account")
+    app, local = _isolate_profile(root, monkeypatch)
+    private = local / config.APP_ID
+    private.mkdir(parents=True)
+    portable = app / "data"
+    portable.mkdir(parents=True)
+    monkeypatch.setattr(config, "APP_DIR", app)
+    monkeypatch.setattr(config, "DATA_DIR", portable)
+    monkeypatch.setattr(config, "SETTINGS_FILE", portable / "settings.json")
+    monkeypatch.setattr(config, "PRIVATE_DIR", private)
+    monkeypatch.setattr(config, "SESSION_DIR", private / "session")
+    monkeypatch.setattr(config, "STATE_DB", private / config.DATABASE)
+    monkeypatch.setattr(config, "LOG_FILE", private / "skyfold.log")
+    monkeypatch.setattr(auth, "SESSION_DIR", config.SESSION_DIR)
+    monkeypatch.setattr(auth, "SIGNED_OUT", private / "signed-out")
+    monkeypatch.setattr(avatar, "PRIVATE_DIR", private)
+    monkeypatch.setattr(dialogs, "PRIVATE_DIR", private)
+    monkeypatch.setattr(worker, "STATE_DB", config.STATE_DB)
+    monkeypatch.setattr(auth, "_CURRENT", None)
     monkeypatch.setattr(auth, "_SIGNED_OUT_NOW", False)
+    return root
 
 
 @pytest.fixture(autouse=True)

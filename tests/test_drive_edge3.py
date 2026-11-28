@@ -200,7 +200,8 @@ def test_followup_is_not_set_forever_for_a_file_folder_clash(env25):
 # files (folder kept) on a 100k-file Drive.
 def test_count_is_not_quadratic(tmp_path):
     st = de.DriveState(tmp_path / "big.db")
-    with st._db:
+    with st.transaction():
+        assert st._db.in_transaction  # fixture setup should incur one commit for all 20,000 rows
         for i in range(20_000):
             st.put(de.Base(f"F{i % 100}/sub/file{i}.txt", False, "e", 1, 1.0, 1, False))
     s = de.DriveSyncer(st, FakeDrive(), tmp_path / "Drive", 25)
@@ -242,3 +243,69 @@ def test_clean_subfolder_of_kept_folder_is_not_resurrected_empty(env25):
     for _ in range(3):
         s.run()
     assert "F/clean" not in d.items, (sorted(d.items), trashed)
+
+
+def test_forgetting_several_folders_is_all_or_nothing(tmp_path):
+    """A failure while forgetting the second folder leaves every row as it was (one transaction)."""
+    import sqlite3
+
+    st = de.DriveState(tmp_path / "d.db")
+    for path, is_dir in (("Orchard", True), ("Orchard/a.txt", False), ("Garden", True), ("Garden/Beds", True),
+                         ("Garden/Beds/b.txt", False), ("Shed", True), ("Shed/c.txt", False)):
+        st.put(de.Base(path, is_dir, "e", 1, 1.0, 1, False))
+    before = st.all()
+    real = st._db
+
+    class Failing:  # the real connection, except that the second folder's DELETE fails
+        deletes = 0
+
+        def execute(self, sql, *args):
+            if sql.startswith("DELETE"):
+                Failing.deletes += 1
+                if Failing.deletes == 2:
+                    raise sqlite3.OperationalError("disk I/O error")
+            return real.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def __enter__(self):
+            return real.__enter__()
+
+        def __exit__(self, *exc):
+            return real.__exit__(*exc)
+
+    st._db = Failing()
+    with pytest.raises(sqlite3.OperationalError):
+        st.drop_many(["Garden", "Shed"])
+    st._db = real
+    assert st.all() == before and not real.in_transaction
+    st.drop_many(["Garden", "Shed"])
+    assert sorted(st.all()) == ["Orchard", "Orchard/a.txt"]
+
+
+def test_a_failed_forget_keeps_the_previous_folder_choice(tmp_path, monkeypatch):
+    """If forgetting the folders that leave fails (the rows all stay), the worker keeps the previous
+    choice: a narrower choice with the old rows kept could take those files for deletions in iCloud."""
+    import sqlite3
+
+    from skyfold import worker
+    from skyfold.config import Settings
+
+    before = Settings(drive_enabled=True, drive_dir=str(tmp_path / "Drive"), drive_folders=["Garden", "Shed"])
+    w = worker.SyncWorker(before)
+    w.drive_state = de.DriveState(tmp_path / "d.db")
+    for path, is_dir in (("Garden", True), ("Garden/a.txt", False), ("Shed", True), ("Shed/b.txt", False)):
+        w.drive_state.put(de.Base(path, is_dir, "e", 1, 1.0, 1, False))
+    for name in ("_make_drive", "_make_notes", "_ensure_watchers", "_apply_timers", "_emit_stats", "sync_now"):
+        monkeypatch.setattr(w, name, lambda *a, **k: None)
+
+    def fail(_paths):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(w.drive_state, "drop_many", fail)
+    narrower = before.copy()
+    narrower.drive_folders = ["Garden"]
+    w.apply_settings(narrower, False)
+    assert w.settings.drive_folders == ["Garden", "Shed"] and not getattr(w, "_forgotten_drive_rows", None)
+    assert sorted(w.drive_state.all()) == ["Garden", "Garden/a.txt", "Shed", "Shed/b.txt"]

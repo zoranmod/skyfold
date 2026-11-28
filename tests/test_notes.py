@@ -270,7 +270,13 @@ def test_index_words_and_data_are_escaped():
     evil = '</script><img src=x onerror=alert(1)>'
     page = ne.render_index([{"t": evil, "f": "A/<b>", "p": "A/x.html", "m": "1.1.2026.", "l": False}],
                            "Updated <now>")
-    assert "</script><img" not in page and "<\\/script>" in page and "Updated &lt;now&gt;" in page
+    assert "</script><img" not in page and "\\u003c/script>" in page and "Updated &lt;now&gt;" in page
+
+
+def test_a_note_title_cannot_start_a_comment_in_the_index():
+    """Every "<" in the page's data is written as \\u003c: "<!--<script>" can't hide the rest of the page."""
+    page = ne.render_index([{"t": "<!--<script>", "f": "A", "p": "A/x.html", "m": "1.1.2026.", "l": False}], "x")
+    assert "<!--<script>" not in page and "\\u003c!--\\u003cscript>" in page
 
 
 def test_leftover_numbered_pages_are_cleaned_up(env):

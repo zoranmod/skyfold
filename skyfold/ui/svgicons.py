@@ -26,7 +26,7 @@ ICONS: dict[str, str] = {
     "pin": '<path d="M10 17.5s-5.5-4.8-5.5-9a5.5 5.5 0 0 1 11 0c0 4.2-5.5 9-5.5 9z"/><circle cx="10" cy="8.5" r="2"/>',
     "more": '<circle cx="5" cy="10" r=".9"/><circle cx="10" cy="10" r=".9"/><circle cx="15" cy="10" r=".9"/>',
     "close": '<path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/>',
-    "stop": '<rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/>',
+    "stop": '<rect x="5" y="5" width="10" height="10" rx="1.75"/>',  # (as tall as the capitals beside it)
     "upload": '<path d="M10 15V5M6 9l4-4 4 4"/>',
     "download": '<path d="M10 4v9M6 9.5l4 4 4-4M4.5 16h11"/>',
     "info": '<circle cx="10" cy="10" r="7.5"/><path d="M10 9v5M10 6.3v.2"/>',

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QObject, Qt, QThread, Signal, Slot
@@ -31,6 +32,54 @@ class Driver(QObject):
     syncNow = Signal(bool)
     resolve = Signal(str, list)
     apply = Signal(object, bool, bool)
+
+
+def _lines_run(fn, *args) -> int:
+    """How many lines of Python ran inside fn(*args): the work done, the same on every run and every
+    PC (no clock involved)."""
+    import sys
+
+    count = 0
+
+    def tracer(_frame, event, _arg):
+        nonlocal count
+        if event == "line":
+            count += 1
+        return tracer
+
+    before = sys.gettrace()
+    sys.settrace(tracer)
+    try:
+        fn(*args)
+    finally:
+        sys.settrace(before)
+    return count
+
+
+def _drive_question(n: int):
+    """n folders with a file each, all of them chosen (plus their parent, one twice, an empty folder
+    and a path that isn't tracked): every file is below two chosen paths."""
+    folders = [f"Batch/Set-{i}" for i in range(n)]
+    paths = [f"{folder}/Garden plan.txt" for folder in folders]
+    rows = {path: SimpleNamespace(is_dir=False) for path in paths}
+    rows["Empty"] = SimpleNamespace(is_dir=True)
+    worker = wk.SyncWorker(Settings())
+    worker.drive_state = SimpleNamespace(all=lambda: rows)
+    return worker, ["Batch", *folders, folders[0], "Empty", "Untracked"], [paths[0]]
+
+
+def test_large_drive_question_counts_overlapping_paths_without_pairwise_scans():
+    worker, to_cloud, to_pc = _drive_question(100)
+    small = _lines_run(worker._on_drive_pending, to_cloud, to_pc)
+    assert worker._drive_pending.files_to_cloud == 102
+    assert worker._drive_pending.files_to_pc == 1
+
+    worker, to_cloud, to_pc = _drive_question(800)
+    big = _lines_run(worker._on_drive_pending, to_cloud, to_pc)
+    assert worker._drive_pending.files_to_cloud == 802
+    # Eight times the folders and files: about eight times the work. Comparing every file with every
+    # chosen folder (with startswith, slices or anything else) would be 64 times.
+    assert big < 16 * small, (small, big)
 
 
 def pump(cond, timeout=10.0):
@@ -243,9 +292,11 @@ def test_rejected_request_renews_session_silently(qt, monkeypatch):
     th.start()
     assert pump(lambda: states and states[-1][0] == "idle")
     remote.add("A2", "IMG_0002.JPG", b"x")
+    before = len(restores)  # (the start-up's own restore is not what this test is about)
     d.syncNow.emit(True)
     assert pump(lambda: (root / "2025/11/IMG_0002.JPG").exists(), 10), states[-4:]
-    assert all(s[0] != "auth" for s in states) and len(restores) >= 2
+    assert pump(lambda: len(restores) > before, 10)  # renewed after the rejection (a slow PC may be later)
+    assert all(s[0] != "auth" for s in states)
 
 
 def test_really_expired_session_asks_to_sign_in(qt, monkeypatch):

@@ -222,7 +222,8 @@ def test_notes_previous_version_name_is_not_overwritten(notes_env):
 def test_config_write_probe_does_not_delete_preexisting_file(tmp_path, monkeypatch):
     from skyfold import config
     monkeypatch.setattr(config, 'APP_DIR', tmp_path)
+    monkeypatch.delenv('_SKYFOLD_TEST_DATA_DIR', raising=False)
     p = write(tmp_path, 'data/.write-test', b'ONLY USER CONTENT')
-    config._data_dir()
+    assert config._data_dir() == p.parent
     assert p.exists() and p.read_bytes() == b'ONLY USER CONTENT'
 
