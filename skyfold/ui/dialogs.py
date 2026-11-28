@@ -143,7 +143,15 @@ class _ReleaseNotes(QTextBrowser):
     itself (no picture from the internet or from a network share)."""
 
     def loadResource(self, kind, url):  # noqa: N802
-        return None
+        # An empty answer is not enough: Qt then loads the file itself (a picture on a network share
+        # makes Windows connect to that computer). Every picture is a blank pixel, nothing else loads.
+        from PySide6.QtGui import QImage, QTextDocument
+
+        if kind == QTextDocument.ImageResource:
+            blank = QImage(1, 1, QImage.Format_ARGB32)
+            blank.fill(0)
+            return blank
+        return b""
 
     def style_notes(self, palette: dict[str, str]) -> None:
         """Readable as in the 1.1 design: body text 14 px with air between the lines, headings 600
