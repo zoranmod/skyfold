@@ -455,14 +455,26 @@ class Thumbs:
     # never pushes out the whole grid. Coming back to pictures already gone is quick all the same:
     # Windows keeps its own previews on disk (see photo_images).
     BUDGET = {False: 200 * 1024 * 1024, True: 100 * 1024 * 1024}  # big: True
+    # A big screen needs more than that: a 4K screen full of photos is 60 to 85 MB of pictures, and
+    # the screens above and below are kept ready too. So a pool may grow to AHEAD times what is on
+    # screen, up to CAP, and both pools together stay within TOTAL (the other one gives way). What
+    # is on screen is never dropped, whatever the numbers say: dropping it only makes the window ask
+    # for it again, which drops another, and the photos flicker for ever (as 1.2 did on a 4K screen).
+    AHEAD = 3.5  # a screen above, a screen below, and some slack for pictures of different shapes
+    CAP = 320 * 1024 * 1024
+    TOTAL = 400 * 1024 * 1024
     STEP = 80  # pictures are made in sizes of 160, 240, … 640 pixels: never much more than shown
 
-    def __init__(self, loader: ImageLoader) -> None:
+    def __init__(self, loader: ImageLoader, on_screen=None) -> None:
         self.loader = loader
+        self.on_screen = on_screen  # callable: the keys of the photos on screen right now
         self.cache: dict[bool, OrderedDict[tuple[str, int], QPixmap]] = {False: OrderedDict(), True: OrderedDict()}
         self.used = {False: 0, True: 0}
         self.missing: set[tuple[str, int]] = set()
         self.seen: set[str] = set()
+        self.shown: set[tuple[str, int]] = set()  # pictures a painter asked for (key, size)
+        self.ahead: set[tuple[str, int]] = set()  # pictures kept ready around the screen
+        self._full: dict[bool, frozenset[str]] = {}  # a pool with no room for more look-ahead: the screen then
 
     @classmethod
     def bucket(cls, px: float) -> int:
@@ -476,6 +488,8 @@ class Thumbs:
         b = self.bucket(px)
         key = (it.key, b)
         self.seen.add(it.key)
+        if not ahead:
+            self.shown.add(key)
         pool = self.cache[self._big(b)]
         pm = pool.get(key)
         if pm is not None:
@@ -490,6 +504,38 @@ class Thumbs:
             self.loader.request(it.key, it.path, b, ahead=ahead)
         return best[1] if best else None
 
+    def look_ahead(self, items: list[lib.PhotoItem], px: float) -> None:
+        """Keep these ready too (the photos around the screen, the nearest first): asked for after
+        everything on screen, and only as many as there is room for. A full pool asks for nothing
+        more until the screen shows other photos, so a window left alone comes to rest."""
+        b = self.bucket(px)
+        big = self._big(b)
+        pool = self.cache[big]
+        screen = self._screen()
+        self.ahead = {(it.key, b) for it in items}
+        if self._full.get(big) != screen:
+            self._full.pop(big, None)
+        have = [it for it in items if (it.key, b) in pool]
+        want = [it for it in items if (it.key, b) not in pool and (it.key, b) not in self.missing]
+        if big in self._full:
+            want = []
+        elif want:
+            held = self._held(big, screen)
+            on_screen = sum(self._bytes(pool[k]) for k in held)
+            each = on_screen // len(held) if held else b * b * 8  # (about a 4:3 picture with its slack)
+            room = self._limit(big, on_screen) - on_screen - sum(self._bytes(pool[(it.key, b)]) for it in have)
+            want = want[:max(0, room // max(1, each))]
+        # the farthest first: the loader makes the latest request first, and dropping starts with the oldest
+        for it in reversed(have):
+            pool.move_to_end((it.key, b))
+        for it in reversed(want):
+            self.get(it, px, ahead=True)
+
+    def new_size(self) -> None:
+        """The photos are shown at another size: the old pictures are no longer the ones on screen."""
+        self.shown.clear()
+        self._full.clear()
+
     def put(self, key: str, size: int, img: QImage) -> None:
         if img.isNull():
             self.missing.add((key, size))
@@ -503,9 +549,47 @@ class Thumbs:
         pm = QPixmap.fromImage(img)
         pool[(key, size)] = pm
         self.used[big] += self._bytes(pm)
-        while self.used[big] > self.BUDGET[big] and len(pool) > 1:
-            _k, gone = pool.popitem(last=False)
-            self.used[big] -= self._bytes(gone)
+        if self.used[big] > self.BUDGET[big] or self.used[big] + self.used[not big] > self.TOTAL:
+            self._make_room(big, (key, size))
+
+    def _screen(self) -> frozenset[str]:
+        keys = frozenset(self.on_screen()) if self.on_screen is not None else frozenset()
+        if len(self.shown) > 4 * len(keys) + 256:  # (what scrolled away long ago)
+            self.shown = {k for k in self.shown if k[0] in keys}
+        return keys
+
+    def _held(self, big: bool, screen: frozenset[str]) -> list[tuple[str, int]]:
+        """The pictures on screen: never dropped. Of a photo painted already, the size it was painted
+        at; of one that only just came into view (not painted yet), whatever there is."""
+        painted = {k[0] for k in self.shown}
+        return [k for k in self.cache[big] if k[0] in screen and (k in self.shown or k[0] not in painted)]
+
+    def _limit(self, big: bool, on_screen: int) -> int:
+        return max(self.BUDGET[big], min(self.CAP, int(self.AHEAD * on_screen)))
+
+    def _make_room(self, big: bool, new: tuple[str, int]) -> None:
+        screen = self._screen()
+        held = self._held(big, screen)
+        limit = self._limit(big, sum(self._bytes(self.cache[big][k]) for k in held))
+        self._trim(big, limit, set(held) | {new}, screen)  # (never the one that just came: it was asked for)
+        other = not big
+        rest = min(self.BUDGET[other], max(0, self.TOTAL - limit))
+        if self.used[other] > rest:
+            self._trim(other, rest, set(self._held(other, screen)), screen)
+
+    def _trim(self, big: bool, limit: int, keep: set[tuple[str, int]], screen: frozenset[str]) -> None:
+        """Drop the oldest pictures down to limit: first those neither on screen nor kept ready,
+        then the look-ahead (and then no more of it is asked for: see look_ahead)."""
+        pool = self.cache[big]
+        for ready in (False, True):
+            if self.used[big] <= limit:
+                return
+            for k in [k for k in pool if k not in keep and (k in self.ahead) == ready]:
+                if self.used[big] <= limit:
+                    break
+                self.used[big] -= self._bytes(pool.pop(k))
+            if ready:
+                self._full[big] = screen
 
     @staticmethod
     def _bytes(pm: QPixmap) -> int:
@@ -520,6 +604,9 @@ class Thumbs:
             self.cache[big].clear()
             self.used[big] = 0
         self.missing.clear()
+        self.shown.clear()
+        self.ahead.clear()
+        self._full.clear()
 
 
 def _cover(p: QPainter, pm: QPixmap, r: QRectF) -> None:
@@ -593,7 +680,9 @@ class TileDelegate(QStyledItemDelegate):
         p.save()
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         dpr = win.devicePixelRatioF()
-        pm = win.thumbs.get(it, r.width() * dpr)
+        # (the size of every tile, also for the last in a row, a few pixels wider: one picture per
+        # photo, the one kept ready before it scrolled into view)
+        pm = win.thumbs.get(it, (win.tile - GAP) * dpr)
         if pm is None:
             p.fillRect(r, QColor(c["tile"]))
         else:
@@ -1349,7 +1438,8 @@ class PhotosWindow(LibraryDialog):
 
         self.loader = ImageLoader(self, threads=max(3, min(6, (os.cpu_count() or 4) // 2)))
         self.loader.loaded.connect(self._loaded)
-        self.thumbs = Thumbs(self.loader)
+        self.thumbs = Thumbs(self.loader, self._on_screen)
+        self._arrived: set[str] = set()  # pictures that came since the last repaint
         self._signed_out = False
         try:
             src = source()
@@ -2078,6 +2168,7 @@ class PhotosWindow(LibraryDialog):
         size = max(40, (w - 4) // cols)  # (Qt wraps a few pixels before the end)
         if size != self.tile or self.grid.gridSize().width() != size:
             self.tile = size
+            self.thumbs.new_size()
             self.grid.setGridSize(QSize(size, size))
 
     def _anchor(self):
@@ -2345,23 +2436,57 @@ class PhotosWindow(LibraryDialog):
                 self.picture.set_picture(pm, True)
             return
         self.thumbs.put(key, size, img)
+        self._arrived.add(key)
         self._repaint.start()
+
+    def _grid_showing(self) -> bool:
+        return (self.pages.currentWidget() is self.browse and self.inner.currentWidget() is self.grid
+                and self.tile > 0)
+
+    def _rows_on_screen(self) -> tuple[int, int]:
+        """The photos of the grid's rows on screen (also the ones only partly): from, up to."""
+        vp = self.grid.viewport()
+        cols = max(1, vp.width() // self.tile)
+        top = self.grid.verticalScrollBar().value()  # (starts at -HEAD: the first row sits under the band)
+        first = max(0, top // self.tile) * cols
+        last = max(0, (top + vp.height() - 1) // self.tile + 1) * cols
+        n = len(self.model.items)
+        return min(first, n), min(last, n)
+
+    def _on_screen(self) -> set[str]:
+        """The photos whose pictures are on screen right now: Thumbs never drops these, and the
+        loader keeps making them."""
+        if self.closed:
+            return set()
+        if self.pages.currentWidget() is self.viewer:
+            if not self.viewer_items:
+                return set()
+            lo, hi = self.strip.span()
+            lo, hi = min(lo, self.viewer_row - 1), max(hi, self.viewer_row + 1)  # (the neighbours: want_full)
+            return {it.key for it in self.viewer_items[max(0, lo):hi + 1]}
+        if self._grid_showing():
+            first, last = self._rows_on_screen()
+            return {it.key for it in self.model.items[first:last]}
+        w = self.cards_area.widget()
+        if w is not None and self.pages.currentWidget() is self.browse and self.inner.currentWidget() is self.cards_area:
+            return {it.key for card in w.findChildren(Card) if not card.visibleRegion().isEmpty()
+                    for it in card.covers}
+        return set()
 
     def _prefetch(self) -> None:
         """Ask for the pictures a screen above and below too, after the ones on screen, so they are
         ready before you scroll to them."""
         items = self.model.items
-        if (not items or self.inner.currentWidget() is not self.grid or self.pages.currentWidget() is not self.browse
-                or self.tile <= 0):
+        if not items or not self._grid_showing():
             return
-        vp = self.grid.viewport()
-        cols = max(1, vp.width() // self.tile)
-        rows = vp.height() // self.tile + 2
-        first = (self.grid.verticalScrollBar().value() // self.tile) * cols
-        screen = rows * cols
-        px = (self.tile - GAP) * self.devicePixelRatioF()  # (as TileDelegate)
-        for r in range(max(0, first - screen), min(len(items), first + 2 * screen)):
-            self.thumbs.get(items[r], px, ahead=True)
+        first, last = self._rows_on_screen()
+        around = []  # the nearest first, below and above in turn
+        for k in range(last - first):
+            if last + k < len(items):
+                around.append(items[last + k])
+            if first - 1 - k >= 0:
+                around.append(items[first - 1 - k])
+        self.thumbs.look_ahead(around, (self.tile - GAP) * self.devicePixelRatioF())  # (the size as TileDelegate)
 
     def _repaint_now(self) -> None:
         if self.closed:
@@ -2369,20 +2494,37 @@ class PhotosWindow(LibraryDialog):
         self._prefetch()
         seen = self.thumbs.seen
         self.thumbs.seen = set()
-        self.loader.keep_only(seen | ({self.viewer_items[self.viewer_row].key}
-                                      if self.viewer_items else set()))
-        self.grid.viewport().update()
+        # What is on screen stays wanted even when nothing painted it lately (only the tiles whose
+        # picture came are painted again, below).
+        self.loader.keep_only(seen | self._on_screen() | ({self.viewer_items[self.viewer_row].key}
+                                                          if self.viewer_items else set()))
+        arrived, self._arrived = self._arrived, set()
+        if not arrived:
+            return  # only the place changed (scrolling paints by itself)
+        if self._grid_showing():
+            # Just the tiles whose picture came, not the whole grid: on a big screen that is the
+            # difference between a still window and one that repaints every photo 30 times a second.
+            vp = self.grid.viewport()
+            first, last = self._rows_on_screen()
+            for row in range(first, last):
+                if self.model.items[row].key in arrived:
+                    r = self.grid.visualRect(self.model.index(row))
+                    if r.right() + self.tile > vp.width():
+                        r.setRight(vp.width())  # (the last in its row is painted to the edge: TileDelegate)
+                    r.setBottom(r.bottom() + 1)
+                    vp.update(r)
         w = self.cards_area.widget()
         if w is not None and self.inner.currentWidget() is self.cards_area:
-            w.update()
             for card in w.findChildren(Card):
-                card.update()
-        self.strip.update()
-        if self.pages.currentWidget() is self.viewer and self.picture.pm is None and self.viewer_items:
-            it = self.viewer_items[self.viewer_row]
-            pm = self.thumbs.get(it, 640)
-            if pm is not None:
-                self.picture.set_picture(pm, False)
+                if any(it.key in arrived for it in card.covers):
+                    card.update()
+        if self.pages.currentWidget() is self.viewer:
+            self.strip.update()
+            if self.picture.pm is None and self.viewer_items:
+                it = self.viewer_items[self.viewer_row]
+                pm = self.thumbs.get(it, 640)
+                if pm is not None:
+                    self.picture.set_picture(pm, False)
 
     # --- selection -----------------------------------------------------------------------------
     def set_selecting(self, on: bool) -> None:
