@@ -282,3 +282,30 @@ def test_forgetting_several_folders_is_all_or_nothing(tmp_path):
     assert st.all() == before and not real.in_transaction
     st.drop_many(["Garden", "Shed"])
     assert sorted(st.all()) == ["Orchard", "Orchard/a.txt"]
+
+
+def test_a_failed_forget_keeps_the_previous_folder_choice(tmp_path, monkeypatch):
+    """If forgetting the folders that leave fails (the rows all stay), the worker keeps the previous
+    choice: a narrower choice with the old rows kept could take those files for deletions in iCloud."""
+    import sqlite3
+
+    from skyfold import worker
+    from skyfold.config import Settings
+
+    before = Settings(drive_enabled=True, drive_dir=str(tmp_path / "Drive"), drive_folders=["Garden", "Shed"])
+    w = worker.SyncWorker(before)
+    w.drive_state = de.DriveState(tmp_path / "d.db")
+    for path, is_dir in (("Garden", True), ("Garden/a.txt", False), ("Shed", True), ("Shed/b.txt", False)):
+        w.drive_state.put(de.Base(path, is_dir, "e", 1, 1.0, 1, False))
+    for name in ("_make_drive", "_make_notes", "_ensure_watchers", "_apply_timers", "_emit_stats", "sync_now"):
+        monkeypatch.setattr(w, name, lambda *a, **k: None)
+
+    def fail(_paths):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(w.drive_state, "drop_many", fail)
+    narrower = before.copy()
+    narrower.drive_folders = ["Garden"]
+    w.apply_settings(narrower, False)
+    assert w.settings.drive_folders == ["Garden", "Shed"] and not getattr(w, "_forgotten_drive_rows", None)
+    assert sorted(w.drive_state.all()) == ["Garden", "Garden/a.txt", "Shed", "Shed/b.txt"]

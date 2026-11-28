@@ -573,6 +573,8 @@ BS: dict[str, str] = {
     "Reading iCloud Drive… {n}": "Čitam iCloud Drive… {n}",
     "Settings: the 'data' folder next to the app.": "Postavke: folder 'data' pored aplikacije.",
     "Settings: {path}": "Postavke: {path}",
+    "Some notes are still to come. They follow with the next sync.":
+        "Još nekoliko bilješki je na putu. Stići će sa sljedećom sinhronizacijom.",
     "Couldn't read this folder. Close and open it again to try again.":
         "Ovaj folder se ne može pročitati. Zatvori ga i ponovo otvori da pokušaš opet.",
     "iCloud didn't list every folder. Folders that aren't shown keep their current setting.":

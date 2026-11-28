@@ -492,9 +492,16 @@ class SyncWorker(QObject):
                        if not in_scope(path, row.is_dir, settings.drive_folders)}
             # (kept for a moment: if you chose to recycle those PC copies, only the ones that are
             # really what iCloud has may go; see trash_drive_paths)
-            self._forgotten_drive_rows = leaving
-            self.drive_state.drop_many(list(leaving))
-            self._drive_last = 0.0  # read Drive again with the new choice
+            try:
+                self.drive_state.drop_many(list(leaving))  # (all of them or, on a failure, none)
+            except Exception as exc:  # noqa: BLE001
+                # The rows are all still there, so the new choice must not apply yet: a narrower choice
+                # with the old rows kept could take the files outside it for deletions in iCloud.
+                log.warning("Drive: the new folder choice is not applied yet (%s)", type(exc).__name__)
+                self.settings.drive_folders = old_folders
+            else:
+                self._forgotten_drive_rows = leaving
+                self._drive_last = 0.0  # read Drive again with the new choice
         if albums_changed and self.state and not reset_state:
             self.state.set("last_full_scan", None)  # next check reads the library and the albums
             self.state.set("albums_refreshed", None)

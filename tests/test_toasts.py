@@ -636,3 +636,44 @@ def test_card_buttons_share_the_whole_width_equally(qapp):
         single.close()
     finally:
         card.close()
+
+
+def test_photo_card_shows_this_syncs_photos_and_their_folder(controller, tmp_path, monkeypatch):
+    """A card about downloaded photos shows those photos, and Show in folder selects the newest one in
+    its own folder; a card about deletions shows no photo and opens the photos folder."""
+    from skyfold.i18n import t
+    from skyfold.ui import flyout
+
+    ctl, calls = controller
+    folder = tmp_path / "S" / "2026" / "11"
+    folder.mkdir(parents=True)
+    photo = folder / "IMG_0001.JPG"
+    photo.write_bytes(b"made-up")
+    ctl.flyout.add_activity("2026-11-28T09:00:00+00:00", "trash", "IMG_0002.JPG", str(folder / "IMG_0002.JPG"))
+    ctl.flyout.add_activity("2026-11-28T09:01:00+00:00", "download", "Downloaded 1 new file", str(photo))
+    revealed, opened = [], []
+    monkeypatch.setattr(flyout, "reveal", lambda target: revealed.append(target))
+    monkeypatch.setattr(ctl, "open_folder", lambda which="photos": opened.append(which))
+
+    ctl._notify(t("Photos synced"), t("Downloaded: {n}", n=1))
+    (_args, kw), = calls["own"]
+    assert kw["images"] == [str(photo)]
+    dict(kw["actions"])[t("Show in folder")]()
+    assert revealed == [str(photo)] and not opened
+
+    calls["own"].clear()
+    ctl._notify(t("Photos synced"), t("Deleted on PC: {n}", n=1))
+    (_args, kw), = calls["own"]
+    assert kw["images"] == []
+    dict(kw["actions"])[t("Show in folder")]()
+    assert opened == ["photos"]
+
+
+def test_tray_menu_says_why_a_pass_ended(controller):
+    from skyfold.i18n import t
+
+    ctl, _calls = controller
+    ctl._on_state("idle", t("Sync stopped."))
+    assert ctl.m_status.text() == t("Sync stopped.").rstrip(".")
+    ctl._on_state("idle", t("Everything is in sync."))
+    assert ctl.m_status.text() == t("Everything is in sync").rstrip(".") or ctl.m_status.text().startswith(t("Everything"))

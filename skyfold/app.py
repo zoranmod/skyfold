@@ -414,6 +414,10 @@ class Controller(QObject):
         self.state = state
         self.flyout.set_state(state, text)
         title = STATE_TITLES.get(state, state)
+        if state == "idle" and text and text.rstrip(".") != t("Everything is in sync.").rstrip("."):
+            # a pass that ended for a reason ("Sync stopped.", uploads waiting): the menu says so too
+            first = text.split(". ")[0].rstrip(".")
+            title = first if len(first) <= 48 else first[:47].rstrip() + "…"
         self.m_status.setText(title)
         self.tray.setToolTip(f"{APP_NAME}\n{text or title}"[:120])
         if state == "syncing":
@@ -493,12 +497,27 @@ class Controller(QObject):
         if self.settings.notification_style == "windows":
             self.tray.showMessage(title, text, app_icon(), timeout)
             return
-        buttons = [(found[0], found[1]) for found in map(self._notice_action, actions) if found]
         images: list[str] = []
-        if icon == "photo":  # the newest photos in the panel's activity, small, on the card
+        downloaded = t("Downloaded: {n}", n=0).split("0")[0].strip()  # ("Downloaded:" / "Preuzeto:")
+        if icon == "photo" and downloaded and downloaded in text:
+            # the photos this sync brought, newest first, small on the card (only for downloads: a card
+            # about deletions never shows some other photo)
             from .ui.panel_parts import Thumbs
 
-            images = [r.target for r in self.flyout._activity_rows() if r.target and Thumbs.wanted(r.target)][:3]
+            images = [r.target for r in self.flyout._activity_rows()
+                      if r.kind == "download" and r.target and Thumbs.wanted(r.target)
+                      and Path(r.target).is_file()][:3]
+        buttons = []
+        for key in actions:
+            found = self._notice_action(key)
+            if not found:
+                continue
+            if key == "folder_photos" and images:  # its folder, with the newest new photo selected
+                from .ui.flyout import reveal
+
+                buttons.append((found[0], lambda target=images[0]: reveal(target)))
+            else:
+                buttons.append((found[0], found[1]))
         self.toasts.show(title, text, icon=icon, tone=tone, actions=buttons,
                          on_click=on_click or self._on_message_clicked, timeout=timeout, images=images)
 
