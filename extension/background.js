@@ -36,13 +36,6 @@ function safeUrl(u) {
   return typeof u === "string" && /^(https?|ftp|file):|^mailto:/i.test(u);
 }
 
-async function otherBookmarksId(b) {
-  const [root] = await b.bookmarks.getTree();
-  const kids = root.children || [];
-  const other = kids.find((k) => k.id === "unfiled_____" || k.id === "2");  // Firefox / Chrome+Edge
-  return (other || kids[kids.length - 1] || root).id;
-}
-
 async function ourFolder(b, savedId) {
   if (savedId) {
     try {
@@ -50,7 +43,8 @@ async function ourFolder(b, savedId) {
       if (node && !node.url) return node;
     } catch (e) { /* removed by the user: made again below */ }
   }
-  return b.bookmarks.create({ parentId: await otherBookmarksId(b), title: FOLDER });
+  // With no parentId the browser creates it in Other Bookmarks, including that profile's own root.
+  return b.bookmarks.create({ title: FOLDER });
 }
 
 async function addAll(b, parentId, nodes) {

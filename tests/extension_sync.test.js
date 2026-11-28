@@ -4,17 +4,17 @@
 const assert = require("assert");
 const ext = require("../extension/background.js");
 
-function fakeBrowser(answers) {
+function fakeBrowser(answers, otherId = "unfiled_____") {
   let next = 100;
   const nodes = new Map();
   const add = (n) => { nodes.set(n.id, n); return n; };
   const root = add({ id: "root________", children: [] });
-  for (const id of ["menu________", "toolbar_____", "unfiled_____"]) {
+  for (const id of ["menu________", "toolbar_____", otherId]) {
     const n = add({ id, parentId: root.id, title: id, children: [] });
     root.children.push(n);
   }
-  const mine = add({ id: "own1", parentId: "unfiled_____", title: "My own", url: "https://mine.example/" });
-  nodes.get("unfiled_____").children.push(mine);
+  const mine = add({ id: "own1", parentId: otherId, title: "My own", url: "https://mine.example/" });
+  nodes.get(otherId).children.push(mine);
   const store = {};
   const removeFrom = (n) => { const p = nodes.get(n.parentId); p.children = p.children.filter((c) => c.id !== n.id); };
   const drop = (n) => { (n.children || []).forEach(drop); nodes.delete(n.id); };
@@ -28,10 +28,10 @@ function fakeBrowser(answers) {
     storage: { local: { get: async (keys) => Object.fromEntries(keys.map((k) => [k, store[k]])),
                         set: async (o) => Object.assign(store, o) } },
     bookmarks: {
-      getTree: async () => [root],
+      getTree: async () => { throw new Error("Creating the mirror must not read the user's bookmarks"); },
       get: async (id) => { if (!nodes.has(id)) throw new Error("not found"); return [nodes.get(id)]; },
       getChildren: async (id) => [...(nodes.get(id).children || [])],
-      create: async ({ parentId, title, url }) => {
+      create: async ({ parentId = otherId, title, url }) => {
         const n = add({ id: "n" + next++, parentId, title, ...(url ? { url } : { children: [] }) });
         nodes.get(parentId).children.push(n);
         return n;
@@ -76,5 +76,10 @@ const tree = [
   const st = await b.storage.local.get(["error"]);
   assert.match(st.error, /turn on Safari bookmarks/);
   assert.ok(b.nodes.has(folder.id), "a failed update leaves the folder as it was");
+  // Browsers choose their default Other Bookmarks parent. A synced/profile-specific id can differ.
+  const chromium = fakeBrowser([{ ok: true, tree }], "profile-specific-other");
+  const fresh = await ext.syncOnce(chromium);
+  assert.strictEqual(chromium.nodes.get(fresh.folderId).parentId, "profile-specific-other");
+  assert.ok(chromium.nodes.has("own1"));
   console.log("extension sync: ok");
 })().catch((e) => { console.error(e); process.exit(1); });
