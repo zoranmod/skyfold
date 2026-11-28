@@ -929,19 +929,7 @@ class Syncer:
                 # Apple ID could have used it). Files in it that this database doesn't track can't be told
                 # apart: they are never sent - by their file id and by their name.
                 tracked = self.state.paths()
-                held = []
-                for dirname, dirs, files in os.walk(self.root):
-                    dirs[:] = [d for d in dirs if not _is_link(Path(dirname) / d)]
-                    for name in files:
-                        p = Path(dirname) / name
-                        rel = p.relative_to(self.root).as_posix().lower()
-                        if rel in tracked:
-                            continue
-                        try:
-                            st = p.lstat()
-                        except OSError:
-                            continue
-                        held.append([st.st_dev, st.st_ino, rel])
+                held = self._legacy_upload_holds(tracked)
                 old = json.loads(self.state.get("upload_legacy:held") or "[]")
                 self.state.set("upload_legacy:held", json.dumps(old + held))
             with open(owner_file, "x", encoding="utf-8") as fh:
@@ -956,6 +944,26 @@ class Syncer:
                               "same drive letter, or an older copy). Syncing has stopped so nothing gets deleted "
                               "by mistake; choose the folder again in Settings."))
         self.state.set("library", library)
+
+    def _legacy_upload_holds(self, tracked: set[str]) -> list[list]:
+        """The owner marker seals this inventory. Retry if any entry cannot be classified."""
+        held = []
+        folders = [self.root]
+        while folders:
+            with os.scandir(folders.pop()) as entries:
+                for entry in entries:
+                    path = Path(entry.path)
+                    st = path.lstat()  # links, including junctions, are never followed
+                    if stat.S_ISLNK(st.st_mode) or (os.name == "nt"
+                            and st.st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT):
+                        continue
+                    if stat.S_ISDIR(st.st_mode):
+                        folders.append(path)
+                    else:
+                        rel = path.relative_to(self.root).as_posix().lower()
+                        if rel not in tracked:
+                            held.append([st.st_dev, st.st_ino, rel])
+        return held
 
     def _held_ids(self) -> set:
         """(dev, ino) and ("path", rel) of files that were in an older photos folder when it was taken over."""
