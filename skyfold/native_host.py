@@ -10,6 +10,7 @@ Skyfold registers for the current Windows user when Safari bookmarks are turned 
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import struct
@@ -43,6 +44,12 @@ def cache_file() -> Path:
     from .config import PRIVATE_DIR
 
     return PRIVATE_DIR / "safari-bookmarks.json"
+
+
+def cache_owner(apple_id: str) -> str:
+    """Whose bookmarks a cache holds: a fingerprint of the Apple ID, never the address itself."""
+    name = (apple_id or "").strip().lower()
+    return hashlib.sha256(name.encode("utf-8")).hexdigest() if name else ""
 
 
 def _std_binary():
@@ -115,6 +122,18 @@ def answer(msg: dict) -> dict:
         return {"ok": False, "error": "no-bookmarks"}  # Skyfold hasn't read them yet (or it's turned off)
     except (OSError, ValueError):
         return {"ok": False, "error": "unreadable"}
+    # The copy is handed out only to the Apple ID it was read for. A session can expire and someone
+    # else sign in without Sign out ever being pressed: the copy of the earlier account may still be
+    # there then. One written before 1.2.1 names no owner: it waits for the next read of the bookmarks.
+    try:
+        from .config import Settings
+
+        settings = Settings.load()
+        owner = cache_owner(settings.apple_id) if settings.bookmarks_enabled else ""
+    except Exception:  # noqa: BLE001 - who is signed in can't be told: nobody's bookmarks are handed out
+        return {"ok": False, "error": "no-bookmarks"}
+    if not owner or not isinstance(data, dict) or data.get("owner") != owner:
+        return {"ok": False, "error": "no-bookmarks"}
     return {"ok": True, "updated": data.get("updated"), "tree": data.get("tree", [])}
 
 

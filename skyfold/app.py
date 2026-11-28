@@ -791,6 +791,7 @@ class Controller(QObject):
             if apple_id.lower() != (self.settings.apple_id or "").lower():
                 _close_stale_settings(self)  # it shows the other account's settings
             if self.settings.apple_id and apple_id.lower() != self.settings.apple_id.lower():
+                Controller._drop_bookmarks_copy(self)  # the other account's bookmarks: never this one's
                 turned_off = [t("Photos")] + [name for on, name in ((self.settings.drive_enabled, t("iCloud Drive")),
                                                                     (self.settings.notes_enabled, t("Notes"))) if on]
                 self.settings.drive_enabled = False
@@ -914,20 +915,26 @@ class Controller(QObject):
 
         avatar.forget_all()  # the account picture leaves with the account
         netdiag.delete()  # and the connection diagnostics file
-        try:  # and the copy of the Safari bookmarks the browser extension reads
-            from . import bookmarks
-
-            # (under the cache's lock, after account_gen moved on in _close_photos: a read finishing
-            # now either wrote before this or sees the account is gone and writes nothing)
-            bookmarks.remove_cache()
-        except OSError as exc:
-            log.info("Bookmarks copy not removed: %s", exc.__class__.__name__)
+        # and the copy of the Safari bookmarks the browser extension reads
+        # (under the cache's lock, after account_gen moved on in _close_photos: a read finishing
+        # now either wrote before this or sees the account is gone and writes nothing)
+        Controller._drop_bookmarks_copy(self)
         self._login_api = None
         self.worker.cancel()  # stop the running pass now; the rest happens on the worker thread
         # Right now, not queued: a sign-in made while the worker is still busy must never be undone by it.
         auth.logout()
         self.req.signOut.emit()
         self.flyout.set_account("")
+
+    def _drop_bookmarks_copy(self) -> None:
+        """The browser extension's copy of the Safari bookmarks leaves with the account it was read for.
+        (If it can't be removed now, it still names its owner: the extension never gets it as another's.)"""
+        try:
+            from . import bookmarks
+
+            bookmarks.remove_cache()
+        except OSError as exc:
+            log.info("Bookmarks copy not removed: %s", exc.__class__.__name__)
 
     def open_log(self) -> None:
         """Select the log file in Explorer (robust even if no app is set up for .log files)."""

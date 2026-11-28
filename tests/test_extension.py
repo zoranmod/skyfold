@@ -36,7 +36,10 @@ def cache(tmp_path, monkeypatch):
 
 
 def test_the_host_answers_with_the_saved_bookmarks(cache):
-    cache.write_text(json.dumps({"updated": "2026-11-18T16:00:00+00:00",
+    from skyfold.config import Settings
+
+    Settings(apple_id="garden@example.test", bookmarks_enabled=True).save()
+    cache.write_text(json.dumps({"owner": nh.cache_owner("garden@example.test"), "updated": "2026-11-18T16:00:00+00:00",
                                  "tree": [{"t": "Fav", "c": [{"t": "A", "u": "https://a.example/"}]}]}))
     out = io.BytesIO()
     assert nh.serve(io.BytesIO(frame({"cmd": "ping"}) + frame({"cmd": "bookmarks"})), out) == 0
@@ -52,8 +55,12 @@ def test_without_saved_bookmarks_it_says_so(cache):
 
 def test_an_unknown_sign_out_state_hands_out_no_bookmarks(cache, monkeypatch):
     from skyfold import auth
+    from skyfold.config import Settings
 
-    cache.write_text(json.dumps({"updated": "x", "tree": [{"t": "Private", "u": "https://p.example/"}]}))
+    Settings(apple_id="garden@example.test", bookmarks_enabled=True).save()
+    cache.write_text(json.dumps({"owner": nh.cache_owner("garden@example.test"), "updated": "x",
+                                 "tree": [{"t": "Private", "u": "https://p.example/"}]}))
+    assert nh.answer({"cmd": "bookmarks"})["ok"]  # (handed out until the sign-out state can't be told)
 
     def broken():
         raise RuntimeError("cannot tell")

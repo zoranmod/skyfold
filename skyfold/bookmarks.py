@@ -235,15 +235,18 @@ def as_json(nodes: list[Item]) -> list[dict]:
 CACHE_LOCK = threading.Lock()
 
 
-def save_cache(nodes: list[Item], current: Callable[[], bool] | None = None) -> None:
+def save_cache(nodes: list[Item], current: Callable[[], bool] | None = None, *, apple_id: str = "") -> None:
     """What the extension gets (see native_host): written after every complete read.
-    current: is the account this was read for still signed in? (No: NotCurrent, nothing written.)"""
+    current: is the account this was read for still signed in? (No: NotCurrent, nothing written.)
+    apple_id: whose bookmarks these are. Only its fingerprint is kept, and the extension gets the copy
+    only while that Apple ID is the one signed in (without it, nobody gets it)."""
     from datetime import datetime, timezone
 
-    from .native_host import cache_file
+    from .native_host import cache_file, cache_owner
 
     path = cache_file()
-    data = json.dumps({"updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    data = json.dumps({"owner": cache_owner(apple_id),
+                       "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                        "tree": as_json(nodes)}, ensure_ascii=False)
     with CACHE_LOCK:
         if current is not None and not current():
@@ -253,7 +256,7 @@ def save_cache(nodes: list[Item], current: Callable[[], bool] | None = None) -> 
 
 
 def remove_cache() -> None:
-    """Sign out: the extension's copy goes (never while a read is writing it)."""
+    """Sign out, or another Apple ID: the extension's copy goes (never while a read is writing it)."""
     from .native_host import cache_file
 
     with CACHE_LOCK:
@@ -264,7 +267,8 @@ def export(api, folder: Path, current: Callable[[], bool] | None = None) -> tupl
     """Read the bookmarks and write the file. Returns (file, number of bookmarks, changed?).
     current: see save_cache; checked again before the file is written."""
     nodes = build(fetch(api))
-    save_cache(nodes, current)
+    # (the owner is the session these were read with, not the settings: they may have moved on meanwhile)
+    save_cache(nodes, current, apple_id=str(getattr(api, "account_name", "") or ""))
     page = render(nodes, t("Safari Bookmarks"))
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / FILE_NAME
