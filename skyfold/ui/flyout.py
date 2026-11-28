@@ -1027,7 +1027,7 @@ class Flyout(QWidget):
             self.setStyleSheet("")
             return
         from .backdrop import glass_colours
-        from .theme import accent_edges, accent_fill
+        from .theme import accent_edges, accent_fill, focus_rules
 
         g = glass_colours(self.c, QColor(self.c["bg"]).lightness() < 128)
         self.setStyleSheet(
@@ -1051,7 +1051,9 @@ class Flyout(QWidget):
             f" {accent_edges(self.c['btn'], 0.95)} }}"
             f"QToolButton#Bar[primary=\"true\"]:hover {{ background: {accent_fill(self.c['btn_hover'], 0.95)};"
             f" {accent_edges(self.c['btn_hover'], 1.0)} }}"
-            f"QFrame#Sep {{ background: {g['stroke']}; }}")
+            f"QFrame#Sep {{ background: {g['stroke']}; }}"
+            # last: the keyboard focus in its solid colours (the see-through edges above tinted it)
+            + focus_rules(self.c))
 
     def paintEvent(self, e) -> None:  # noqa: N802
         if self.glass:

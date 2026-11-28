@@ -208,6 +208,25 @@ def accent_edges(colour: str, alpha: float = 1.0) -> str:
             f"border-bottom-color: {_rgba(base.darker(122), min(1.0, alpha + 0.1))};")
 
 
+def focus_rules(c: dict[str, str]) -> str:
+    """The keyboard focus of buttons and fields, to put last in a window's own style sheet.
+
+    A window over glass gives its controls see-through edges (`border-color: rgba(...)`), and a
+    window's own sheet wins over the app's whatever the selector: the app's `:focus` border kept its
+    2 px but took that see-through colour. Qt draws a rounded border as four sides and four corners
+    that overlap where they meet, over the control's own fill: in a see-through colour the overlaps
+    and the fill show as steps round the corners, and the ring was hardly visible. Said again here
+    in the solid colours, the ring is one smooth, clearly visible line."""
+    ring, text, accent = c["focus_ring"], c["text"], c["accent"]
+    return (
+        f"QPushButton:focus, QToolButton#Bar:focus {{ border: 2px solid {ring}; }}"
+        f"QPushButton#Primary:focus, QToolButton#Bar[primary=\"true\"]:focus, QToolButton#Bar[wide=\"true\"]:focus"
+        f" {{ border: 2px solid {text}; }}"
+        # (text-only links have no frame in the app's sheet: none here either)
+        "QPushButton#Link:focus, QPushButton#ListLink:focus { border: none; }"
+        f"QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QComboBox:on {{ border-bottom: 2px solid {accent}; }}")
+
+
 def stylesheet(c: dict[str, str]) -> str:
     chev = chevron_file(c["muted"])
     tick, dash = mark_file(c["accent_text"], "check"), mark_file(c["accent_text"], "part")

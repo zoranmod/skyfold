@@ -205,6 +205,7 @@ class _PillButton(QPushButton):
     def paintEvent(self, e) -> None:  # noqa: N802
         u = _ui(self)
         p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)  # (the focus ring too, on a pill with no layer under it)
         r = QRectF(self.rect())
         if self.danger:
             _round(p, r, QColor("#d13438" if self.underMouse() else "#c42b1c"), None, 7)

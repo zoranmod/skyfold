@@ -11,6 +11,7 @@ from .dialogs import _Dialog
 from .panel_parts import SoftCard
 from .pills import _ui
 from .settings_parts import IconLabel
+from .theme import focus_rules
 
 
 def count_font(base: QFont) -> QFont:
@@ -84,7 +85,9 @@ class LibraryDialog(_Dialog):
             # over the material, buttons and lists are light layers too (as in Settings)
             + (f"QPushButton, QComboBox {{ background:{g['control']}; border-color:{g['stroke2']}; }}"
                f"QPushButton:hover, QComboBox:hover {{ background:{g['hover']}; }}"
-               f"QPushButton#Primary {{ background:{c['btn']}; border-color:{c['btn']}; }}" if material else "") +
+               f"QPushButton#Primary {{ background:{c['btn']}; border-color:{c['btn']}; }}"
+               # (the keyboard focus after them, in its solid colours: see focus_rules)
+               + focus_rules(c) if material else "") +
             "QSplitter, QStackedWidget, QAbstractScrollArea, QAbstractScrollArea > QWidget"
             " { background:transparent; border:none; }"
         )
@@ -289,8 +292,13 @@ class _Corner(QWidget):
         q.strokePath(edge, QPen(solid, dpr))  # ...up to its hairline, which the layout leaves free too
         q.end()
         under, q = canvas()
+        # The window's veil lies over the whole window, not only under the pane: every pixel of this
+        # picture gets all of it. Filled as the pane's rectangle, an edge of the pane between two
+        # pixels (125 %, 150 %, 175 %: a maximized window, most sizes of a normal one) left the last
+        # pixel along that edge with only part of the veil: a thin line, lighter than everything
+        # around it, as long as this corner and sticking out past the curve.
+        q.fillRect(under.rect(), tint)
         q.setTransform(to_pixels)
-        q.fillRect(pane.rect(), tint)
         pane.paint_card(q)
         q.resetTransform()
         q.setCompositionMode(QPainter.CompositionMode_DestinationIn)

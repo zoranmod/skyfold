@@ -331,7 +331,7 @@ class _Dialog(QDialog):
 
     def _glass_sheet(self) -> str:
         from .backdrop import glass_colours
-        from .theme import accent_edges, accent_fill
+        from .theme import accent_edges, accent_fill, focus_rules
 
         dark = self._dark()
         g = glass_colours(self.c, dark)
@@ -355,7 +355,9 @@ class _Dialog(QDialog):
             " { background: transparent; border: none; }"
             f"QPushButton#Primary {{ background: {accent_fill(self.c['btn'], 0.80)}; {accent_edges(self.c['btn'], 0.85)} }}"
             f"QPushButton#Primary:hover {{ background: {accent_fill(self.c['btn_hover'], 0.92)};"
-            f" {accent_edges(self.c['btn_hover'], 0.95)} }}")
+            f" {accent_edges(self.c['btn_hover'], 0.95)} }}"
+            # last: the keyboard focus in its solid colours (the see-through edges above tinted it)
+            + focus_rules(self.c))
         return sheet
 
     def paintEvent(self, e) -> None:  # noqa: N802
