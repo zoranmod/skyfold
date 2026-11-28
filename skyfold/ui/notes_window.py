@@ -335,14 +335,16 @@ class _NoteDelegate(QStyledItemDelegate):
         self._fonts_for: tuple | None = None
 
     def fonts(self, base: QFont) -> tuple[QFont, QFont, QFont, float, float]:
-        key = (base.key(), NotesWindow.zoom)
-        if self._fonts_for != key:
+        # Asked for every row at every layout (thousands of times while the notes are being read):
+        # comparing with the font kept from last time costs a fraction of spelling the font out.
+        kept = self._fonts_for
+        if kept is None or kept[1] != NotesWindow.zoom or kept[0] != base:
             title = _px_font(base, 14, QFont.DemiBold)
             snip = _px_font(base, 12.5)
             date = _px_font(base, 11.5, families=MONO)
             line = max(QFontMetricsF(title).height(), 14 * 1.45)  # the design's line: 1.45 of 14 px
             self._fonts = (title, snip, date, line, max(QFontMetricsF(snip).height(), line))
-            self._fonts_for = key
+            self._fonts_for = (QFont(base), NotesWindow.zoom)
         return self._fonts
 
     def sizeHint(self, opt, idx) -> QSize:  # noqa: N802
@@ -398,7 +400,6 @@ class _NoteDelegate(QStyledItemDelegate):
 
 
 FOLDER_COUNT = Qt.UserRole + 1
-FOLDER_KIND = Qt.UserRole + 2  # "all" | "trash" | "folder"
 CHEVRON = 26  # px at the right end of a folder row that has subfolders: click to fold it
 
 
@@ -1072,6 +1073,7 @@ class NotesWindow(LibraryDialog):
         self.current_key: tuple | None = None
         self.shown_pages: dict[int, int] = {}  # scanned document -> pages shown (open note)
         self._fingerprint = None
+        self._read_at: tuple | None = None  # (database, its change count, folder) when the list was last read
         self._index_started = 0.0
         self._note_failed = 0.0  # when the open note couldn't be read (0 = it could)
         self.folder = ""  # "" = all notes
@@ -1281,16 +1283,28 @@ class NotesWindow(LibraryDialog):
             log.info("Notes window: the notes list couldn't be read now", exc_info=True)
             return
         self.off = src is None
+        read_at = None
         if src is None:
             rows, root = [], None
         else:
             state, root = src
+            # Asked every two seconds: while nothing was written to the database since the list was
+            # last read, it isn't read and compared again (thousands of rows, on the window's thread).
+            changes = getattr(state, "changes", None)
+            if changes is not None:
+                read_at = (state, changes(), root)  # taken before reading: a write meanwhile is seen next time
+                seen = self._read_at
+                if (self._fingerprint is not None and seen is not None and seen[0] is state
+                        and seen[1:] == read_at[1:]):
+                    self._retry()
+                    return
             try:
                 rows = nv.rows_from(state)
             except Exception:  # noqa: BLE001
                 log.info("Notes window: the notes list couldn't be read now", exc_info=True)
                 return
         fingerprint = (str(root), tuple(rows))
+        self._read_at = read_at
         if fingerprint == self._fingerprint:
             self._retry()
             return
@@ -1332,7 +1346,7 @@ class NotesWindow(LibraryDialog):
             r = self.row_by_id.get(nid)
             if r is not None and not r.locked and entry[0] == _key(r):  # still the same note, still readable
                 self.texts[nid] = entry
-        self._refresh_snippets()
+        self._refresh_snippets(out)
         if self.search.text().strip():
             self._debounce.start()
 
@@ -1497,11 +1511,17 @@ class NotesWindow(LibraryDialog):
         empty second one (until it is read, a note keeps room for its first line)."""
         return not snip and not r.locked and r.id in self.texts
 
-    def _refresh_snippets(self) -> None:
+    def _refresh_snippets(self, only=None) -> None:
+        """Give the rows their first line once their note has been read. only: the notes just read
+        (the others have nothing new: with thousands of notes, going through every row's text again
+        for each batch of 40 kept the window busy for seconds)."""
         changed = False
         for i in range(self.notes.count()):
             it = self.notes.item(i)
-            r = self.row_by_id.get(it.data(ROW_ID))
+            nid = it.data(ROW_ID)
+            if only is not None and nid not in only:
+                continue
+            r = self.row_by_id.get(nid)
             if r is not None and not it.data(ROW_SNIPPET):
                 snip = self._snippet(r)
                 it.setData(ROW_SNIPPET, snip)

@@ -1015,3 +1015,43 @@ def test_the_size_bar_follows_the_wheel_and_names_its_buttons(qapp, library):
             assert not pill.grab().toImage().isNull() and w._ui["text"].name() == w.c["text"].lower()
     finally:
         w.close()
+
+
+def test_an_unchanged_database_is_not_read_again(qapp, library, monkeypatch):
+    """The window asks every two seconds. While nothing was written, the list isn't read and compared
+    again; any write, another database object or another folder makes it read."""
+    st, root = library
+    where = [st, root]
+    w = window(qapp, library, source=lambda: tuple(where))
+    try:
+        reads = []
+        real = nv.rows_from
+        monkeypatch.setattr(nv, "rows_from", lambda state: reads.append(state) or real(state))
+        w.refresh()
+        w.refresh()
+        assert reads == []
+        st.put("n", "Home/Old.html", "New one", "Home", "2026-11-21T10:00:00", False)
+        w.refresh()
+        assert len(reads) == 1 and "n" in ids(w)
+        w.refresh()
+        assert len(reads) == 1
+        st.set("root", str(root))  # a write that changes no note: read once, nothing rebuilt
+        w.refresh()
+        w.refresh()
+        assert len(reads) == 2 and "n" in ids(w)
+        st.drop("n")
+        w.refresh()
+        assert len(reads) == 3 and "n" not in ids(w)
+        where[1] = root.parent / "Elsewhere"  # the same database shown for another folder
+        w.refresh()
+        assert len(reads) == 4
+        other = NotesState(root.parent / "other.db")  # e.g. after signing in as someone else
+        where[0] = other
+        w.refresh()
+        assert len(reads) == 5 and ids(w) == []
+        where[:] = [SimpleNamespace(all=lambda: {}), root]  # a source without a change count: always read
+        w.refresh()
+        w.refresh()
+        assert len(reads) == 7
+    finally:
+        w.close()

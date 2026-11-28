@@ -23,7 +23,7 @@ import threading
 import uuid
 from collections.abc import MutableMapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
@@ -1170,6 +1170,11 @@ class NotesState:
         with self._lock:
             return {r[0]: r for r in self._db.execute(
                 "SELECT id, rel_path, title, folder, modified, locked FROM notes")}
+
+    def changes(self) -> int:
+        """Goes up with every row written or removed (everything is written through this one
+        connection): while it stays the same, all() answers the same. Costs no query."""
+        return self._db.total_changes
 
     def put(self, nid: str, rel: str | None, title: str, folder: str, modified: str | None, locked: bool) -> None:
         with self._lock:
