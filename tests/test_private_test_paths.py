@@ -17,7 +17,8 @@ root = Path(sys.argv[1])
 assert config.APP_DIR == Path(config.__file__).resolve().parents[1]
 assert config.DATA_DIR == root / "app" / "data"
 assert config.PRIVATE_DIR.is_relative_to(root)
-assert i18n.language() == "bs"
+assert i18n.language() == "en"  # (Bosnian was removed: the stored choice is read and ignored)
+assert config.Settings.load().theme == "system" and i18n.t("Settings") == "Settings"
 """
     subprocess.run([sys.executable, "-c", code, str(root)], check=True, timeout=20,
                    cwd=Path(__file__).resolve().parents[1])

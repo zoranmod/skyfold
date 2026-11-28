@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from . import auth
 from .config import (APP_ID, APP_NAME, VERSION, LOG_FILE, Settings, migrate_private_files, set_start_with_windows,
                      starts_with_windows)
-from .i18n import set_language, t
+from .i18n import t
 from .ui import theme
 from .ui.dialogs import ask, inform, warn
 from .ui.dialogs import (FindMyDialog, FolderSetupDialog, LoginDialog, PendingDialog, SettingsDialog, UpdateDialog,
@@ -932,7 +932,6 @@ class Controller(QObject):
             # the photos folder confirmed): kept as they are now, never rolled back
             new.update_told = self.settings.update_told
             new.photos_dir_confirmed = self.settings.photos_dir_confirmed
-            language_changed = new.language != self.settings.language
             theme_changed = new.theme != self.settings.theme
             self.settings = new
             self.settings.save()
@@ -942,12 +941,6 @@ class Controller(QObject):
                 self.req.trashDrivePaths.emit(list(dlg.drive_trash))
             if theme_changed:
                 self._on_theme_changed()  # applies at once, no restart needed
-            if language_changed:
-                # labels are built once at start-up, so a new language needs a restart
-                set_language(new.language)
-                ans = ask(None, APP_NAME, t("Restart to change the language?"))
-                if ans == QMessageBox.Yes:
-                    self.restart()
 
         dlg.accepted.connect(saved)
         dlg.signOut.connect(self.sign_out)
@@ -1095,7 +1088,7 @@ class Controller(QObject):
                 dlg.hide()
 
     def restart(self) -> None:
-        """Start a fresh copy and quit this one (used after changing the language)."""
+        """Start a fresh copy and quit this one."""
         from PySide6.QtCore import QProcess
 
         if self.server is not None:

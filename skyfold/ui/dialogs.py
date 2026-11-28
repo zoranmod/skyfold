@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
 from .. import auth
 from ..config import APP_IN_CLOUD, APP_NAME, FOLDER_STRUCTURES, PRIVATE_DIR, VERSION, Settings, check_photos_dir, default_photos_dir, \
     starts_with_windows
-from ..i18n import LANGUAGES, language, t
+from ..i18n import t
 from ..safelog import brief, describe
 from .icons import app_icon, draw_logo, glyph
 from .panel_parts import SoftCard
@@ -1310,11 +1310,6 @@ class SettingsDialog(_Dialog):
         self.theme.setCurrentIndex(list(THEMES).index(self.s.theme) if self.s.theme in THEMES else 0)
         self._setting(win, "palette", t("Theme"), t("Follows Windows, or always light, dark or OLED."),
                       self._wide(self.theme))
-        self.lang = Combo()
-        for code, name in LANGUAGES.items():
-            self.lang.addItem(name, code)
-        self.lang.setCurrentIndex(list(LANGUAGES).index(self.s.language) if self.s.language in LANGUAGES else 0)
-        self._setting(win, "globe", t("Language"), None, self._wide(self.lang))
         self.updates = self._switch(self.s.check_updates)
         self._setting(win, "download", t("Check for new versions of Skyfold"), None, self.updates)
 
@@ -1805,7 +1800,6 @@ class SettingsDialog(_Dialog):
         if s.notifications:
             s.notification_style = self.notif.currentData()
         s.check_updates = self.updates.isChecked()
-        s.language = self.lang.currentData()
         s.theme = self.theme.currentData()
         s.drive_enabled = self.drive_on.isChecked()
         s.drive_dir = drive_dir

@@ -1,5 +1,5 @@
 """Signing in is step 3 of first run: the same see-through window as steps 1 and 2 (same size, same
-footer band), one statement about the password, and one Bosnian form for "Apple's". Made-up data only."""
+footer band), and one statement about the password. Made-up data only."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -37,9 +37,7 @@ def _to_code_page(d, monkeypatch) -> None:
     assert d.pages.currentWidget().isAncestorOf(d.code)
 
 
-@pytest.mark.parametrize("lang", ["en", "bs"])
-def test_sign_in_is_as_large_as_first_run_on_both_pages_and_with_an_error(app, tmp_path, monkeypatch, lang):
-    i18n.set_language(lang)
+def test_sign_in_is_as_large_as_first_run_on_both_pages_and_with_an_error(app, tmp_path, monkeypatch):
     setup = dialogs.FolderSetupDialog(str(tmp_path / "Photos"), theme.DARK)
     d = dialogs.LoginDialog(EMAIL, theme.DARK)
     setup.show()
@@ -113,32 +111,18 @@ def test_sign_in_is_solid_without_glass_and_its_title_bar_follows_the_apps_theme
         d.close()
 
 
-@pytest.mark.parametrize("lang, promise", [("en", "never stored"), ("bs", "ne čuva")])
-def test_sign_in_says_once_that_the_password_is_not_stored(app, lang, promise):
-    i18n.set_language(lang)
+def test_sign_in_says_once_that_the_password_is_not_stored(app):
     d = dialogs.LoginDialog(EMAIL, theme.DARK)
     try:
         texts = [w.text() for w in d.findChildren(QLabel) if w.text()]
         assert len(texts) == len(set(texts))
-        said = [x for x in texts if promise in x.lower()]
+        said = [x for x in texts if "never stored" in x.lower()]
         assert len(said) == 1 and said[0] == d.hero.text.text(), said
-        password = "password" if lang == "en" else "lozink"
-        assert sum(password in x.lower() for x in texts) == 1  # the line under the fields is about the session
-        session = [x for x in texts if ("session" if lang == "en" else "sesij") in x.lower()]
+        assert sum("password" in x.lower() for x in texts) == 1  # the line under the fields is about the session
+        session = [x for x in texts if "session" in x.lower()]
         assert len(session) == 1 and session[0] != d.hero.text.text()
     finally:
         d.close()
-
-
-def test_bosnian_has_one_form_for_apples():
-    """Appleov / Appleova / Appleove, without a hyphen, everywhere."""
-    texts = list(i18n.BS.values())
-    for forms in i18n._FORMS_BS.values():
-        texts += [x for x in (forms if isinstance(forms, (tuple, list)) else [forms]) if isinstance(x, str)]
-    hyphen = [x for x in texts if "apple-ov" in x.lower()]
-    assert not hyphen, hyphen
-    assert any("Appleov" in x for x in texts)
-    assert not [x for x in texts if "historij" in x.lower()]  # (istorija)
 
 
 def test_the_step_bars_show_only_in_first_run(app):

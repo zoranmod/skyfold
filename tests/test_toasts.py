@@ -770,7 +770,6 @@ def _synced(parts: dict) -> str:
     return ", ".join(t(part, n=n) for part, n in parts.items())
 
 
-@pytest.mark.parametrize("lang", ["en", "bs"])
 @pytest.mark.parametrize("service, parts, folder", [
     ("photos", {"Downloaded: {n}": 2}, True),
     ("photos", {"Deleted on PC: {n}": 1}, False),
@@ -783,7 +782,7 @@ def _synced(parts: dict) -> str:
     ("drive", {"Deleted on PC: {n}": 1, "Deleted in iCloud: {n}": 3}, False),
     ("drive", {"Uploaded: {n}": 1, "Deleted in iCloud: {n}": 3}, True),
 ])
-def test_show_in_folder_only_when_a_file_came(controller, qapp, lang, service, parts, folder):
+def test_show_in_folder_only_when_a_file_came(controller, qapp, service, parts, folder):
     """A sync that only deleted leaves nothing to show in a folder: neither the card nor the bell's
     list offers it. Open stays for Photos."""
     from skyfold import i18n
@@ -792,7 +791,6 @@ def test_show_in_folder_only_when_a_file_came(controller, qapp, lang, service, p
 
     ctl, calls = controller
     ctl.settings.drive_enabled = True
-    i18n.set_language(lang)
     try:
         title = t("Photos synced") if service == "photos" else t("iCloud Drive synced")
         ctl._notify(title, _synced(parts))

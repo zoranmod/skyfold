@@ -179,8 +179,6 @@ def _short_time(ts: str) -> str:
 
     from PySide6.QtCore import QDate, QLocale, QTime
 
-    from ..i18n import language
-
     try:
         dt = datetime.fromisoformat(ts).astimezone()
     except (TypeError, ValueError):
@@ -189,8 +187,7 @@ def _short_time(ts: str) -> str:
     secs = (now - dt).total_seconds()
     if secs < 60:
         return t("now")
-    loc = QLocale(QLocale.Bosnian, QLocale.BosniaAndHerzegowina) if language() == "bs" else QLocale(
-        QLocale.English, QLocale.UnitedKingdom)
+    loc = QLocale(QLocale.English, QLocale.UnitedKingdom)  # the app's own English: "Sat", "18 Nov", 24 h
     if dt.date() == now.date():
         return loc.toString(QTime(dt.hour, dt.minute), "HH:mm")
     day = QDate(dt.year, dt.month, dt.day)

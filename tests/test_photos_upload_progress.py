@@ -85,11 +85,8 @@ def test_upload_text_reads_like_downloads():
     rate.add(20_000_000, 0)
     text = engine.upload_text("IMG_0412.MOV", 120_000_000, 600_000_000, rate)
     assert text.startswith("Uploading IMG_0412.MOV · 120") and "600" in text and "/s" in text and "left" in text
-    try:
-        i18n.set_language("bs")
-        assert engine.upload_text("a.mov", 1, 2, rate).startswith("Šaljem a.mov")
-    finally:
-        i18n.set_language("en")
+    i18n.set_language("bs")  # (an older settings file may still ask for it: the app stays English)
+    assert engine.upload_text("a.mov", 1, 2, rate).startswith("Uploading a.mov")
 
 
 from tests.test_engine import env  # noqa: E402,F401  (fixture)

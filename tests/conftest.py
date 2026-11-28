@@ -22,7 +22,7 @@ def _isolate_profile(root, monkeypatch):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
-    # config probes its portable folder and loads the language while modules are being imported.
+    # config probes its portable folder while modules are being imported.
     # Set the roots before collection, and let subprocesses inherit them.
     session_folder = TemporaryDirectory(prefix="skyfold-tests-", ignore_cleanup_errors=True)
     config.add_cleanup(session_folder.cleanup)

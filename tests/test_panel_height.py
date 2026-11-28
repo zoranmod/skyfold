@@ -48,10 +48,8 @@ def panel(qapp):  # noqa: F811
     i18n.set_language("en")
 
 
-@pytest.mark.parametrize("lang", ["en", "bs"])
 @pytest.mark.parametrize("rows", [0, 1, 2, 10])
-def test_sync_now_and_the_bell_never_change_the_open_panels_height(qapp, panel, lang, rows):  # noqa: F811
-    i18n.set_language(lang)
+def test_sync_now_and_the_bell_never_change_the_open_panels_height(qapp, panel, rows):  # noqa: F811
     f = panel(rows)
     _pump(qapp)
     f.hide()
@@ -88,9 +86,7 @@ def test_sync_now_and_the_bell_never_change_the_open_panels_height(qapp, panel, 
     assert len(set(heights.values())) == 1, heights
 
 
-@pytest.mark.parametrize("lang", ["en", "bs"])
-def test_the_panel_opens_with_the_same_height_in_every_state(qapp, panel, lang):  # noqa: F811
-    i18n.set_language(lang)
+def test_the_panel_opens_with_the_same_height_in_every_state(qapp, panel):  # noqa: F811
     states = [("idle", ""), ("idle", "Sync stopped."), ("idle", REASON), ("syncing", "Checking for changes…"),
               ("syncing", PROGRESS), ("paused", ""), ("offline", "No internet connection."),
               ("error", "Could not reach iCloud. Check your internet connection and try again in a few minutes."),
