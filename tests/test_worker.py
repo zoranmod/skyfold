@@ -34,28 +34,52 @@ class Driver(QObject):
     apply = Signal(object, bool, bool)
 
 
-def test_large_drive_question_counts_overlapping_paths_without_pairwise_scans():
-    prefix_checks = 0
+def _lines_run(fn, *args) -> int:
+    """How many lines of Python ran inside fn(*args): the work done, the same on every run and every
+    PC (no clock involved)."""
+    import sys
 
-    class TrackedPath(str):
-        def startswith(self, *args):
-            nonlocal prefix_checks
-            prefix_checks += 1
-            return super().startswith(*args)
+    count = 0
 
-    folders = [f"Batch/Set-{i}" for i in range(100)]
-    paths = [TrackedPath(f"{folder}/Garden plan.txt") for folder in folders]
+    def tracer(_frame, event, _arg):
+        nonlocal count
+        if event == "line":
+            count += 1
+        return tracer
+
+    before = sys.gettrace()
+    sys.settrace(tracer)
+    try:
+        fn(*args)
+    finally:
+        sys.settrace(before)
+    return count
+
+
+def _drive_question(n: int):
+    """n folders with a file each, all of them chosen (plus their parent, one twice, an empty folder
+    and a path that isn't tracked): every file is below two chosen paths."""
+    folders = [f"Batch/Set-{i}" for i in range(n)]
+    paths = [f"{folder}/Garden plan.txt" for folder in folders]
     rows = {path: SimpleNamespace(is_dir=False) for path in paths}
     rows["Empty"] = SimpleNamespace(is_dir=True)
     worker = wk.SyncWorker(Settings())
     worker.drive_state = SimpleNamespace(all=lambda: rows)
+    return worker, ["Batch", *folders, folders[0], "Empty", "Untracked"], [paths[0]]
 
-    worker._on_drive_pending(["Batch", *folders, folders[0], "Empty", "Untracked"], [paths[0]])
 
+def test_large_drive_question_counts_overlapping_paths_without_pairwise_scans():
+    worker, to_cloud, to_pc = _drive_question(100)
+    small = _lines_run(worker._on_drive_pending, to_cloud, to_pc)
     assert worker._drive_pending.files_to_cloud == 102
     assert worker._drive_pending.files_to_pc == 1
-    # A per-folder scan over every file would do thousands of prefix checks here.
-    assert prefix_checks <= 4 * len(paths)
+
+    worker, to_cloud, to_pc = _drive_question(800)
+    big = _lines_run(worker._on_drive_pending, to_cloud, to_pc)
+    assert worker._drive_pending.files_to_cloud == 802
+    # Eight times the folders and files: about eight times the work. Comparing every file with every
+    # chosen folder (with startswith, slices or anything else) would be 64 times.
+    assert big < 16 * small, (small, big)
 
 
 def pump(cond, timeout=10.0):

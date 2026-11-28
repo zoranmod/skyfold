@@ -122,9 +122,20 @@ def test_stop_while_only_drive_runs_is_what_the_panel_says():
     w, states = _worker()
     w._set_state("idle", t("Everything is in sync."))  # the last round finished
     w._set_state("syncing", t("Checking iCloud Drive…"), "drive")
-    w._drive_stopped = True  # Stop pressed
+    w.drive = SimpleNamespace(cancel_flag=threading.Event())
+    w.cancel()  # Stop pressed (the real thing: it is what marks Drive as stopped)
+    assert w.drive.cancel_flag.is_set()
     w._handle(Cancelled(), [], t("iCloud Drive"), "drive")
     assert states[-1] == ("idle", t("Sync stopped."))
+
+
+def test_a_drive_pass_cut_short_without_stop_leaves_the_last_rounds_words():
+    """(The other side of the test above: only a Stop changes what the panel says.)"""
+    w, states = _worker()
+    w._set_state("idle", t("Everything is in sync."))
+    w._set_state("syncing", t("Checking iCloud Drive…"), "drive")
+    w._handle(Cancelled(), [], t("iCloud Drive"), "drive")  # (cut short by a newer request, not by Stop)
+    assert states[-1] == ("idle", t("Everything is in sync."))
 
 
 # --- 2. the reason a pass ended ----------------------------------------------------------------------
@@ -324,6 +335,69 @@ def test_cache_removal_waits_for_a_write_in_progress(_bookmarks_cache_in_tmp):
         assert not removed.wait(0.2) and cache.exists()
     th.join(5)
     assert removed.is_set() and not cache.exists()
+
+
+def test_cache_write_waits_for_a_removal_in_progress(_bookmarks_cache_in_tmp):
+    """The other half: a write never runs beside the removal that Sign out does."""
+    cache = _bookmarks_cache_in_tmp
+    written = threading.Event()
+    with bookmarks.CACHE_LOCK:  # Sign out is removing the cache
+        th = threading.Thread(target=lambda: (bookmarks.save_cache([]), written.set()))
+        th.start()
+        assert not written.wait(0.2) and not cache.exists()
+    th.join(5)
+    assert written.is_set() and cache.exists()
+
+
+def test_cache_write_asks_about_the_account_and_writes_under_the_one_lock(monkeypatch, _bookmarks_cache_in_tmp):
+    """Asked and written in one go: were the lock taken only for the write (or not at all), Sign out
+    could remove the cache between the question and the write, and the old account's bookmarks
+    would be back for the extension."""
+    cache = _bookmarks_cache_in_tmp
+    seen = []
+    real = bookmarks.save_text
+
+    def current():
+        seen.append(("asked", bookmarks.CACHE_LOCK.locked()))
+        return True
+
+    def save(path, data):
+        seen.append(("written", bookmarks.CACHE_LOCK.locked()))
+        real(path, data)
+
+    monkeypatch.setattr(bookmarks, "save_text", save)
+    bookmarks.save_cache([], current)
+    assert seen == [("asked", True), ("written", True)] and cache.exists()
+    assert not bookmarks.CACHE_LOCK.locked()
+
+    cache.unlink()
+    seen.clear()
+    with pytest.raises(bookmarks.NotCurrent):
+        bookmarks.save_cache([], lambda: False)  # signed out meanwhile
+    assert seen == [] and not cache.exists()
+    assert not bookmarks.CACHE_LOCK.locked()  # (given back also when nothing was written)
+
+
+def test_export_checks_the_account_for_the_cache_and_again_for_the_file(tmp_path, monkeypatch,
+                                                                        _bookmarks_cache_in_tmp):
+    cache = _bookmarks_cache_in_tmp
+    _fake_bookmarks(monkeypatch)
+    folder = tmp_path / "bm"
+
+    asked = []
+    with pytest.raises(bookmarks.NotCurrent):  # signed out before anything was written
+        bookmarks.export(object(), folder, lambda: asked.append(bookmarks.CACHE_LOCK.locked()) or False)
+    assert asked == [True]  # (asked under the lock of the cache)
+    assert not cache.exists() and not (folder / bookmarks.FILE_NAME).exists()
+
+    answers = [True, False]  # signed out after the cache, before the file
+    with pytest.raises(bookmarks.NotCurrent):
+        bookmarks.export(object(), folder, lambda: answers.pop(0))
+    assert answers == [] and cache.exists()
+    assert not (folder / bookmarks.FILE_NAME).exists()
+
+    path, _n, changed = bookmarks.export(object(), folder, lambda: True)
+    assert changed and path == folder / bookmarks.FILE_NAME and path.exists()
 
 
 # --- 6. the tray mark and Windows' animation setting -------------------------------------------------

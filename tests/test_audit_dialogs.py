@@ -324,6 +324,8 @@ def test_no_accessibility_interfaces_of_our_own(app):
         tree = ast.parse(py.read_text(encoding="utf-8"))
         names = {getattr(n.func, "attr", None) for n in ast.walk(tree) if isinstance(n, ast.Call)}
         assert "installFactory" not in names, py
+        bases = {ast.unparse(b) for n in ast.walk(tree) if isinstance(n, ast.ClassDef) for b in n.bases}
+        assert not [b for b in bases if "QAccessible" in b], py  # no interface class written in Python either
 
 
 def test_every_click_card_in_settings_has_a_name(app):
@@ -399,6 +401,7 @@ def test_show_the_list_really_shows_it(app, n):
         toggle.click()
         app.processEvents()
         app.processEvents()
+        assert lst.isVisible() and lst.height() > 0  # (a list of no height would pass the next line unseen)
         assert lst.visibleRegion().boundingRect().height() >= min(lst.height(), 120)
     finally:
         d.close()

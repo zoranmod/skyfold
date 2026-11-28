@@ -4,7 +4,7 @@ shorten long folder paths in the middle, and setting cards you can click."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPalette
 from PySide6.QtWidgets import QLabel, QSizePolicy, QStyle, QStyledItemDelegate, QWidget
 
@@ -151,19 +151,27 @@ class ElidedLabel(QLabel):
 # --- cards a screen reader can press ----------------------------------------------------------------------
 def pressable(cls: type) -> type:
     """Class decorator for a QWidget with a `clicked` signal that acts like a button. It gives each one
-    an accessible name from its visible text when none is set (Enter/Space already click it). No
-    accessibility interface of our own: Qt owns and deletes those, and one written in Python could
-    crash Skyfold."""
-    show = cls.showEvent
+    an accessible name from its visible text when none is set (Enter/Space already click it), and
+    keeps that name in step with the text: a card whose labels change later is not read out with
+    its old words. No accessibility interface of our own: Qt owns and deletes those, and one written
+    in Python could crash Skyfold."""
+    handle = cls.event
+    # shown; a label got another text or was added (its new size is a layout request to the card);
+    # and when the keyboard arrives, which is when a screen reader reads the name
+    renamed_by = (QEvent.Show, QEvent.LayoutRequest, QEvent.FocusIn)
 
-    def show_event(self, e, _show=show) -> None:
-        _show(self, e)
-        if not self.accessibleName():
-            words = [x.text() for x in self.findChildren(QLabel) if x.text() and not x.isHidden()]
-            if words:
-                self.setAccessibleName(", ".join(words))
+    def event(self, e, _handle=handle) -> bool:
+        done = _handle(self, e)
+        if e.type() in renamed_by:
+            given = self.accessibleName()
+            if not given or given == getattr(self, "_name_from_labels", None):  # (a name set by hand stays)
+                name = ", ".join(x.text() for x in self.findChildren(QLabel) if x.text() and not x.isHidden())
+                if name != given:
+                    self._name_from_labels = name
+                    self.setAccessibleName(name)
+        return done
 
-    cls.showEvent = show_event
+    cls.event = event
     return cls
 
 
