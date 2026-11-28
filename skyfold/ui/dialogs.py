@@ -9,10 +9,9 @@ import time
 from typing import Any
 
 from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QRunnable, QSize, Qt, QThreadPool, Signal, Slot
-from PySide6.QtGui import (QAccessible, QAccessibleActionInterface, QAccessibleStateChangeEvent, QColor, QFont,
+from PySide6.QtGui import (QColor, QFont,
                            QPainter, QPalette, QPen, QPixmap)
 from PySide6.QtWidgets import (
-    QAccessibleWidget,
     QApplication,
     QAbstractSpinBox,
     QListView,
@@ -364,56 +363,10 @@ def _label(text: str, name: str | None = None, wrap: bool = False) -> QLabel:
     return lbl
 
 
-class _Accessible(QAccessibleWidget):
-    """What a screen reader is told about a card that works like a standard control: a button (the
-    help cards), a radio button with its checked state (the layout choice), or the group around them.
-    The widget names its kind in the "a11y" property; Press (or Toggle) clicks it, as Enter/Space do."""
-
-    ROLES = {"button": QAccessible.Button, "radio": QAccessible.RadioButton, "group": QAccessible.Grouping}
-
-    def __init__(self, widget: QWidget, kind: str) -> None:
-        super().__init__(widget, self.ROLES[kind])
-        self.kind = kind
-
-    def state(self):
-        s = super().state()
-        if self.kind == "radio":
-            s.checkable = True
-            s.checked = bool(self.widget().property("selected"))
-        return s
-
-    def actionNames(self) -> list[str]:  # noqa: N802
-        names = list(super().actionNames())
-        if self.kind == "button":
-            names.insert(0, QAccessibleActionInterface.pressAction())
-        elif self.kind == "radio":
-            names[:0] = [QAccessibleActionInterface.pressAction(), QAccessibleActionInterface.toggleAction()]
-        return names
-
-    def doAction(self, name: str) -> None:  # noqa: N802
-        if self.kind != "group" and name in (QAccessibleActionInterface.pressAction(),
-                                             QAccessibleActionInterface.toggleAction()):
-            w = self.widget()
-            if w.isEnabled():
-                w.clicked.emit()
-            return
-        super().doAction(name)
-
-
-def _accessible_for(_key: str, obj: QObject):
-    try:
-        kind = obj.property("a11y") if isinstance(obj, QWidget) else None
-        return _Accessible(obj, kind) if kind in _Accessible.ROLES else None
-    except Exception:  # noqa: BLE001  (never take the screen reader down with it)
-        return None
-
-
-QAccessible.installFactory(_accessible_for)
-
-
 def _as_control(widget: QWidget, kind: str) -> None:
-    """Tell screen readers that this card is a button / radio button / group (see _Accessible). Called
-    first, before its accessible name is set: that already asks for the widget's interface."""
+    """Marks a card that works like a button / radio button / group. Screen readers get its name and
+    description (set by the caller) and Enter/Space work on it; there is no accessibility interface of
+    our own: Qt owns and deletes those, and one written in Python could crash Skyfold."""
     widget.setProperty("a11y", kind)
 
 
@@ -422,11 +375,8 @@ class _Group(QWidget):
 
 
 def _checked_changed(widget: QWidget) -> None:
-    """A radio card was chosen or unchosen: screen readers hear it at once."""
-    if QAccessible.isActive():
-        changed = QAccessible.State()
-        changed.checked = True
-        QAccessible.updateAccessibility(QAccessibleStateChangeEvent(widget, changed))
+    """A radio card was chosen or unchosen: its description says so ("Chosen"), for screen readers."""
+    widget.setAccessibleDescription(t("Chosen") if widget.property("selected") else "")
 
 
 class _Dialog(QDialog):

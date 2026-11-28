@@ -277,70 +277,64 @@ def test_a_short_question_stays_compact(app):
 
 
 # first run: screen readers ------------------------------------------------------------------
-def _iface(w):
-    return QAccessible.queryAccessibleInterface(w)
-
-
-def test_the_layout_choice_is_a_radio_group_for_screen_readers(app, tmp_path):
+def test_the_layout_choice_has_names_and_says_which_is_chosen(app, tmp_path):
+    """Each layout card has a name, the chosen one says "Chosen", and the keyboard chooses as before.
+    (No accessibility interface of Skyfold's own: Qt deletes those, and Python ones could crash it.)"""
     d = dialogs.FolderSetupDialog(str(tmp_path / "Photos"), theme.LIGHT)
     try:
         d.show()
         app.processEvents()
-        group = _iface(d.layout_group)
-        assert group.role() == QAccessible.Grouping and group.text(QAccessible.Name) == dialogs.t("Layout")
+        assert d.layout_group.accessibleName() == dialogs.t("Layout")
         flat, year = d.options["flat"], d.options["year"]
-        for opt in d.options.values():
-            assert _iface(opt).role() == QAccessible.RadioButton
-            assert _iface(opt).text(QAccessible.Name)
-            assert _iface(opt).state().checkable
-        assert _iface(flat).state().checked and not _iface(year).state().checked
+        assert all(opt.accessibleName() for opt in d.options.values())
+        assert flat.accessibleDescription() == dialogs.t("Chosen") and not year.accessibleDescription()
         year.setFocus(Qt.TabFocusReason)
         QTest.keyClick(year, Qt.Key_Space)  # the keyboard works as before
         assert d.layout_choice == "year"
-        assert _iface(year).state().checked and not _iface(flat).state().checked
-        flat_iface = _iface(flat)
-        assert QAccessibleActionInterface.pressAction() in flat_iface.actionNames()
-        flat_iface.doAction(QAccessibleActionInterface.pressAction())  # a screen reader's "press"
-        assert d.layout_choice == "flat"
-        assert _iface(d.path).text(QAccessible.Name) == dialogs.t("Photos folder")
+        assert year.accessibleDescription() == dialogs.t("Chosen") and not flat.accessibleDescription()
+        assert d.path.accessibleName() == dialogs.t("Photos folder")
     finally:
         d.close()
 
 
 # the help cards ----------------------------------------------------------------------------
-def test_help_cards_are_buttons_a_screen_reader_can_press(app):
+def test_help_cards_have_a_name_and_description_and_work_with_the_keyboard(app):
     pressed = []
     host = QWidget()
     lay = QVBoxLayout(host)
     card = dialogs.SettingsDialog._link_card(SimpleNamespace(c=theme.LIGHT), lay, "file", "Read me", "example.test",
                                              lambda: pressed.append(1))
     try:
-        iface = _iface(card)
-        assert iface.role() == QAccessible.Button
-        assert iface.text(QAccessible.Name) == "Read me"
-        assert iface.text(QAccessible.Description) == "example.test"
-        assert QAccessibleActionInterface.pressAction() in iface.actionNames()
-        iface.doAction(QAccessibleActionInterface.pressAction())
-        assert pressed == [1]
+        host.show()
+        assert card.accessibleName() == "Read me" and card.accessibleDescription() == "example.test"
+        card.setFocus()
+        QTest.keyClick(card, Qt.Key_Return)
+        QTest.keyClick(card, Qt.Key_Space)
+        assert pressed == [1, 1]
     finally:
         host.close()
-    del iface
-    host.deleteLater()  # Qt deletes the interface with the card: nothing is left behind to crash later
-    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-    gc.collect()
-    app.processEvents()
 
 
-def test_every_click_card_in_settings_is_a_button(app):
+def test_no_accessibility_interfaces_of_our_own(app):
+    """Skyfold installs no QAccessible factory (Python-made interfaces that Qt deletes could crash it)."""
+    import ast
+    from pathlib import Path
+
+    for py in Path(dialogs.__file__).parent.parent.rglob("*.py"):
+        tree = ast.parse(py.read_text(encoding="utf-8"))
+        names = {getattr(n.func, "attr", None) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+        assert "installFactory" not in names, py
+
+
+def test_every_click_card_in_settings_has_a_name(app):
     from skyfold.ui.settings_parts import ClickCard
 
     d = dialogs.SettingsDialog(Settings(), theme.LIGHT)
     try:
         cards = d.findChildren(ClickCard)
         assert len(cards) >= 4  # the help links and "bring back photos"
-        assert all(_iface(c).role() == QAccessible.Button for c in cards)
-        restore = [c for c in cards if c.accessibleName() == dialogs.t("Bring back photos I deleted only on this PC")]
-        assert restore
+        assert all(c.accessibleName() for c in cards)
+        assert [c for c in cards if c.accessibleName() == dialogs.t("Bring back photos I deleted only on this PC")]
     finally:
         d.close()
 
