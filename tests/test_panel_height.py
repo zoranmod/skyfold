@@ -136,6 +136,61 @@ def test_the_open_panel_keeps_its_height_when_a_banner_comes_and_goes(qapp, pane
     f.hide()
 
 
+# Long texts: a service's detail is one line ---------------------------------------------------------
+# No "last_sync": "· first sync in progress" / "· first read pending" is added to already long lines.
+LONG_STATS = {"photos": 1_234_567, "videos": 234_567, "bytes": 1_234_567_890_123,
+              "drive_enabled": True, "drive_files": 2_345_678, "drive_bytes": 9_876_543_210_987,
+              "notes_enabled": True, "notes_count": 123_456_789}
+
+
+def test_long_service_details_stay_on_one_line_and_never_change_the_panels_height(qapp, panel):  # noqa: F811
+    """A detail that wrapped onto a second line made its row, and with it the whole panel, a few pixels
+    taller (measured at 125 %: 631, 650 or 672 px, depending on the texts)."""
+    import html
+
+    f = panel(3)
+    f.show_at(None)
+    _pump(qapp)
+    usual = f.height()
+    row_height = f.row_photos.height()
+    f.hide()
+    g = panel(3)
+    g.set_stats(LONG_STATS)
+    g.show_at(None)
+    _pump(qapp)
+    seen = {"opened": g.height()}
+    for row in (g.row_photos, g.row_drive, g.row_notes):
+        assert row.height() == row_height
+        assert row.detail.height() < 2 * row.detail.fontMetrics().lineSpacing()  # one line
+        assert "\n" not in row.detail.text()
+    # cut short with "…": the whole line is in the row's tooltip, as plain text
+    assert g.row_photos.detail.clipped()
+    whole = g.row_photos.detail.text()
+    assert "1,234,567" in whole and whole.endswith("first sync in progress")
+    assert html.escape(whole) in g.row_photos.toolTip() and g.row_photos.toolTip().startswith("<qt>")
+    assert whole in g.row_photos.accessibleName()
+    # the texts change while the panel is open: still the same panel
+    g.set_stats({"photos": 3, "videos": 0, "bytes": 10**6, "last_sync": "2026-11-28T08:00:00+00:00"})
+    _pump(qapp)
+    seen["short"] = g.height()
+    assert not g.row_photos.detail.clipped()
+    assert g.row_photos.toolTip() and "3 photos" not in g.row_photos.toolTip()  # (only when it was checked)
+    g.set_state("syncing", "Checking for changes…")
+    g.set_stats(LONG_STATS)
+    _pump(qapp)
+    seen["long again, syncing"] = g.height()
+    g.set_state("auth", "Sign in to iCloud again to continue syncing.")
+    _pump(qapp)
+    seen["waiting for sign-in"] = g.height()
+    g.hide()
+    g.set_state("idle", "")
+    g.show_at(None)
+    _pump(qapp)
+    seen["opened again"] = g.height()
+    assert set(seen.values()) == {usual}, (usual, seen)
+    g.hide()
+
+
 # Small screens and display scales: whole rows only, and the list is what gives way ---------------------------
 class _Screen:
     """A made-up screen in logical pixels (what Qt reports: a 1280 x 720 display at 150 % is 853 x 480),
@@ -206,7 +261,7 @@ def test_on_any_screen_the_list_shows_whole_rows_and_the_panel_keeps_one_height(
 
 @pytest.mark.parametrize("scale", ["1.25", "1.5"])
 def test_the_panel_tests_hold_at_every_display_scale(scale):
-    """The banner and the screens above again in a process of its own at 125 % and 150 % (the
+    """The banner, the screens and the long texts above again in a process of its own at 125 % and 150 % (the
     offscreen screen is 800 px tall: 640 and 533 logical pixels at the larger scales, a small screen)."""
     import os
     import subprocess
@@ -217,6 +272,6 @@ def test_the_panel_tests_hold_at_every_display_scale(scale):
         pytest.skip("the scaled run itself")
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen", QT_SCALE_FACTOR=scale, SKYFOLD_PANEL_SCALE_RUN="1")
     run = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-x", "-k",
-                          "banner_comes or on_any_screen", str(Path(__file__))],
+                          "banner_comes or on_any_screen or long_service_details", str(Path(__file__))],
                          cwd=Path(__file__).resolve().parents[1], env=env, capture_output=True, text=True, timeout=300)
     assert run.returncode == 0, run.stdout[-3000:] + run.stderr[-1000:]

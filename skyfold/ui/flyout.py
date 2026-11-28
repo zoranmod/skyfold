@@ -30,6 +30,8 @@ from .icons import STATE_COLORS, glyph
 from .panel_parts import (CenteredButton, LogoTile, RowScroll, SoftCard, StateBadge, Thumbs, TintTile, TwoLineLabel,
                           rounded, tint)
 from .glow import GlowTile, animations_on
+from .safe_text import plain_tip
+from .settings_parts import ElidedLabel
 from .theme import OLED, service_color, state_color
 
 log = logging.getLogger(__name__)
@@ -400,6 +402,21 @@ class StorageBar(QFrame):
         super().keyPressEvent(e)
 
 
+class _RowDetail(ElidedLabel):
+    """A service row's quiet line: always one line, ending in "…" when there is no room for all of it
+    (a line that wrapped made its row, and the whole panel, taller). The row's tooltip then has it whole."""
+
+    def __init__(self, row: "ServiceRow") -> None:
+        self._row = row
+        super().__init__("", Qt.ElideRight)
+
+    def clipped(self) -> bool:
+        return self.fontMetrics().horizontalAdvance(self.text()) > self.contentsRect().width()
+
+    def _update_tip(self) -> None:  # (the row has one tooltip, wherever the pointer is on it)
+        self._row._tip()
+
+
 class ServiceRow(QFrame):
     """One service in the services group: icon tile, name, one line of detail, a chevron. A coloured
     dot appears only when the service needs attention."""
@@ -422,9 +439,9 @@ class ServiceRow(QFrame):
         col.setSpacing(2)
         self.name = QLabel(name)
         self.name.setObjectName("RowTitle")
-        self.detail = QLabel("")
+        self._checked = ""
+        self.detail = _RowDetail(self)
         self.detail.setObjectName("Muted")
-        self.detail.setWordWrap(True)
         col.addWidget(self.name)
         col.addWidget(self.detail)
         self.dot = QLabel()
@@ -444,13 +461,21 @@ class ServiceRow(QFrame):
 
     def set(self, detail: str, state: str | None, checked: str = "") -> None:
         """detail: the one quiet line; checked: when it was last checked (tooltip and screen readers)."""
-        self.detail.setText(break_at_dots(detail))
-        self.setToolTip(checked)
+        self._checked = checked
+        self.detail.setText(detail)  # (sets the tooltip too: _tip)
         self.setAccessibleName(f"{self.name.text()}: {detail}" + (f", {checked}" if checked else ""))
         if state in (None, "idle", "syncing"):  # nothing to flag: the row stays quiet
             self.dot.setStyleSheet("background: transparent;")
         else:
             self.dot.setStyleSheet(f"background: {state_color(self.c, state)}; border-radius: 4px;")
+
+    def _tip(self) -> None:
+        """The detail in full when it is cut short, then when the service was last checked."""
+        detail = getattr(self, "detail", None)
+        if detail is None:  # (still being built)
+            return
+        lines = [detail.text()] if detail.clipped() else []
+        self.setToolTip(plain_tip("\n".join(lines + ([self._checked] if self._checked else []))))
 
     def mousePressEvent(self, e) -> None:  # noqa: N802
         if e.button() == Qt.LeftButton:  # (a middle or right click opened the service too)
