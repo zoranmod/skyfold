@@ -922,6 +922,9 @@ class Flyout(QWidget):
         self.clear_btn.setCursor(Qt.PointingHandCursor)
         self.clear_btn.setToolTip(t("Clear the activity list. Your files are not touched."))
         self.clear_btn.clicked.connect(self._clear_activity)
+        keep = self.clear_btn.sizePolicy()
+        keep.setRetainSizeWhenHidden(True)  # its line is as tall without it: an empty list, the same panel
+        self.clear_btn.setSizePolicy(keep)
         self.clear_btn.hide()
         sec.addWidget(lbl)
         sec.addStretch(1)
@@ -1487,7 +1490,7 @@ class Flyout(QWidget):
         self.empty.show()
         self.clear_btn.hide()
         self.clearActivity.emit()
-        self._fit()
+        self._size_list()  # the empty-list line takes the list's place, at its height
 
     def _size_list(self) -> None:
         """Show up to four entries without empty space; scroll for older ones."""
@@ -1504,23 +1507,43 @@ class Flyout(QWidget):
         self.services_card.show()
         self.list.setFixedHeight(max(height, self.MIN_LIST_HEIGHT if rows else 1) + 2)
         # One height in every state: the list (or the empty-list line) fills what the rest leaves.
+        # (Whether the list is the one shown is asked of the list itself, not isVisible(): that is also
+        # False while the panel is closed or shows the notifications page, and the panel was then sized
+        # by the wrong one of the two, to shrink or grow at the next change.)
+        listed = not self.list.isHidden()
+        filler = self.list if listed else self.empty
         self._list_pad.setFixedHeight(0)
-        other = self._needed_height() - (self.list.height() if self.list.isVisible() else self.empty.height())
+        if not listed:
+            self.empty.setFixedHeight(self.MIN_LIST_HEIGHT)  # a set height: what the layout counts for it
+        other = self._needed_height() - filler.height()
         fill = max(self.MIN_LIST_HEIGHT, self.TARGET_HEIGHT - other)
         # whole rows only, never one cut in half: the list is a whole number of rows tall (measured,
-        # since the row height follows the font and the display scale)
-        if rows:
-            self._row_step = max(30, rows[0].sizeHint().height())
-        step = getattr(self, "_row_step", 42)
+        # since the row height follows the font and the display scale). A row's own set height, not its
+        # size hint: that is smaller for an entry without a second line, and the panel then came out
+        # another height. With no entry yet a row is measured all the same: empty, the same panel.
+        probe = rows[0] if rows else ActivityRow("", "download", "", self.c)
+        step = max(30, probe.minimumHeight())
+        if not rows:
+            probe.deleteLater()
         shown = max(2, round(fill / step)) * step  # (the nearest whole number of rows: 3, not 2.9 cut to 2)
-        if self.list.isVisible():
-            self.list.setFixedHeight(shown)
-        else:
-            self.empty.setFixedHeight(shown)  # the same height with or without entries
-        room = self._limit() - (self._needed_height() - self.list.height())
-        if self.list.height() > room:  # the list gives way first; below that the panel content scrolls
-            self.list.setFixedHeight(max(room, min(self.list.height(), 120)))
+        filler.setFixedHeight(shown)  # the same height with or without entries
+        room = self._limit() - (self._needed_height() - filler.height())
+        if filler.height() > room:  # the list gives way first; below that the panel content scrolls
+            filler.setFixedHeight(max(room, min(filler.height(), 120)))
+        held = getattr(self, "_held", None)
+        if held and self.isVisible():
+            # Open: the panel keeps the height it opened with, whatever comes or goes (a banner, the
+            # storage details, the first entry and its "Clear"). The list gives up whole rows for what
+            # needs more room; what is left over lies under it.
+            over = self._needed_height() - held
+            if over > 0:
+                filler.setFixedHeight(max(self.HELD_LIST_MIN, filler.height() - -(-over // step) * step))
+                over = self._needed_height() - held
+            if over < 0:
+                self._list_pad.setFixedHeight(-over)
         self._fit()
+        if held and self.isVisible():
+            self._held = max(held, self.height())  # grew because it had to: never smaller again while open
 
     def refresh_activity_times(self) -> None:
         for w in self._activity_rows():
