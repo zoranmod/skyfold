@@ -1192,6 +1192,10 @@ class SyncWorker(QObject):
             pass
         from .drive_engine import in_scope
 
+        def fail_walk(exc: OSError) -> None:
+            # An unlisted subtree may hold the only copy. Abort before recycling anything.
+            raise exc
+
         root = self.drive.root
         for rel in paths:
             if in_scope(rel, True, self.settings.drive_folders):
@@ -1201,7 +1205,7 @@ class SyncWorker(QObject):
                 if not target.exists():
                     continue
                 confirmed, kept = [], []
-                for dirpath, _dirs, files in os.walk(target):
+                for dirpath, _dirs, files in os.walk(target, onerror=fail_walk):
                     for name in files:
                         p = Path(dirpath) / name
                         row = known.get(p.relative_to(root).as_posix())
