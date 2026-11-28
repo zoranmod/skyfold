@@ -41,9 +41,10 @@ def pytest_sessionfinish(session, exitstatus):
     if app is None:
         return
     QThreadPool.globalInstance().waitForDone(10_000)
-    for w in app.topLevelWidgets():
-        w.close()
-        w.deleteLater()
+    if isinstance(app, QApplication):
+        for w in app.topLevelWidgets():
+            w.close()
+            w.deleteLater()
     app.processEvents()
     if hasattr(app, "shutdown"):  # PySide6: deletes the application object and its children now
         app.shutdown()
