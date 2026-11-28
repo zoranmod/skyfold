@@ -292,9 +292,11 @@ def test_rejected_request_renews_session_silently(qt, monkeypatch):
     th.start()
     assert pump(lambda: states and states[-1][0] == "idle")
     remote.add("A2", "IMG_0002.JPG", b"x")
+    before = len(restores)  # (the start-up's own restore is not what this test is about)
     d.syncNow.emit(True)
     assert pump(lambda: (root / "2025/11/IMG_0002.JPG").exists(), 10), states[-4:]
-    assert all(s[0] != "auth" for s in states) and len(restores) >= 2
+    assert pump(lambda: len(restores) > before, 10)  # renewed after the rejection (a slow PC may be later)
+    assert all(s[0] != "auth" for s in states)
 
 
 def test_really_expired_session_asks_to_sign_in(qt, monkeypatch):
