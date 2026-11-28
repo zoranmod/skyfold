@@ -14,7 +14,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
@@ -604,11 +604,3 @@ def _check_item(item: dict[str, Any], what: str) -> None:
         # only a short symbolic code is kept: Apple's free text never becomes part of the message
         why = code(item.get("errorCode")) if item.get("errorCode") else code(status)
         raise RuntimeError(Text(f"iCloud refused the {what}: {why}"))
-
-
-def local_mtime(p: Path) -> float:
-    return os.stat(p).st_mtime
-
-
-def utc_now() -> float:
-    return datetime.now(timezone.utc).timestamp()

@@ -2,8 +2,6 @@
 
 import io
 import logging
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -116,19 +114,6 @@ def test_a_broken_cookie_line_never_reaches_the_log_whatever_the_value(tmp_path,
                             (secret,), None)
     _RedactEmails().filter(rec)
     assert secret not in rec.getMessage() and "invalid Set-Cookie3 format file" in rec.getMessage()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows processes")
-def test_the_new_copy_gives_up_while_the_old_one_still_runs():
-    from skyfold.app import _wait_for_exit
-
-    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-    try:
-        assert _wait_for_exit(p.pid, seconds=0.3) is False
-    finally:
-        p.kill()
-        p.wait()
-    assert _wait_for_exit(p.pid, seconds=5) is True
 
 
 def test_a_rename_whose_answer_never_came_is_settled_by_the_item_id(env, monkeypatch):  # noqa: F811

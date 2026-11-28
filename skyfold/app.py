@@ -9,9 +9,9 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, QTimer, Qt, QUrl, Signal
-from PySide6.QtGui import QAction, QCursor, QDesktopServices
+from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from . import auth
 from .config import (APP_ID, APP_NAME, VERSION, LOG_FILE, Settings, migrate_private_files, set_start_with_windows,
@@ -19,8 +19,7 @@ from .config import (APP_ID, APP_NAME, VERSION, LOG_FILE, Settings, migrate_priv
 from .i18n import t
 from .ui import theme
 from .ui.dialogs import ask, inform, warn
-from .ui.dialogs import (FindMyDialog, FolderSetupDialog, LoginDialog, PendingDialog, SettingsDialog, UpdateDialog,
-                         make_popup_round)
+from .ui.dialogs import FindMyDialog, FolderSetupDialog, LoginDialog, PendingDialog, SettingsDialog, UpdateDialog
 from .ui.flyout import STATE_TITLES, Flyout
 from .ui.glow import animations_on
 from .ui.icons import app_icon, tray_icon
@@ -230,25 +229,6 @@ def _single_instance_mutex(name: str):
     if handle and ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
         return False
     return handle
-
-
-def _wait_for_exit(pid: int, seconds: float = 60.0) -> bool:
-    """Wait (bounded) until the process with this id has ended; False if it is still running."""
-    if sys.platform != "win32":
-        return True
-    import ctypes
-
-    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    k32.OpenProcess.restype = ctypes.c_void_p
-    k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-    k32.CloseHandle.argtypes = [ctypes.c_void_p]
-    handle = k32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
-    if not handle:
-        return True  # already gone
-    try:
-        return k32.WaitForSingleObject(handle, int(seconds * 1000)) == 0  # WAIT_OBJECT_0
-    finally:
-        k32.CloseHandle(handle)
 
 
 def _instance_name() -> str:
@@ -1087,21 +1067,6 @@ class Controller(QObject):
             if dlg is not None and isValid(dlg):
                 dlg.hide()
 
-    def restart(self) -> None:
-        """Start a fresh copy and quit this one."""
-        from PySide6.QtCore import QProcess
-
-        if self.server is not None:
-            self.server.close()  # free the single-instance name for the new copy
-        # The lock itself is kept until this process has ended (Windows lets go of it then), so no
-        # other copy can start while this one is still finishing its work.
-        handover = ["--tray", "--after", str(os.getpid())]  # the new copy waits until this one has quit
-        if getattr(sys, "frozen", False):
-            QProcess.startDetached(sys.executable, handover)
-        else:
-            QProcess.startDetached(sys.executable, [str(Path(__file__).resolve().parent.parent / "run.py"), *handover])
-        self.quit()
-
     def open_setup(self) -> None:
         """First run: ask where the gallery should live before anything is downloaded."""
         dlg = FolderSetupDialog(self.settings.photos_dir, self.c)
@@ -1200,12 +1165,6 @@ def main() -> int:
         return 0
 
     global _MUTEX
-    if "--after" in sys.argv:  # started by a restart: the old copy must have ended first
-        try:
-            if not _wait_for_exit(int(sys.argv[sys.argv.index("--after") + 1])):
-                return 0  # it is still running: never two copies at once
-        except (IndexError, ValueError):
-            pass
     _MUTEX = _single_instance_mutex(instance)
     if _MUTEX is False:
         return _tell_running()  # Skyfold already runs for this user: show it (or quit it)

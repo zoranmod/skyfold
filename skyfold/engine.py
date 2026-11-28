@@ -530,24 +530,6 @@ class Syncer:
         if self.cancel_flag.is_set() or self.closing.is_set():
             raise Cancelled()
 
-    def _upload_progress(self, path: Path, total: int) -> Callable[[int], None]:
-        """Shows how much of a photo or video has gone, the speed and the time left (like
-        downloads); Stop works in the middle of a big video too."""
-        from .ui_text import Rate
-
-        rate, sent, shown = Rate(), [0], [0.0]
-
-        def on_bytes(k: int) -> None:
-            self._check_cancel()
-            sent[0] += k
-            now = time.monotonic()
-            if now - shown[0] < 0.5 and sent[0] < total:
-                return
-            shown[0] = now
-            rate.add(sent[0], 0)
-            self.cb.progress(sent[0], max(total, 1), upload_text(path.name, sent[0], total, rate))
-        return on_bytes
-
     def _rel_for(self, asset: RemoteAsset, res: RemoteResource) -> str:
         local = asset.date.astimezone()
         fs = self.settings.folder_structure

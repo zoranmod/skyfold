@@ -64,9 +64,6 @@ class LibraryDialog(_Dialog):
             option.initFrom(self)
             self.style().drawPrimitive(QStyle.PE_Widget, option, p, self)
 
-    def _veil(self) -> str:
-        return glass_colours(self.c, self._dark())["tint"]  # (the same veil as every other window)
-
     def frame_style(self) -> str:
         c = self.c
         material = self.glass  # (OLED too: the user chose the see-through look for every theme)

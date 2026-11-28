@@ -13,7 +13,6 @@ from PySide6.QtGui import (QColor, QFont,
                            QPainter, QPalette, QPen, QPixmap)
 from PySide6.QtWidgets import (
     QApplication,
-    QAbstractSpinBox,
     QListView,
     QListWidgetItem,
     QStyledItemDelegate,

@@ -3011,6 +3011,3 @@ def _collapse(paths: list[str]) -> list[str]:
             kept.add(p)
             out.append(p)
     return sorted(out)
-
-
-ProgressFn = Callable[[int], None]

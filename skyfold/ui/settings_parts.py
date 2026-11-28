@@ -30,10 +30,6 @@ class IconLabel(QWidget):
         self._icon = glyph(self.name, colour, self.width())
         self.update()
 
-    def set_name(self, name: str, palette: dict[str, str]) -> None:
-        self.name = name
-        self.apply_palette(palette)
-
     def paintEvent(self, _e) -> None:  # noqa: N802
         p = QPainter(self)
         if not self.isEnabled():

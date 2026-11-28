@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import time
 
 import logging
@@ -723,7 +722,6 @@ class Flyout(QWidget):
     findMy = Signal()
     serviceClicked = Signal(str)  # "photos" | "drive" | "notes"
     folderClicked = Signal(str)  # the folder of "photos" | "drive" | "notes"
-    quitApp = Signal()
     openUpdate = Signal()
 
     WIDTH = 376
@@ -1349,9 +1347,6 @@ class Flyout(QWidget):
             self.storage_bar.hide()
         self._last_sync_ts = stats.get("last_sync")
         self.refresh_times()
-
-    def _service_state(self) -> str | None:
-        return None if self.state == "idle" else self.state
 
     def _render_services(self) -> None:
         s = getattr(self, "_stats", {}) or {}

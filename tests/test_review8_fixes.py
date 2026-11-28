@@ -1,10 +1,7 @@
 """Regression tests for the eighth independent (Codex) review, of commit eddae51."""
 
 import os
-import subprocess
-import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -122,44 +119,6 @@ def test_a_broken_cookie_file_never_puts_a_cookie_in_the_log(tmp_path, monkeypat
     finally:
         api.session.logger.removeHandler(handler)
     assert secret not in out.getvalue()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows mutex")
-def test_a_restart_hands_over_the_single_instance_lock(monkeypatch):
-    import uuid
-
-    from PySide6.QtCore import QProcess
-
-    from skyfold import app
-
-    name = "Skyfold-review8-" + uuid.uuid4().hex
-    handle = app._single_instance_mutex(name)
-    monkeypatch.setattr(app, "_MUTEX", handle)
-    started = []
-    monkeypatch.setattr(QProcess, "startDetached", lambda exe, args: started.append(args) or True)
-    app.Controller.restart(SimpleNamespace(server=None, quit=lambda: None))
-    assert "--after" in started[0] and str(os.getpid()) in started[0]
-    # review 9: the lock stays with the old copy until it has ended; nothing else can start meanwhile
-    assert app._MUTEX == handle
-    code = f"from skyfold.app import _single_instance_mutex; print(_single_instance_mutex({name!r}) is False)"
-    child = subprocess.run([sys.executable, "-c", code], cwd=Path(app.__file__).parent.parent,
-                           text=True, capture_output=True, timeout=60)
-    assert child.stdout.strip() == "True"
-    import ctypes
-
-    ctypes.WinDLL("kernel32").CloseHandle(ctypes.c_void_p(handle))
-
-
-def test_the_new_copy_waits_for_the_old_one_only_while_it_runs():
-    import time
-
-    from skyfold.app import _wait_for_exit
-
-    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1)"])
-    start = time.monotonic()
-    _wait_for_exit(p.pid, seconds=10)
-    assert p.poll() is not None or time.monotonic() - start >= 0.9
-    p.wait()
 
 
 def test_sign_in_and_first_run_windows_fit_a_small_screen(monkeypatch):

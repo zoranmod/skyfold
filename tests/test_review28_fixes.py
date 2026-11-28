@@ -53,14 +53,6 @@ def test_copy_new_never_replaces_an_existing_file(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["a", "b"]  # no private copy left behind
 
 
-def test_move_new_keeps_the_source_when_the_destination_exists(tmp_path):
-    src, dst = tmp_path / "a", tmp_path / "b"
-    src.write_bytes(b"OLD")
-    dst.write_bytes(b"CURRENT")
-    config._move_new(src, dst)
-    assert dst.read_bytes() == b"CURRENT" and src.read_bytes() == b"OLD"
-
-
 def test_unknown_destination_is_not_missing(tmp_path, monkeypatch):
     f = tmp_path / "settings.json"
     f.write_text("{}", encoding="utf-8")

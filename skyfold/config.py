@@ -141,20 +141,6 @@ def _copy_new(src: Path, dst: Path) -> bool:
             pass
 
 
-def _move_new(src: Path, dst: Path) -> None:
-    """Move src to dst only as a new file; the source is removed only once the copy is in place."""
-    if os.name == "nt":
-        try:
-            os.rename(src, dst)  # same drive: refuses an existing name
-            return
-        except FileExistsError:
-            return
-        except OSError:
-            pass  # another drive: copied below
-    if _copy_new(src, dst):
-        src.unlink()
-
-
 def place_new(tmp: str | Path, dst: Path) -> bool:
     """Put a private temp file or folder in place under dst only as a new name (False if taken)."""
     try:

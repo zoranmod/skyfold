@@ -155,10 +155,6 @@ class Thumbs(QObject):
         self._asked.clear()
 
 
-def thumb_size() -> QSize:
-    return QSize(32, 32)
-
-
 class FootTime(QWidget):
     """Beside the panel's main button: a small caption over its value ("Last checked" over
     "just now", "Started" over "22:04"), left-aligned and centred on the buttons' height."""
