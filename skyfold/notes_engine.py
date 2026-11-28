@@ -1692,6 +1692,9 @@ class NotesSyncer:
             log.info("Notes: the change token expired; reading all notes once")
             res.full = True
             notes = self.remote.changes(None)
+        # The paged feed is oldest first. Export only the last event for each ID: an earlier
+        # version has no separate owner in the database, and could stay readable after a lock.
+        notes = list({note.id: note for note in notes}.values())
         known = self.state.all()
         seen: set[str] = set()
         taken = {r[1].lower() for r in known.values() if r[1]}
