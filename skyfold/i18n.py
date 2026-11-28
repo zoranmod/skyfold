@@ -406,8 +406,8 @@ BS: dict[str, str] = {
     "Use the Apple ID you use on your iPhone and iPad.": "Prijavi se Apple ID-jem koji koristiš na iPhone-u i iPad-u.",
     "Apple ID (email)": "Apple ID (e-mail)",
     "Password": "Lozinka",
-    "Your password is never stored. Only Apple's session, which lasts about two months, is kept.":
-        "Lozinka se ne čuva. Čuva se samo Apple-ova sesija, koja traje otprilike dva mjeseca.",
+    "Skyfold keeps only Apple's session, which lasts about two months.":
+        "Skyfold čuva samo Appleovu sesiju, koja traje otprilike dva mjeseca.",
     "Cancel": "Otkaži",
     "Signing in…": "Prijavljujem…",
     "Confirm": "Potvrdi",
@@ -588,7 +588,7 @@ BS: dict[str, str] = {
     "Shown as of the last refresh at {time}.": "Prikazano stanje sa zadnjeg osvježavanja u {time}.",
     "Sign-in and sync database: {path}": "Prijava i baza sinhronizacije: {path}",
     "Skyfold is not made by Apple. It uses the same web services as iCloud.com.":
-        "Skyfold nije Apple-ov program. Koristi iste web servise kao iCloud.com.",
+        "Skyfold nije Appleov program. Koristi iste web servise kao iCloud.com.",
     "The Drive folder and the photos folder must be separate.": "Drive folder i folder sa slikama moraju biti odvojeni.",
     "The Drive folder doesn't look like before (its sync marker is missing). "
     "Syncing has stopped so nothing gets deleted by mistake.":

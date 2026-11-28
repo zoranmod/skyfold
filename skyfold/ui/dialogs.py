@@ -472,9 +472,13 @@ class _Dialog(QDialog):
         if self.glass:
             self._material()
             return
+        self._match_frame()  # the title bar in the window's own colours (dark theme: a dark title bar)
+
+    def _match_frame(self) -> None:
         from .backdrop import match_frame
 
-        match_frame(self)  # the title bar in the window's own colours (dark theme: a dark title bar)
+        c = getattr(self, "c", None) or {}  # the app's theme where the window has it, not the system's
+        match_frame(self, c.get("bg"), c.get("text"))
 
     def changeEvent(self, e) -> None:  # noqa: N802
         super().changeEvent(e)
@@ -485,9 +489,7 @@ class _Dialog(QDialog):
                 if e.type() == QEvent.PaletteChange:
                     self._material()  # (light or dark material, and the layers in the new colours)
                 return
-            from .backdrop import match_frame
-
-            match_frame(self)  # the theme changed while it was open
+            self._match_frame()  # the theme changed while it was open
 
 
 class Toggle(QCheckBox):
@@ -639,11 +641,22 @@ def _field(w: QLineEdit) -> QLineEdit:
 
 # login ------------------------------------------------------------------------
 class LoginDialog(_Dialog):
+    """Signing in: Apple ID and password, then Apple's code. The last step of first run, in the same
+    see-through window as the two before it (same size, same top, same footer band). Also opened on its
+    own, from Settings or when Apple's session ran out: the same window without the step bars."""
+
+    GLASS = True
     loggedIn = Signal(object, str)  # api, apple_id
 
-    def __init__(self, apple_id: str = "") -> None:
+    def __init__(self, apple_id: str = "", palette: dict[str, str] | None = None, first_run: bool = False,
+                 size: QSize | None = None) -> None:
         super().__init__(t("Sign in – {app}", app=APP_NAME))
-        self.setFixedWidth(_fit_screen(480, 0)[0])
+        from .theme import palette as _palette
+
+        self.c = palette or _palette("system")
+        # as large as the first-run window (size: what that window had when it closed), and it stays
+        # so on the code page and with an error: the text may move, the window must not
+        self.setFixedSize(size if size is not None else FolderSetupDialog.usual_size(self.c))
         self.api: Any = None
         self._task: Any = None
         self._cancelled = False
@@ -652,8 +665,20 @@ class LoginDialog(_Dialog):
         self._waiting = False  # either credentials or code verification is in flight
         self._cancel_pressed = False
 
-        frame = QVBoxLayout(self)  # a scrolling body: fits a small screen at high scaling
+        frame = QVBoxLayout(self)
         frame.setContentsMargins(0, 0, 0, 0)
+        frame.setSpacing(0)
+        # the top of first run's last step: the mark, the title, what happens to the password, the steps
+        self.hero = Hero(self.c, 2)
+        self.hero.set_text(t("Sign in to iCloud"),
+                           t("Your password is only used to sign in, with Apple's two-factor code. It is never stored."), 2)
+        if not first_run:  # opened on its own: no "step 3 of 3" (their room stays, so nothing else moves)
+            keep = self.hero.dots.sizePolicy()
+            keep.setRetainSizeWhenHidden(True)
+            self.hero.dots.setSizePolicy(keep)
+            self.hero.dots.hide()
+        frame.addWidget(self.hero)
+        # the fields scroll when the screen is small; the buttons always stay visible
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
@@ -661,22 +686,10 @@ class LoginDialog(_Dialog):
         self._login_body = QWidget()
         self._login_body.setObjectName("Root")
         self._scroll.setWidget(self._login_body)
-        frame.addWidget(self._scroll)
+        frame.addWidget(self._scroll, 1)
         outer = QVBoxLayout(self._login_body)
-        outer.setContentsMargins(0, 0, 0, 22)
+        outer.setContentsMargins(36, 6, 36, 20)  # (as the first-run steps: the fields as wide as the folder field)
         outer.setSpacing(14)
-        from .theme import palette as _palette
-
-        # the top of first run's last step: the mark, the title, the promise about the password, the steps
-        self.hero = Hero(_palette("system"), 2)
-        self.hero.set_text(t("Sign in to iCloud"),
-                           t("Your password is only used to sign in, with Apple's two-factor code. It is never stored."), 2)
-        outer.addWidget(self.hero)
-        inner = QVBoxLayout()
-        inner.setContentsMargins(36, 0, 36, 0)
-        inner.setSpacing(14)
-        outer.addLayout(inner)
-        outer = inner
 
         self.pages = QStackedWidget()
         outer.addWidget(self.pages)
@@ -697,7 +710,7 @@ class LoginDialog(_Dialog):
         l1.addWidget(self.email)
         l1.addWidget(self.password)
         note = _label(
-            t("Your password is never stored. Only Apple's session, which lasts about two months, is kept."),
+            t("Skyfold keeps only Apple's session, which lasts about two months."),
             "Hint",
             True,
         )
@@ -733,10 +746,16 @@ class LoginDialog(_Dialog):
         self.error = _label("", "ErrorText", True)
         self.error.hide()
         outer.addWidget(self.error)
+        outer.addStretch(1)
 
-        btns = QHBoxLayout()
+        # the footer band of first run: a quiet Cancel on the left (where Back is), Sign in on the right
+        foot = QWidget()
+        foot.setObjectName("Footer")
+        foot.setAttribute(Qt.WA_StyledBackground, True)
+        btns = QHBoxLayout(foot)
+        btns.setContentsMargins(36, 14, 36, 14)
         self.cancel = QPushButton(t("Cancel"))
-        self.cancel.setObjectName("Link")  # quiet, on the left, as Back in the design
+        self.cancel.setObjectName("Link")
         self.cancel.setCursor(Qt.PointingHandCursor)
         self.cancel.clicked.connect(self._cancel_sign_in)
         # Enter must never reach Cancel: when the field with the focus is locked while Apple answers,
@@ -750,11 +769,13 @@ class LoginDialog(_Dialog):
         btns.addWidget(self.cancel)
         btns.addStretch(1)
         btns.addWidget(self.ok)
-        outer.addLayout(btns)
+        frame.addWidget(foot)
         self.setTabOrder(self.password, self.ok)
         self.setTabOrder(self.ok, self.cancel)
         (self.password if apple_id else self.email).setFocus()
-        self._shrink()
+
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.c = palette
 
     def _busy(self, busy: bool, text: str | None = None) -> None:
         if busy:
@@ -766,16 +787,9 @@ class LoginDialog(_Dialog):
         if text:
             self.ok.setText(text)
 
-    def _shrink(self) -> None:
-        lay = self._login_body.layout()
-        lay.activate()
-        h = lay.totalHeightForWidth(self.width()) if lay.hasHeightForWidth() else lay.totalSizeHint().height()
-        self.resize(self.width(), min(h + 2, _fit_screen(0, 100000)[1]))
-
     def _show_error(self, msg: str) -> None:
         self.error.setText(msg)
         self.error.setVisible(bool(msg))
-        self._shrink()
 
     def _next(self) -> None:
         if getattr(self, "_page1", None) is None:  # still on the Apple ID / password page
@@ -793,7 +807,6 @@ class LoginDialog(_Dialog):
         self._show_error("")
         self._busy(True, t("Signing in…"))
         self.wait_note.show()
-        self._shrink()
         self._waiting = True
         self.password.clear()
 
@@ -807,13 +820,12 @@ class LoginDialog(_Dialog):
             if step.needs_code:
                 self._bring_forward()  # Apple has just sent the code: this window must be in sight
                 self.code_info.setText(step.notice)
-                # the stack keeps the tallest page's height: take the sign-in page out
+                # only the code page is left in the stack
                 self._page1 = self.pages.widget(0)
                 self.pages.removeWidget(self._page1)
                 self._page1.hide()
                 self.pages.setCurrentIndex(0)
                 self.wait_note.hide()
-                self._shrink()
                 self._busy(False, t("Confirm"))
                 self.code.setFocus()
             else:
@@ -832,7 +844,6 @@ class LoginDialog(_Dialog):
         self._busy(True, t("Checking…"))
         self._waiting = True
         self.wait_note.show()
-        self._shrink()
         api = self.api  # the task belongs to this attempt, even if Cancel is clicked
 
         def fail(msg: str) -> None:
@@ -2778,7 +2789,20 @@ class FolderSetupDialog(_Dialog):
         self._body.adjustSize()
         want = self.hero.sizeHint().height() + max(self.steps.widget(i).sizeHint().height()
                                                     for i in range(self.steps.count())) + 26 + 62
-        self.setFixedHeight(min(want, room))
+        self.setFixedHeight(_fit_screen(0, min(want, room))[1])
+
+    @classmethod
+    def usual_size(cls, palette: dict[str, str]) -> QSize:
+        """The window's size with nothing to say about the folder: signing in opens just as large."""
+        import shiboken6
+
+        dlg = cls("", palette)
+        dlg.msg.hide()
+        dlg._had_msg = False
+        dlg._fit_height()
+        size = dlg.size()
+        shiboken6.delete(dlg)  # (never shown; not left among the app's windows)
+        return size
 
     def chosen_path(self) -> str:
         return str(Path(self.path.text().strip()).expanduser())

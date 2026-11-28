@@ -779,7 +779,12 @@ class Controller(QObject):
             log.info("Sign-in window reopened (existing attempt)")
             return
         self._dialogs.pop("login", None)
-        dlg = LoginDialog(self.settings.apple_id)
+        # right after first run's two steps: step 3 of 3, as large as that window and where it stood
+        first = getattr(self, "_first_run_login", None)
+        self._first_run_login = None
+        dlg = LoginDialog(self.settings.apple_id, getattr(self, "c", None), first is not None, first[0] if first else None)
+        if first:
+            dlg.move(first[1])
 
         def commit(api, apple_id: str) -> None:
             _RedactEmails.remember(apple_id)
@@ -1012,6 +1017,7 @@ class Controller(QObject):
             self.settings.save()
             self.req.applySettings.emit(self.settings.copy(), False, False)
             if not self.settings.apple_id:
+                self._first_run_login = (dlg.size(), dlg.pos())  # signing in takes this window's place
                 QTimer.singleShot(200, self.open_login)
             else:
                 self.req.syncNow.emit(True)
