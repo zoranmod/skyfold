@@ -136,6 +136,29 @@ def chevron_file(color: str) -> str:
     return path.as_posix()
 
 
+def branch_file(color: str, open_: bool) -> str:
+    """A tree's expand arrow as the app's thin chevron (right when closed, down when open), instead of
+    the style's small filled triangle. Drawn at 1x and 2x (Qt picks "@2x" on high-DPI screens)."""
+    name = f"branch_{'open' if open_ else 'closed'}_{color.lstrip('#')}"
+    base = _images() / f"{name}.png"
+    for scale, path in ((1, base), (2, _images() / f"{name}@2x.png")):
+        if path.exists():
+            continue
+        pm = QPixmap(16 * scale, 16 * scale)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.scale(scale, scale)
+        p.setPen(QPen(QColor(color), 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        if open_:
+            p.drawPolyline([QPointF(4.5, 6.5), QPointF(8, 10), QPointF(11.5, 6.5)])
+        else:
+            p.drawPolyline([QPointF(6.5, 4.5), QPointF(10, 8), QPointF(6.5, 11.5)])
+        p.end()
+        pm.save(str(path))
+    return base.as_posix()
+
+
 def mark_file(color: str, kind: str) -> str:
     """Tick ("check") or dash ("part") for tree check boxes, drawn into a temp PNG like the chevron."""
     path = _images() / f"{kind}_{color.lstrip('#')}.png"
@@ -193,6 +216,8 @@ QTreeView {{ background: {c['surface']}; border: 1px solid {c['border']}; border
 QTreeView {{ outline: 0; }}
 QTreeView::item {{ padding: 4px 2px; border: none; }}
 QTreeView::item:hover, QTreeView::item:selected {{ background: {c['hover']}; color: {c['text']}; border-radius: 6px; }}
+QTreeView::branch:has-children:closed {{ image: url({branch_file(c['muted'], False)}); }}
+QTreeView::branch:has-children:open {{ image: url({branch_file(c['muted'], True)}); }}
 QTreeView::indicator {{ width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid {c['border_strong']}; background: transparent; }}
 QTreeView::indicator:checked {{ background: {c['accent']}; border-color: {c['accent']}; image: url({tick}); }}
 QTreeView::indicator:indeterminate {{ background: {c['accent']}; border-color: {c['accent']}; image: url({dash}); }}

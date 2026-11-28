@@ -4,7 +4,7 @@ import math
 
 from PySide6.QtCore import QEvent, QObject, QPointF, Qt
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QTransform
-from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QStyle, QStyleOption, QWidget
+from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QLineEdit, QStyle, QStyleOption, QWidget
 
 from .backdrop import glass_colours
 from .dialogs import _Dialog
@@ -90,6 +90,56 @@ class LibraryDialog(_Dialog):
         )
 
 
+class _ClearButton(QAbstractButton):
+    """The search field's clear button: a thin "×" in the app's line icons, quiet at rest, the text's
+    colour on a soft round layer under the mouse."""
+
+    SIZE = 22
+
+    def __init__(self, palette: dict) -> None:
+        super().__init__()
+        from ..i18n import t
+
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)  # (Esc and the keyboard stay in the field)
+        self.setAttribute(Qt.WA_Hover)
+        self.setToolTip(t("Clear search"))
+        self.setAccessibleName(t("Clear search"))
+        self.apply_palette(palette)
+
+    def apply_palette(self, palette: dict) -> None:
+        self.c = palette
+        self.update()
+
+    def enterEvent(self, e) -> None:  # noqa: N802
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:  # noqa: N802
+        self.update()
+        super().leaveEvent(e)
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        from PySide6.QtCore import QRectF
+
+        from .svgicons import pixmap
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        hot = self.underMouse() or self.isDown()
+        if hot:
+            layer = QColor(self.c["text"])
+            layer.setAlpha(28 if not self.isDown() else 40)
+            p.setPen(Qt.NoPen)
+            p.setBrush(layer)
+            p.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 5, 5)
+        dpr = max(1.0, self.devicePixelRatioF())
+        pm = pixmap("close", self.c["text"] if hot else self.c["muted"], 16, dpr, stroke=1.6)
+        p.drawPixmap(int((self.width() - 16) / 2), int((self.height() - 16) / 2), pm)
+        p.end()
+
+
 class SearchField(SoftCard):
     """Keep the native editable field, shortcuts, accessible name and clear action."""
     def __init__(self, edit: QLineEdit, palette: dict) -> None:
@@ -102,6 +152,17 @@ class SearchField(SoftCard):
         layout.setSpacing(8)
         layout.addWidget(self.icon)
         layout.addWidget(edit, 1)
+        # The clear button is the app's own, in the row with the magnifier and the text, so it sits
+        # in the middle like them. (Qt's built-in one was the style's heavy "×", matched nothing
+        # else, and hung 7 px below the middle of the field.) Shown only while there is text.
+        self.clear_button = None
+        if edit.isClearButtonEnabled():
+            edit.setClearButtonEnabled(False)
+            self.clear_button = _ClearButton(palette)
+            self.clear_button.clicked.connect(lambda: (edit.clear(), edit.setFocus()))
+            layout.addWidget(self.clear_button, 0, Qt.AlignVCenter)
+            edit.textChanged.connect(lambda text: self.clear_button.setVisible(bool(text)))
+            self.clear_button.setVisible(bool(edit.text()))
         self.setFixedHeight(34)
         self.setFocusProxy(edit)
         edit.installEventFilter(self)
@@ -110,6 +171,8 @@ class SearchField(SoftCard):
     def apply_palette(self, palette: dict) -> None:
         self.focus_color = QColor(palette["focus_ring"])
         self.icon.apply_palette(palette)
+        if self.clear_button is not None:
+            self.clear_button.apply_palette(palette)
         self.update()
 
     def eventFilter(self, obj, event):

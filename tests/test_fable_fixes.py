@@ -82,3 +82,41 @@ def test_a_minimized_maximized_window_comes_back_maximized(qapp):  # noqa: F811
     Controller._show_dialog(ctl, "notes", QWidget())
     assert not w.isMinimized() and w.windowState() & Qt.WindowMaximized
     w.close()
+
+
+def test_the_search_fields_clear_button_is_ours_and_centred(qapp):  # noqa: F811
+    """Not Qt's heavy built-in "×" hanging below the middle: the app's own, in line with the
+    magnifier, shown only while there is text."""
+    from PySide6.QtWidgets import QLineEdit
+
+    from skyfold.ui import theme
+    from skyfold.ui.library_frame import SearchField
+
+    qapp.setStyleSheet(theme.stylesheet(theme.DARK)
+                       + "SoftCard#LibrarySearch QLineEdit { background:transparent; border:none; padding:0; }")
+    edit = QLineEdit()
+    edit.setClearButtonEnabled(True)
+    field = SearchField(edit, theme.DARK)
+    field.resize(330, 34)
+    field.show()
+    try:
+        assert not edit.isClearButtonEnabled() and field.clear_button is not None
+        assert not field.clear_button.isVisible()
+        edit.setText("garden")
+        qapp.processEvents()
+        b = field.clear_button
+        assert b.isVisible() and b.geometry().center().y() == field.icon.geometry().center().y()
+        assert abs(b.geometry().center().y() - field.rect().center().y()) <= 1
+        b.click()
+        assert edit.text() == ""
+    finally:
+        field.close()
+        qapp.setStyleSheet("")
+
+
+def test_trees_use_the_apps_thin_chevrons():
+    from skyfold.ui import theme
+
+    css = theme.stylesheet(theme.DARK)
+    assert "QTreeView::branch:has-children:closed" in css and "branch_closed_" in css
+    assert "QTreeView::branch:has-children:open" in css and "branch_open_" in css
