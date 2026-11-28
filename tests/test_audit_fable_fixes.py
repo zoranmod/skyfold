@@ -307,14 +307,14 @@ def test_signing_in_with_another_apple_id_removes_the_old_session(offline_auth):
 
 
 def test_the_photos_database_of_one_apple_id_is_never_used_for_another(tmp_path, monkeypatch):
-    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtWidgets import QApplication
 
     from skyfold import engine as eng
     from skyfold import worker as wk
     from skyfold.config import Settings
     from tests.test_engine import FakeRemote
 
-    QCoreApplication.instance() or QCoreApplication([])
+    QApplication.instance() or QApplication([])
     trashed = []
     monkeypatch.setattr(eng.Syncer, "_trash", lambda self, p: (trashed.append(p.name), p.unlink()))
     monkeypatch.setattr(wk, "STATE_DB", tmp_path / "state.db")

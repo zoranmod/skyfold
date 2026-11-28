@@ -7,7 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QObject, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
+from PySide6.QtWidgets import QApplication
 
 from skyfold import engine as eng
 from skyfold import worker as wk
@@ -83,7 +84,7 @@ def test_large_drive_question_counts_overlapping_paths_without_pairwise_scans():
 
 
 def pump(cond, timeout=10.0):
-    app = QCoreApplication.instance()
+    app = QApplication.instance()
     end = time.time() + timeout
     while time.time() < end:
         app.processEvents()
@@ -95,7 +96,7 @@ def pump(cond, timeout=10.0):
 
 @pytest.fixture()
 def qt(tmp_path, monkeypatch):
-    app = QCoreApplication.instance() or QCoreApplication([])
+    app = QApplication.instance() or QApplication([])
     remote = FakeRemote()
     monkeypatch.setattr(wk, "STATE_DB", tmp_path / "state.db")
     monkeypatch.setattr(wk.auth, "restore", lambda _id: object())
