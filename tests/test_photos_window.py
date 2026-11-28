@@ -1042,3 +1042,60 @@ def test_the_size_bar_shows_the_photo_size_as_a_percentage(qapp, made_up):
     finally:
         pw.PhotosWindow.zoom_level = pw.ZOOM_DEFAULT
         w.close()
+
+
+@pytest.mark.parametrize("lang", ["en", "bs"])
+def test_the_size_bar_never_covers_the_view_switch_in_a_narrow_window(qapp, made_up, lang):
+    """Years / Months / All Photos and − 100% + at every width down to the smallest, with the sidebar
+    opened again by hand (the photos then get 286 px: the size bar lay over "All Photos")."""
+    from skyfold import i18n
+    from skyfold.ui.photos_window import HEAD, PhotosWindow
+
+    i18n.set_language(lang)
+    was_open = PhotosWindow.sidebar_open
+    w = window(qapp, made_up)
+    try:
+        assert w.view_buttons["all"].text() == {"en": "All Photos", "bs": "Sve slike"}[lang]
+        least = w.minimumWidth()
+        seen = set()
+        for width in [least, *range(least + 20, 1200, 40)]:
+            for sidebar in (False, True):
+                w.resize(width, 600)
+                pump(qapp, lambda: False, 0.02)
+                if w.side.isVisible() != sidebar:
+                    w.toggle_sidebar()
+                    pump(qapp, lambda: False, 0.02)
+                W = w.browse.width()
+                switch, size = w.pill.geometry(), w.zoom_pill.geometry()
+                where = (lang, width, sidebar, W, switch, size)
+                assert w.pill.isVisible() and w.zoom_pill.isVisible(), where
+                assert not switch.intersects(size), where
+                assert w.zoom_pill.percent.isVisible() and size.left() >= 8 and size.right() < W - 7, where
+                assert size.bottom() <= switch.bottom() and size.top() >= HEAD, where
+                if switch.width() <= W - 16:
+                    assert switch.left() >= 8 and switch.right() < W - 7, where
+                seen.add("above" if size.bottom() < switch.top() else "beside")
+        assert seen == {"above", "beside"}  # on a row of its own only where there is no room beside
+        w.resize(least + 180, 600)  # Years: the switch alone stays in the middle (no bar to make room for)
+        w.set_view("years")
+        pump(qapp, lambda: False, 0.05)
+        assert w.zoom_pill.isHidden() and abs(w.pill.geometry().center().x() - w.browse.width() // 2) <= 1
+    finally:
+        w.close()
+        PhotosWindow.sidebar_open = was_open
+        i18n.set_language("en")
+
+
+@pytest.mark.parametrize("scale", ["1.25", "1.5"])
+def test_the_narrow_window_holds_at_larger_display_scales(scale):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    if os.environ.get("SKYFOLD_PHOTOS_SCALE_RUN"):
+        pytest.skip("the scaled run itself")
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", QT_SCALE_FACTOR=scale, SKYFOLD_PHOTOS_SCALE_RUN="1")
+    run = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-k", "narrow_window",
+                          str(Path(__file__))], cwd=Path(__file__).resolve().parents[1], env=env,
+                         capture_output=True, text=True, timeout=300)
+    assert run.returncode == 0, run.stdout[-3000:] + run.stderr[-1000:]
