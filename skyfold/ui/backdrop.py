@@ -90,6 +90,21 @@ def glass_supported() -> bool:
         return False
 
 
+def frame_margins() -> tuple[int, int, int, int]:
+    """How far Windows' frame reaches into the window for the material (left, right, top, bottom):
+    from the bottom edge up, further than any window is tall, and nothing from the top.
+
+    Not the usual -1 all round ("the whole window is frame"): with the frame extended from the top,
+    Windows draws the caption buttons of a maximized window as tall as in a normal one, although the
+    maximized title bar is thinner. Minimize, maximize and close then sat lower than in every other
+    window and their highlight hung below the title bar, over the window's content (at 200 %: buttons
+    57 px tall in a title bar of 45). From the bottom, the material fills the window just the same."""
+    return 0, 0, 0, FRAME_FILL
+
+
+FRAME_FILL = 0x7FFF  # (taller than any screen)
+
+
 def apply_backdrop(widget: QWidget, kind: str = "acrylic", dark: bool = True) -> bool:
     """Ask Windows for its acrylic (a popup: the tray panel) or Mica (a window) material behind the
     widget, which must have Qt.WA_TranslucentBackground. Returns whether Windows took it."""
@@ -105,7 +120,7 @@ def apply_backdrop(widget: QWidget, kind: str = "acrylic", dark: bool = True) ->
         dwm = ctypes.windll.dwmapi
         mode = ctypes.c_int(1 if dark else 0)
         dwm.DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(mode), ctypes.sizeof(mode))
-        m = MARGINS(-1, -1, -1, -1)
+        m = MARGINS(*frame_margins())
         dwm.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(m))
         value = ctypes.c_int(BACKDROPS.get(kind, 3))
         return dwm.DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ctypes.byref(value),
