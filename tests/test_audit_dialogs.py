@@ -1,7 +1,7 @@
 """Audit of Skyfold 1.1, the windows part: the Drive folder choice with an incomplete list from iCloud,
 a subfolder that couldn't be read, the deletion question (every item shown, always fits the screen),
 screen-reader names and roles in first run and on the help cards, Find My after a failed refresh,
-the real settings folder in About, and Bosnian counts. Made-up data only; nothing is read from iCloud."""
+and the real settings folder in About. Made-up data only; nothing is read from iCloud."""
 
 from __future__ import annotations
 
@@ -239,7 +239,6 @@ def _fully_visible(d, button) -> bool:
 def test_the_question_fits_a_small_screen_and_the_answers_stay_in_view(app, monkeypatch, two):
     # 1366 x 768 at 150 %: about 911 x 512 logical pixels above the taskbar, the title bar included
     monkeypatch.setattr(dialogs, "_room_for", lambda _w: 512 - 32)
-    i18n.set_language("bs")  # (the longer wording)
     try:
         d = dialogs.PendingDialog(_pending(503, 40 if two else 0), theme.LIGHT, limit=50)
         try:

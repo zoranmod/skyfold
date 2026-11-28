@@ -1,36 +1,6 @@
-"""Counts read naturally in both languages: Bosnian's 1 / 2-4 / 5+ forms (11-14 take the last) and
-English's 1 / other, chosen by t() from the number it is given (also "1,284" as the app writes it)."""
-import pytest
-
+"""Counts read naturally: one form for 1, another for everything else, chosen by t() from the
+number it is given (also "1,284" as the app writes it)."""
 from skyfold import i18n
-
-
-@pytest.fixture
-def bs():
-    i18n.set_language("bs")
-    yield
-    i18n.set_language("en")
-
-
-@pytest.mark.parametrize("n, want", [
-    (1, "1 slika je obrisana u iCloudu"), (3, "3 slike su obrisane u iCloudu"),
-    (5, "5 slika je obrisano u iCloudu"), (11, "11 slika je obrisano u iCloudu"),
-    (12, "12 slika je obrisano u iCloudu"), (21, "21 slika je obrisana u iCloudu"),
-    (24, "24 slike su obrisane u iCloudu"), (112, "112 slika je obrisano u iCloudu"),
-    ("1,284", "1,284 slike su obrisane u iCloudu"),
-])
-def test_bosnian_deletion_counts(bs, n, want):
-    assert i18n.t("{n} photos were deleted in iCloud", n=n) == want
-
-
-def test_bosnian_rows_and_choices(bs):
-    assert i18n.t("{photos} photos · {videos} videos · {size}", photos="921", videos=2, size="7 GB") \
-        == "921 slika · 2 videa · 7 GB"
-    assert i18n.t("{files} files · {size}", files=3, size="1 GB") == "3 fajla · 1 GB"
-    assert [i18n.t("{n} days", n=n) for n in (1, 3, 30)] == ["1 dan", "3 dana", "30 dana"]
-    assert [i18n.t("{n} months", n=n) for n in (1, 3, 6)] == ["1 mjesec", "3 mjeseca", "6 mjeseci"]
-    assert [i18n.t("{n} notes", n=n) for n in (1, 2, 126)] == ["1 bilješka", "2 bilješke", "126 bilješki"]
-    assert i18n.t("Finished with {n} errors. Will retry.", n=2) == "Završeno uz 2 greške. Pokušaću ponovo."
 
 
 def test_english_singulars():
@@ -40,6 +10,12 @@ def test_english_singulars():
     assert i18n.t("{n} items", n="1") == "1 item" and i18n.t("{n} items", n="1,001") == "1,001 items"
 
 
+def test_only_one_itself_is_singular():
+    """21, 101 and 1,001 are plural in English (they were singular in the Bosnian the app once had)."""
+    assert [i18n.t("{n} days", n=n) for n in (1, 2, 11, 21, 101)] == ["1 day", "2 days", "11 days", "21 days", "101 days"]
+    assert [i18n.t("{n} notes", n=n) for n in (1, 21, "1,001")] == ["1 note", "21 notes", "1,001 notes"]
+
+
 def test_every_form_fills_the_same_values():
     """Each form uses exactly the placeholders of its text, so no call can fail or lose a value."""
     import string
@@ -47,10 +23,9 @@ def test_every_form_fills_the_same_values():
     def names(text):
         return {f for _, f, _, _ in string.Formatter().parse(text) if f}
 
-    for table in (i18n._FORMS_BS, i18n._FORMS_EN):
-        for text, forms in table.items():
-            if callable(forms):
-                continue
-            for form in forms[1:]:
-                if form:
-                    assert names(form) == names(text), (text, form)
+    for text, forms in i18n._FORMS_EN.items():
+        if callable(forms):
+            continue
+        for form in forms[1:]:
+            if form:
+                assert names(form) == names(text), (text, form)

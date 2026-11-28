@@ -2219,7 +2219,7 @@ const notes=@@data@@;
 const S=@@strings@@;
 const $=id=>document.getElementById(id),icon=(name,cls='')=>`<svg class="icon ${cls}" aria-hidden="true"><use href="#${name}"/></svg>`;
 for(const n of notes){n.f=n.f||'Notes';n.t=n.t||S.untitled}
-function plural(n,forms){const a=n%10,b=n%100;const f=n===1?forms[0]:(S.slavic&&a===1&&b!==11)?forms[0]:(S.slavic&&a>=2&&a<=4&&(b<12||b>14))?forms[1]:forms[2];return f.replace('{n}',n)}
+function plural(n,forms){return (n===1?forms[0]:forms[1]).replace('{n}',n)}
 let selected='';const navClosed=new Set(),KEY='skyfold-collapsed';let shut=new Set();
 try{const v=JSON.parse(localStorage.getItem(KEY)||'[]');if(Array.isArray(v))shut=new Set(v.filter(x=>typeof x==='string'))}catch(e){}
 const folders=[...new Set(notes.map(n=>n.f))];
@@ -2278,8 +2278,6 @@ drawNav();draw();
 
 def render_index(data: list, updated: str, theme: str = "system") -> str:
     """The Notes.html page: the notes' data (title, folder, page, date, locked) and this UI's words."""
-    from .i18n import language
-
     words = {
         "title": t("Apple Notes"), "brand_sub": t("Notes on this PC"), "saved": t("Saved to this PC"),
         "updated": updated, "theme": t("Light / dark / OLED"), "folders": t("Folders"), "library": t("Your library"),
@@ -2294,18 +2292,15 @@ def render_index(data: list, updated: str, theme: str = "system") -> str:
         "collapse": t("Collapse all"), "expand": t("Expand all"), "none": t("No notes found"),
         "tryOther": t("Try another title or folder name."), "showAll": t("Show all notes"),
         "toOled": t("Switch to OLED theme"), "toDark": t("Switch to dark theme"), "toLight": t("Switch to light theme"),
-        "notes": [t("{n} note"), t("{n} notes (2-4)"), t("{n} notes")],
-        "folderCount": [t("{n} folder"), t("{n} folders (2-4)"), t("{n} folders")],
-        "slavic": language() == "bs",  # 1 / 2-4 / 5+ forms ("1 bilješka, 3 bilješke, 7 bilješki")
+        "notes": [t("{n} note"), t("{n} notes")],  # the form for 1, and for every other number
+        "folderCount": [t("{n} folder"), t("{n} folders")],
     }
-    if not strings["slavic"]:
-        strings["notes"][1], strings["folderCount"][1] = strings["notes"][2], strings["folderCount"][2]
 
     def js(v) -> str:
         # every "<" escaped: a note title like "<!--<script>" can't start a comment or a tag in the page
         return json.dumps(v, ensure_ascii=False).replace("<", "\\u003c")
 
-    page = INDEX_TEMPLATE.replace("@@theme_script@@", THEME_SCRIPT).replace("@@lang@@", language() or "en")
+    page = INDEX_TEMPLATE.replace("@@theme_script@@", THEME_SCRIPT).replace("@@lang@@", "en")
     page = page.replace("@@default_theme@@", _export_theme(theme))
     for k, v in words.items():
         page = page.replace(f"@@{k}@@", html.escape(v, quote=True))

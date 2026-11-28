@@ -419,11 +419,9 @@ def test_sort_zoom_full_screen_and_keys(qapp, library):
     w.close()
 
 
-@pytest.mark.parametrize("lang", ["en", "bs"])
-def test_fits_a_small_screen(qapp, library, lang):
+def test_fits_a_small_screen(qapp, library):
     from skyfold import i18n
     from skyfold.ui import theme
-    i18n.set_language(lang)
     c = theme.palette("light")
     qapp.setStyleSheet(theme.stylesheet(c))
     try:

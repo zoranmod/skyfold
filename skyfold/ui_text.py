@@ -3,13 +3,6 @@
 from __future__ import annotations
 
 
-def _european() -> bool:
-    """Bosnian writes 1.234,5; English 1,234.5."""
-    from .i18n import language
-
-    return language() == "bs"
-
-
 def size_text(n: int, base: int = 1000) -> str:
     """Human size like Windows/Apple storage pages: 1 GB = 1000^3 by default."""
     size = float(n)
@@ -17,15 +10,14 @@ def size_text(n: int, base: int = 1000) -> str:
         if size < base or unit == "TB":
             if unit in ("B", "KB"):
                 return f"{size:.0f} {unit}"
-            text = f"{size:.1f} {unit}"
-            return text.replace(".", ",") if _european() else text
+            return f"{size:.1f} {unit}"
         size /= base
     return f"{n} B"
 
 
 def count_text(n: int) -> str:
-    """1234567 -> '1,234,567' in English, '1.234.567' in Bosnian."""
-    return f"{n:,}".replace(",", ".") if _european() else f"{n:,}"
+    """1234567 -> '1,234,567'."""
+    return f"{n:,}"
 
 
 class Rate:

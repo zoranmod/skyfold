@@ -182,7 +182,7 @@ def test_sidebar_sets_and_search(qapp, made_up):
         w.set_key = "library"
         w.search.setText("rome")
         assert pump(qapp, lambda: w.query == "rome")
-        assert len(w.model.items) == 2 and w.title.text() in ("Search results", "Rezultati pretrage")
+        assert len(w.model.items) == 2 and w.title.text() == "Search results"
         w.search.setText("nothing like this")
         w.search.returnPressed.emit()  # Enter searches at once (and never clicks a button)
         assert w.inner.currentWidget() is w.empty and not w.selecting
@@ -817,19 +817,16 @@ def test_the_viewer_keeps_its_photos_when_the_library_is_read_again(qapp, made_u
         w.close()
 
 
-def test_numbers_and_dates_follow_the_language(qapp):
+def test_numbers_and_dates_are_english_whatever_language_is_asked_for(qapp):
     from datetime import datetime
 
     from skyfold import i18n
     from skyfold.ui import photos_window as pw
 
-    try:
-        i18n.set_language("en")
+    for lang in ("en", "bs"):  # ("bs": what an older settings file may still ask for)
+        i18n.set_language(lang)
         assert pw._num(12345) == "12,345" and pw._day(datetime(2024, 3, 5)) == "5 March 2024"
-        i18n.set_language("bs")
-        assert pw._num(12345) == "12.345" and pw._day(datetime(2024, 3, 5)).startswith("5. ")
-    finally:
-        i18n.set_language("en")
+        assert pw.PhotosWindow._range(datetime(2024, 3, 5), datetime(2024, 3, 9), True) == "5–9 March 2024"
 
 
 def test_a_narrow_window_puts_the_sidebar_aside_and_shortens_the_bar(qapp, made_up):
@@ -1043,18 +1040,16 @@ def test_the_size_bar_shows_the_photo_size_as_a_percentage(qapp, made_up):
         w.close()
 
 
-@pytest.mark.parametrize("lang", ["en", "bs"])
-def test_the_size_bar_never_covers_the_view_switch_in_a_narrow_window(qapp, made_up, lang):
+def test_the_size_bar_never_covers_the_view_switch_in_a_narrow_window(qapp, made_up):
     """Years / Months / All Photos and − 100% + at every width down to the smallest, with the sidebar
     opened again by hand (the photos then get 286 px: the size bar lay over "All Photos")."""
     from skyfold import i18n
     from skyfold.ui.photos_window import HEAD, PhotosWindow
 
-    i18n.set_language(lang)
     was_open = PhotosWindow.sidebar_open
     w = window(qapp, made_up)
     try:
-        assert w.view_buttons["all"].text() == {"en": "All Photos", "bs": "Sve slike"}[lang]
+        assert w.view_buttons["all"].text() == "All Photos"
         least = w.minimumWidth()
         seen = set()
         for width in [least, *range(least + 20, 1200, 40)]:
@@ -1066,7 +1061,7 @@ def test_the_size_bar_never_covers_the_view_switch_in_a_narrow_window(qapp, made
                     pump(qapp, lambda: False, 0.02)
                 W = w.browse.width()
                 switch, size = w.pill.geometry(), w.zoom_pill.geometry()
-                where = (lang, width, sidebar, W, switch, size)
+                where = (width, sidebar, W, switch, size)
                 assert w.pill.isVisible() and w.zoom_pill.isVisible(), where
                 assert not switch.intersects(size), where
                 assert w.zoom_pill.percent.isVisible() and size.left() >= 8 and size.right() < W - 7, where
@@ -1083,6 +1078,161 @@ def test_the_size_bar_never_covers_the_view_switch_in_a_narrow_window(qapp, made
         w.close()
         PhotosWindow.sidebar_open = was_open
         i18n.set_language("en")
+
+
+def _narrow_window_widths(qapp, w):
+    """Every allowed width from the smallest, with the sidebar closed and opened again by hand."""
+    least = w.minimumWidth()
+    for width in [least, *range(least + 20, 1200, 40)]:
+        for sidebar in (False, True):
+            w.resize(width, 600)
+            pump(qapp, lambda: False, 0.02)
+            if w.side.isVisible() != sidebar:
+                w.toggle_sidebar()
+                pump(qapp, lambda: False, 0.02)
+            yield width, sidebar, w.browse.width()
+
+
+def test_the_title_is_never_under_select_or_the_search_in_a_narrow_window(qapp, made_up):
+    """"Library" and its line slid under Select and the search field (286 px of photos with the
+    sidebar open in the smallest window)."""
+    from PySide6.QtWidgets import QLabel, QWidget
+
+    from skyfold.ui.photos_window import PhotosWindow
+
+    was_open = PhotosWindow.sidebar_open
+    w = window(qapp, made_up)
+    try:
+        assert w.title.text() == "Library" and w.select_btn.isVisible()
+        narrowest = 10_000
+        for width, sidebar, W in _narrow_window_widths(qapp, w):
+            where = (width, sidebar, W)
+            narrowest = min(narrowest, W)
+            title, line = w.title.geometry(), w.subtitle.geometry()
+            others = [c for c in w.header.findChildren(QWidget) if c.parent() is w.header and c.isVisible()
+                      and c not in (w.title, w.subtitle)]
+            assert w.select_btn in others and w.fold in others and len(others) == 3, where  # (+ the search)
+            for other in others:
+                assert not other.geometry().intersects(title), (where, other, title)
+                assert not other.geometry().intersects(line), (where, other, line)
+                assert 0 <= other.x() and other.geometry().right() < W, (where, other)
+            # (the test run has no fonts, every letter is as wide as it is tall: room for the real
+            # "Library", 76 px, is what is asked for; a longer text ends in … inside its place)
+            assert w.title.isVisible() and w.subtitle.isVisible() and title.left() == line.left() == 46, where
+            assert title.width() == line.width() >= 60, where
+            for label in (w.title, w.subtitle):
+                shown = QLabel.text(label)  # (what is drawn; text() is the whole text)
+                cut = shown != label.text()
+                assert cut == (label.fontMetrics().horizontalAdvance(label.text()) > label.width()), (where, shown)
+                assert not cut or shown.endswith("…"), (where, shown)
+        assert narrowest < 300  # (the case that was broken is among them)
+    finally:
+        w.close()
+        PhotosWindow.sidebar_open = was_open
+
+
+def test_the_search_is_a_button_in_a_narrow_window_and_opens_over_the_title(qapp, made_up):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtWidgets import QApplication
+
+    from skyfold.ui.photos_window import PhotosWindow
+
+    was_open = PhotosWindow.sidebar_open
+    w = window(qapp, made_up)
+
+    def esc():
+        QApplication.sendEvent(w, QKeyEvent(QKeyEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+        pump(qapp, lambda: False, 0.02)
+
+    try:
+        seen = set()
+        for width, sidebar, W in _narrow_window_widths(qapp, w):
+            where = (width, sidebar, W)
+            if W >= w.COMPACT_SEARCH:  # wide: the field as it always was
+                seen.add("field")
+                assert w.search_field.isVisible() and w.search_btn.isHidden(), where
+                sw = max(120, min(220, W - 360))
+                assert (w.search_field.x(), w.search_field.width()) == (W - 18 - sw, sw), where
+                continue
+            seen.add("button")
+            assert w.search_btn.isVisible() and w.search_field.isHidden(), where
+            assert w.search_btn.width() == w.search_btn.height() == w.select_btn.height() == 34, where
+            assert w.search_btn.y() == w.select_btn.y() and w.search_btn.geometry().right() == W - 19, where
+        assert seen == {"field", "button"}
+
+        w.resize(w.minimumWidth(), 600)  # the smallest window, the sidebar opened by hand: a button
+        pump(qapp, lambda: False, 0.05)
+        if not w.side.isVisible():
+            w.toggle_sidebar()
+            pump(qapp, lambda: False, 0.05)
+        assert w.search_btn.isVisible() and w.search_btn.accessibleName() == "Search"
+        assert "Ctrl+F" in w.search_btn.toolTip() and not w.search_btn.icon().isNull()
+        assert w.search_btn.focusPolicy() & Qt.TabFocus
+
+        w.search_btn.click()  # opens over the title, up to Select, and takes the keyboard
+        pump(qapp, lambda: False, 0.02)
+        field = w.search_field.geometry()
+        assert w.search_field.isVisible() and w.search_btn.isHidden()
+        assert not w.title.isVisible() and not w.subtitle.isVisible()
+        assert field.left() == 46 and field.width() >= 60 and not field.intersects(w.select_btn.geometry())
+        assert not field.intersects(w.fold.geometry()) and field.right() < w.browse.width()
+        esc()  # Esc: a button again, the title back
+        assert w.search_btn.isVisible() and w.search_field.isHidden() and w.title.isVisible()
+
+        w.open_search()  # (what Ctrl+F does)
+        assert w.search_field.isVisible()
+        w.search.setText("rome")
+        w.search.returnPressed.emit()
+        assert w.title.text() == "Search results"
+        w.grid.setFocus()  # leaving it with a search in progress: it stays open
+        w._search_left()
+        pump(qapp, lambda: False, 0.05)
+        assert w.search_field.isVisible() and w.search_btn.isHidden()
+        w.resize(1200, 700)  # wide: the field in its usual place, the title beside it
+        pump(qapp, lambda: False, 0.05)
+        assert w.search_field.isVisible() and w.title.isVisible() and w.search_field.width() == 220
+        w.resize(w.minimumWidth(), 600)
+        pump(qapp, lambda: False, 0.05)
+        if not w.side.isVisible():
+            w.toggle_sidebar()
+            pump(qapp, lambda: False, 0.05)
+        assert w.search_field.isVisible() and not w.title.isVisible()  # (still searching)
+        esc()
+        assert w.search.text() == "" and w.search_btn.isVisible() and w.title.isVisible()
+
+        w.open_search()  # opened, nothing typed, the keyboard goes elsewhere: a button again
+        w.grid.setFocus()
+        w._search_left()
+        pump(qapp, lambda: False, 0.05)
+        assert w.search_btn.isVisible() and w.search_field.isHidden() and w.title.isVisible()
+    finally:
+        w.close()
+        PhotosWindow.sidebar_open = was_open
+
+
+def test_a_long_title_ends_in_dots_in_a_narrow_window(qapp, made_up):
+    from skyfold.ui.photos_window import PhotosWindow
+
+    was_open = PhotosWindow.sidebar_open
+    w = window(qapp, made_up)
+    try:
+        name = "Summer by the sea"
+        w.title.setText(name)
+        w.resize(w.minimumWidth(), 600)
+        pump(qapp, lambda: False, 0.05)
+        if not w.side.isVisible():
+            w.toggle_sidebar()
+            pump(qapp, lambda: False, 0.05)
+        assert w.title.text() == name == w.title.accessibleName()  # (whole for code and a screen reader)
+        assert w.title.shown_text().endswith("…") and w.title.shown_text() != name
+        assert w.title.geometry().right() < w.select_btn.x()
+        w.resize(1200, 700)
+        pump(qapp, lambda: False, 0.05)
+        assert w.title.shown_text() == name
+    finally:
+        w.close()
+        PhotosWindow.sidebar_open = was_open
 
 
 @pytest.mark.parametrize("scale", ["1.25", "1.5"])

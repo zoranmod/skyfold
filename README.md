@@ -40,7 +40,7 @@
 - **iCloud storage** at a glance in the tray panel.
 - **Built to be safe.** Nothing is deleted permanently, big deletions wait for your OK, and a missing or unplugged folder is never read as "delete everything".
 - **Updates itself.** Skyfold tells you when a new version is out, shows what's new, and updates with one click (your settings and files stay as they are).
-- **Portable and light.** Unzip and run. Follows the Windows light/dark theme, or pick Light, Dark or a nearly black OLED theme. English and Bosnian.
+- **Portable and light.** Unzip and run. Follows the Windows light/dark theme, or pick Light, Dark or a nearly black OLED theme. In English.
 
 > **Skyfold is a public beta.** Two-way iCloud Drive sync is new and has been through many rounds of independent review, but it hasn't met every real-world folder yet. Skyfold always asks before deleting more items than your limit, and nothing it deletes is permanent (Recycle Bin / "Recently Deleted"). Please keep a backup of anything important and [report problems](https://github.com/zoranmod/skyfold/issues).
 

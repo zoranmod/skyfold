@@ -237,12 +237,11 @@ def test_settings_theme_has_a_screen_reader_name(qapp):
         dialog.close()
 
 
-def test_bosnian_note_index_preserves_counts_ending_in_one(qapp, monkeypatch):
+def test_note_index_counts_are_english_with_one_singular(qapp):
     from PySide6.QtQml import QJSEngine
-    from skyfold import i18n
 
-    monkeypatch.setattr(i18n, "_lang", "bs")
     page = ne.render_index([], "")
+    assert '<html lang="en"' in page and "slavic" not in page
     script = "\n".join(line for line in page.splitlines()
                        if line.startswith(("const S=", "function plural(")))
     js = QJSEngine()
@@ -251,7 +250,8 @@ def test_bosnian_note_index_preserves_counts_ending_in_one(qapp, monkeypatch):
         for group in ("notes", "folderCount"):
             # (a top-level const lives only in its own evaluate call: the page script goes along)
             got = js.evaluate(script + f"\nplural({n}, S.{group})").toString()
-            assert got.startswith(f"{n} "), got
+            word = {"notes": "note", "folderCount": "folder"}[group]
+            assert got == (f"{n} {word}" if n == 1 else f"{n} {word}s"), got
 
 
 def test_incomplete_newer_release_does_not_tell_user_they_are_current(qapp, monkeypatch):

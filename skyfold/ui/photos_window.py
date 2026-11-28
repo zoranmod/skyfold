@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractScro
 from shiboken6 import isValid
 
 from .. import photo_library as lib
-from ..i18n import language, t
+from ..i18n import t
 from .icons import glyph
 from .library_frame import LibraryDialog, PaneCorners, SearchField, count_font
 from .panel_parts import SoftCard
@@ -54,13 +54,12 @@ def _month(m: int) -> str:
 
 
 def _day(d: datetime) -> str:
-    return f"{d.day}. {_month(d.month)} {d.year}" if language() == "bs" else f"{d.day} {_month(d.month)} {d.year}"
+    return f"{d.day} {_month(d.month)} {d.year}"
 
 
 def _num(n: int) -> str:
-    """1,284 in English, 1.284 in Bosnian."""
-    s = f"{n:,}"
-    return s.replace(",", ".") if language() == "bs" else s
+    """1,284."""
+    return f"{n:,}"
 
 
 def _duration(sec: float | None) -> str:
@@ -156,10 +155,12 @@ class _SoftButton(QPushButton):
 
 
 class _SquareButton(QToolButton):
-    """The viewer's heart / info / delete / more: 34 × 34 squares, corners 8, a light layer."""
+    """The viewer's heart / info / delete / more: 34 × 34 squares, corners 8, a light layer. (The
+    search button in a narrow window's title band is one too, with Select's corners.)"""
 
-    def __init__(self, tip: str) -> None:
+    def __init__(self, tip: str, radius: float = 8) -> None:
         super().__init__()
+        self.radius = radius
         self.setObjectName("PhotoSquare")
         self.setToolTip(tip)
         self.setAccessibleName(tip)
@@ -171,10 +172,47 @@ class _SquareButton(QToolButton):
     def paintEvent(self, _e) -> None:  # noqa: N802
         p = QPainter(self)
         r = QRectF(self.rect()).adjusted(0, 0, 0, -1)
-        _layer_button(p, self, r, 8, self.isChecked())
+        _layer_button(p, self, r, self.radius, self.isChecked())
         box = QRect(QPoint(), self.iconSize())
         box.moveCenter(r.center().toPoint())
         self.icon().paint(p, box, Qt.AlignCenter, QIcon.Normal if self.isEnabled() else QIcon.Disabled)
+
+
+class _FitLabel(QLabel):
+    """A line of text that ends in … where its place is too narrow for it (the title and its line
+    beside Select and the search); text() is still the whole text, and so is what a screen reader
+    is given."""
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._whole = ""
+        self.setTextFormat(Qt.PlainText)  # (set names come from iCloud)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        self._whole = text
+        self.setAccessibleName(text)
+        self._fit()
+
+    def text(self) -> str:
+        return self._whole
+
+    def shown_text(self) -> str:
+        return QLabel.text(self)
+
+    def resizeEvent(self, e) -> None:  # noqa: N802
+        super().resizeEvent(e)
+        self._fit()
+
+    def changeEvent(self, e) -> None:  # noqa: N802
+        super().changeEvent(e)
+        if e.type() in (QEvent.FontChange, QEvent.StyleChange):
+            self._fit()
+
+    def _fit(self) -> None:
+        shown = self.fontMetrics().elidedText(self._whole, Qt.ElideRight, max(0, self.width()))
+        if shown != QLabel.text(self):
+            QLabel.setText(self, shown)
 
 
 class _QuietButton(QToolButton):
@@ -1389,8 +1427,8 @@ class PhotosWindow(LibraryDialog):
         self.fold = _QuietButton(t("Show or hide the sidebar") + " (Ctrl+B)")
         self.fold.setParent(self.header)
         self.fold.clicked.connect(self.toggle_sidebar)
-        self.title = QLabel(t("Library"), self.header)
-        self.subtitle = QLabel(self.header)
+        self.title = _FitLabel(t("Library"), self.header)
+        self.subtitle = _FitLabel("", self.header)
         self.title.setObjectName("PhotosTitle")
         self.subtitle.setObjectName("PhotosSubtitle")
         self.search = QLineEdit()
@@ -1403,6 +1441,15 @@ class PhotosWindow(LibraryDialog):
         self._search_timer = QTimer(self, singleShot=True, interval=220)
         self._search_timer.timeout.connect(self._apply_search)
         self.search.returnPressed.connect(lambda: (self._search_timer.stop(), self._apply_search()))
+        self.search.installEventFilter(self)
+        # In a narrow window the field would push the title under Select: it is a button there (the
+        # magnifier), and opens over the title when it is clicked or Ctrl+F is pressed.
+        self._search_open = False
+        self.search_btn = _SquareButton(t("Search") + " (Ctrl+F)", radius=6)
+        self.search_btn.setAccessibleName(t("Search"))
+        self.search_btn.setParent(self.header)
+        self.search_btn.clicked.connect(self.open_search)
+        self.search_btn.hide()
         self.select_btn = _SoftButton(t("Select"), height=34, radius=6)
         self.select_btn.setParent(self.header)
         self.select_btn.clicked.connect(lambda: self.set_selecting(not self.selecting))
@@ -1543,7 +1590,7 @@ class PhotosWindow(LibraryDialog):
             s.activated.connect(fn)
             return s
 
-        key("Ctrl+F", lambda: (self.close_viewer(), self.search.setFocus(), self.search.selectAll()))
+        key("Ctrl+F", lambda: (self.close_viewer(), self.open_search()))
         key("Ctrl+B", self.toggle_sidebar)
         key(QKeySequence.ZoomIn, lambda: self._zoom_key(-1))
         key("Ctrl+=", lambda: self._zoom_key(-1))
@@ -1608,6 +1655,7 @@ class PhotosWindow(LibraryDialog):
         self.search_field.apply_palette(c)
         self.hearts = (glyph("heart", c["text"], 16), _favorite_icon(service_color(c, "photo")))
         for button, name, colour, size in ((self.fold, "layout", u["text"], 16), (self.back, "back", u["text"], 14),
+                                           (self.search_btn, "search", u["text"], 16),
                                            (self.v_info, "info", u["text"], 16), (self.v_del, "trash", u["text"], 16),
                                            (self.v_more, "more", u["text"], 16)):
             button.setIcon(glyph(name, colour.name(), size))
@@ -1635,7 +1683,26 @@ class PhotosWindow(LibraryDialog):
             # without the sidebar the pane keeps the same 8 px of material on its left as on its right
             self._base_margins = QMargins(0 if not self.side.isHidden() else 8, 4, 8, 8)
             self._fit_maximized()  # (maximized: a gap under the title bar as well)
+        if (obj is getattr(self, "search", None) and e.type() == QEvent.FocusOut and self._search_open
+                and e.reason() not in (Qt.PopupFocusReason, Qt.ActiveWindowFocusReason)):
+            # left empty: a button again in a narrow window (its own menu, or another program in
+            # front, is not leaving it). After this event: the field isn't hidden while focus moves.
+            QTimer.singleShot(0, self, self._search_left)
         return super().eventFilter(obj, e)
+
+    COMPACT_SEARCH = 480  # photos narrower than this: the search is a button until it is used
+
+    def open_search(self) -> None:
+        """Ctrl+F or the magnifier: the search field, opened first where it is a button."""
+        self._search_open = True
+        self._place_overlays()
+        self.search.setFocus(Qt.ShortcutFocusReason)
+        self.search.selectAll()
+
+    def _search_left(self) -> None:
+        if self._search_open and not self.search.hasFocus() and not self.search.text():
+            self._search_open = False
+            self._place_overlays()
 
     NARROW = 820  # below this the sidebar steps aside by itself (the ☰ button still opens it)
 
@@ -1663,17 +1730,37 @@ class PhotosWindow(LibraryDialog):
         # the title band: the sidebar switch, the title and its line, then Select and the search
         self.fold.move(10, 15)
         right = W - 18
-        sw = max(120, min(220, W - 360))
-        self.search_field.setFixedWidth(sw)
-        self.search_field.setGeometry(right - sw, 14, sw, 34)
-        right -= sw + 8
-        if not self.select_btn.isHidden():
-            bw = self.select_btn.sizeHint().width()
-            self.select_btn.setGeometry(right - bw, 14, bw, 34)
-            right -= bw + 8
         x0 = 46
-        self.title.setGeometry(x0, 9, max(40, right - x0), 32)
-        self.subtitle.setGeometry(x0, 36, max(40, right - x0), 20)
+        select_w = 0 if self.select_btn.isHidden() else self.select_btn.sizeHint().width() + 8
+        compact = W < self.COMPACT_SEARCH
+        if compact and self.search.hasFocus():
+            self._search_open = True  # (the window was made narrow while typing: the field stays)
+        # a search in progress keeps the field open, also after the keyboard has left it
+        opened = compact and (self._search_open or bool(self.search.text()))
+        if opened:  # over the title, from the sidebar switch to Select
+            sw = max(60, right - select_w - x0)
+            sx = x0
+        elif compact:
+            sw, sx = 34, right - 34
+        else:
+            sw = max(120, min(220, W - 360))
+            sx = right - sw
+        self.search_btn.setVisible(compact and not opened)
+        self.search_field.setVisible(not compact or opened)
+        self.search_btn.setGeometry(right - 34, 14, 34, 34)
+        if not compact or opened:
+            self.search_field.setFixedWidth(sw)
+            self.search_field.setGeometry(sx, 14, sw, 34)
+        right = (right if opened else sx - 8)
+        if select_w:
+            self.select_btn.setGeometry(right - (select_w - 8), 14, select_w - 8, 34)
+            right -= select_w
+        # the title and its line take what is left and end in … there: never under a button. (With
+        # the search open over them in a narrow window they are away until it closes.)
+        self.title.setVisible(not opened)
+        self.subtitle.setVisible(not opened)
+        self.title.setGeometry(x0, 9, max(0, right - x0), 32)
+        self.subtitle.setGeometry(x0, 36, max(0, right - x0), 20)
         self.header.raise_()
         for bar, area in ((self.grid_bar, self.grid), (self.cards_bar, self.cards_area)):
             bar.setGeometry(W - bar.WIDTH, HEAD - 6, bar.WIDTH, max(0, H - HEAD + 2))
@@ -2073,8 +2160,7 @@ class PhotosWindow(LibraryDialog):
             if d1.date() == d2.date():
                 return _day(d1)
             if (d1.year, d1.month) == (d2.year, d2.month):
-                return (f"{d1.day}.–{d2.day}. {_month(d1.month)} {d1.year}" if language() == "bs" else
-                        f"{d1.day}–{d2.day} {_month(d1.month)} {d1.year}")
+                return f"{d1.day}–{d2.day} {_month(d1.month)} {d1.year}"
             return f"{_day(d1)} – {_day(d2)}"
         if (d1.year, d1.month) == (d2.year, d2.month):
             return f"{_month(d1.month)} {d1.year}"
@@ -2720,8 +2806,10 @@ class PhotosWindow(LibraryDialog):
                 return
             return
         if k == Qt.Key_Escape:
-            if self.search.hasFocus() or self.query:
+            if self.search.hasFocus() or self.query or self._search_open:
                 self.search.clear()
+                self._search_open = False
+                self._place_overlays()  # (a narrow window: the field is a button again)
                 self.grid.setFocus()
             elif self.selecting:
                 self.set_selecting(False)

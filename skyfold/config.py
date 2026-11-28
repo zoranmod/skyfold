@@ -15,7 +15,7 @@ import sys
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
-from .i18n import set_language, t
+from .i18n import t
 
 APP_NAME = "Skyfold"
 APP_ID = "Skyfold"
@@ -83,17 +83,6 @@ def _data_dir() -> Path:
 
 DATA_DIR = _data_dir()
 SETTINGS_FILE = DATA_DIR / "settings.json"
-
-
-def _load_language() -> None:
-    """Pick the UI language before any module builds its labels (default: English)."""
-    try:
-        set_language(json.loads(SETTINGS_FILE.read_text(encoding="utf-8")).get("language", "en"))
-    except (OSError, ValueError, AttributeError, TypeError):
-        set_language("en")
-
-
-_load_language()
 
 
 DATABASE = "state.sqlite3"
@@ -409,7 +398,6 @@ class Settings:
     upload_buffer_mb: int = 0  # send buffer per upload connection in MB; 0 = Windows decides (automatic)
     full_check_hours: int = 24  # safety-net full read; everyday syncs only read changes
     folder_structure: str = "flat"
-    language: str = "en"
     theme: str = "system"  # system | light | dark | oled
     drive_enabled: bool = False
     drive_dir: str = field(default_factory=lambda: str(Path.home() / "iCloud Drive"))

@@ -430,7 +430,7 @@ def update_window() -> None:
         "- Zoom you can see: − 100% + in Notes and Photos.", "",
         "## Smaller things", "",
         "- Signing in looks like the first-run steps.",
-        "- Counts read naturally in Bosnian and English."])
+        "- Counts read naturally ("1 photo")."])
     rel = Release("1.2.0", notes, "https://github.com/zoranmod/skyfold/releases/tag/v1.2.0", "", "")
     save(dialogs.UpdateDialog(rel, True, c), "update.png")
 

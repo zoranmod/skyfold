@@ -160,18 +160,13 @@ def _row_colors(c: dict[str, str]) -> dict:
 
 
 def _long_when(iso: str) -> str:
-    """'24 November 2026, 07:15' in the app's language (the note's meta line, as in the design)."""
+    """'24 November 2026, 07:15' (the note's meta line, as in the design)."""
     from PySide6.QtCore import QDateTime
-
-    from ..i18n import language
 
     stamp = QDateTime.fromString(iso, Qt.ISODate)
     if not stamp.isValid():
         return local_datetime(iso)
-    if language() == "bs":
-        loc = QLocale(QLocale.Bosnian, QLocale.BosniaAndHerzegowina)
-    else:
-        loc = QLocale(QLocale.English, QLocale.UnitedKingdom)
+    loc = QLocale(QLocale.English, QLocale.UnitedKingdom)
     return loc.toString(stamp.toLocalTime(), "d MMMM yyyy, HH:mm")
 
 
@@ -271,10 +266,8 @@ class _Indexer(QObject):
 
 def _list_date(value: str, now: datetime | None = None) -> str:
     """The date in the list, short as in the design: the time today, the day this week ("Sat"),
-    the day and month this year ("18 Nov"), else the date. Names in the app's language; the time
+    the day and month this year ("18 Nov"), else the date. Names in English, as the app is; the time
     and the full date as Windows is set."""
-    from ..i18n import language
-
     try:
         when = datetime.fromisoformat(value)
     except ValueError:
@@ -284,10 +277,7 @@ def _list_date(value: str, now: datetime | None = None) -> str:
     today = (now or datetime.now()).date()
     stamp = QDateTime(when)
     system = QLocale.system()
-    if language() == "bs":
-        names = QLocale(QLocale.Bosnian, QLocale.BosniaAndHerzegowina)
-    else:
-        names = QLocale(QLocale.English, QLocale.UnitedStates)  # "Sep", not "Sept"
+    names = QLocale(QLocale.English, QLocale.UnitedStates)  # "Sep", not "Sept"
     days = (today - when.date()).days
     if days == 0:
         return system.toString(stamp.time(), QLocale.ShortFormat)
