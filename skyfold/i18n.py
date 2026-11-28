@@ -783,6 +783,8 @@ BS: dict[str, str] = {
     "Downloading…": "Preuzimam…",
     "Installing… Skyfold closes and starts again.": "Instaliram… Skyfold se zatvara i ponovo pokreće.",
     "The update couldn't be done: {error}": 'Ažuriranje nije uspjelo: {error}',
+    "Skyfold is still finishing a transfer, so the update isn't installed yet. Try again in a moment.":
+        "Skyfold još završava prijenos, pa ažuriranje još nije instalirano. Pokušaj ponovo za koji trenutak.",
     "Downloading… {pct}%": "Preuzimam… {pct}%",
     "Update": "Ažuriraj",
     "Skyfold {version} is available.": "Dostupan je Skyfold {version}.",

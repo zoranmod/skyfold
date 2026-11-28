@@ -659,6 +659,10 @@ class SyncWorker(QObject):
             self._drive_thread = threading.Thread(target=self._drive_loop, name="SkyfoldDrive", daemon=True)
             self._drive_thread.start()
 
+    def working(self) -> bool:
+        """Thread-safe: is a round, or a Drive pass in its own thread, running right now?"""
+        return bool(self.busy) or self.drive_running()
+
     def drive_running(self) -> bool:
         t_ = self._drive_thread
         return t_ is not None and t_.is_alive()

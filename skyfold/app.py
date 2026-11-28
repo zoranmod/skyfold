@@ -181,6 +181,41 @@ class _RedactEmails(logging.Filter):
 
 _MUTEX = None
 
+# How long Quit waits for work the sync worker had already started (a file on its way) once it has
+# been told to stop. The windows keep answering meanwhile. An update waits this long for the worker to
+# come to rest before it is handed to the installer; if it doesn't, the update is put off instead.
+QUIT_WAIT = 30.0
+UPDATE_WAIT = 30.0
+
+
+def _when(ready, seconds: float, then, late) -> None:
+    """Call then() as soon as ready() is true, or late() if it still isn't after `seconds`. Never
+    blocks: it looks again from the event loop every 50 ms, so the windows stay responsive."""
+    import time
+
+    deadline = time.monotonic() + seconds
+
+    def look() -> None:
+        if ready():
+            then()
+        elif time.monotonic() >= deadline:
+            late()
+        else:
+            QTimer.singleShot(50, look)
+
+    look()
+
+
+def _exit_now() -> None:
+    """Leave although the sync worker is still inside a request that doesn't end. Going through Qt's
+    normal exit would tear its thread down while it runs (a crash); this ends the process like a
+    power cut instead, which every file Skyfold writes is made for: the databases are SQLite (a
+    change that wasn't finished is rolled back when they are next opened), settings and pages are
+    written under another name and renamed, and a file half downloaded is a .skyfold-tmp- file that a
+    later sync removes."""
+    logging.shutdown()  # (the log's last lines reach the file)
+    os._exit(0)
+
 
 def _single_instance_mutex(name: str):
     """A named mutex per Windows user: the one sure "already running" signal (two quick launches can
@@ -589,21 +624,55 @@ class Controller(QObject):
         from . import updater
 
         dlg = UpdateDialog(self._release, updater.can_install())
+        dlg.ready.connect(lambda new: Controller._install_update(self, dlg, new))
+        self._show_dialog("update", dlg)
 
-        def ready(new) -> None:
+    def _install_update(self, dlg, new) -> None:
+        """The new version is downloaded and checked. It is handed to the installer (which swaps the
+        files once Skyfold has closed) only when the sync worker has come to rest: the running round is
+        stopped like Stop does, and what it had started gets UPDATE_WAIT seconds to end. If it is still
+        busy then, nothing is handed over: this version keeps running and syncing, and the window says
+        so. Never blocks the windows while it waits."""
+        from . import updater
+
+        worker = getattr(self, "worker", None)  # (none for a test double of the controller)
+
+        def at_rest() -> bool:
+            return worker is None or not worker.working()
+
+        def hand_over() -> None:
+            if getattr(dlg, "_cancel", False):
+                log.info("Update: the window was closed while waiting; not installed")
+                return
+            if worker is not None:
+                worker._closing = True  # from here on nothing new starts (a round beginning now ends at once)
+                if worker.working():  # one began in that very moment: put off like any busy worker
+                    worker._closing = False
+                    return put_off()
             try:
                 updater.start_install(new)
             except Exception as exc:  # noqa: BLE001
                 from .safelog import brief, describe
 
+                if worker is not None:
+                    worker._closing = False  # this version keeps running: it syncs on
                 log.error("Update couldn't be started: %s", describe(exc))
                 dlg.install_failed(t("The update couldn't be done: {error}", error=brief(exc)))
                 warn(dlg, APP_NAME, t("The update couldn't be done: {error}", error=brief(exc)))
                 return
             self.quit()
 
-        dlg.ready.connect(ready)
-        self._show_dialog("update", dlg)
+        def put_off() -> None:
+            log.warning("Update put off: the sync worker was still busy after %d s", UPDATE_WAIT)
+            dlg.install_failed(t("Skyfold is still finishing a transfer, so the update isn't installed yet. "
+                                 "Try again in a moment."))
+            req = getattr(self, "req", None)
+            if req is not None:
+                req.syncNow.emit(False)  # the round stopped for the update is taken up again
+
+        if worker is not None:
+            worker.cancel()
+        _when(at_rest, UPDATE_WAIT, hand_over, put_off)
 
     # actions --------------------------------------------------------------------
     def open_folder(self, which: str = "photos") -> None:
@@ -984,6 +1053,13 @@ class Controller(QObject):
         self._show_dialog("pending", dlg)
 
     def quit(self) -> None:
+        """Stop the worker, let what it had started come to an end, and only then leave. The wait
+        never blocks the windows (it used to: 3 s, after which Skyfold left with a transfer still
+        running). A worker that is still busy after QUIT_WAIT is written to the log and left behind
+        by _exit_now, which see."""
+        if getattr(self, "_quitting", False):
+            return  # (Quit again while the first one waits for the worker)
+        self._quitting = True
         self.worker._closing = True  # first: a cycle still finishing must not start new work
         from .ui.dialogs import stop_tasks
 
@@ -994,9 +1070,29 @@ class Controller(QObject):
         if toasts is not None:
             toasts.close_all()
         self.tray.hide()
-        self.thread.quit()
-        self.thread.wait(3000)
-        self.app.quit()
+        Controller._hide_windows(self)  # nothing of Skyfold stays on screen while the worker finishes
+        self.thread.quit()  # (its event loop ends once the slot running now returns)
+        drive_running = getattr(self.worker, "drive_running", lambda: False)
+
+        def stopped() -> bool:
+            # wait(0) only asks. Drive has a thread of its own, which has to have ended as well.
+            return bool(self.thread.wait(0)) and not drive_running()
+
+        def stuck() -> None:
+            log.warning("Quit: the sync worker was still busy after %d s; closing without it", QUIT_WAIT)
+            _exit_now()
+
+        _when(stopped, QUIT_WAIT, self.app.quit, stuck)
+
+    def _hide_windows(self) -> None:
+        from shiboken6 import isValid
+
+        flyout = getattr(self, "flyout", None)
+        if flyout is not None and isValid(flyout):
+            flyout.hide()
+        for dlg in list(getattr(self, "_dialogs", {}).values()):
+            if dlg is not None and isValid(dlg):
+                dlg.hide()
 
     def restart(self) -> None:
         """Start a fresh copy and quit this one (used after changing the language)."""
@@ -1194,6 +1290,8 @@ def main() -> int:
                 if bytes(conn.readAll()).strip() == b"quit":  # `Skyfold.exe --quit`: close cleanly
                     log.info("Quit requested by another Skyfold process")
                     ctl.quit()
+                elif getattr(ctl, "_quitting", False):
+                    pass  # closing, only waiting for the worker: the panel doesn't come back
                 else:
                     ctl.flyout.show_at(ctl.tray.geometry())
 
