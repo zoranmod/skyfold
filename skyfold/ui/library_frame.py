@@ -174,26 +174,30 @@ class _Corner(QWidget):
         # between two pixels: the two pictures are made on the pixel grid itself, so they stay sharp.
         to_device = p.deviceTransform()
         dpr = to_device.m11()
-        ox, oy = math.floor(to_device.dx() + 1e-6), math.floor(to_device.dy() + 1e-6)
-        fx, fy = max(0.0, to_device.dx() - ox), max(0.0, to_device.dy() - oy)
+        fx, fy = to_device.dx() % 1.0, to_device.dy() % 1.0
+        if fx > 1 - 1e-6:  # (a whole pixel, but for rounding)
+            fx = 0.0
+        if fy > 1 - 1e-6:
+            fy = 0.0
         tint = _ui(self)["tint"]
-        key = (self.geometry(), pane.size(), dpr, ox, oy, fx, fy, tint.rgba(), pane.fill.rgba(),
-               pane.stroke.rgba(), pane.shade.rgba())
+        key = (self.geometry(), pane.size(), dpr, fx, fy, tint.rgba(), pane.fill.rgba(), pane.stroke.rgba(),
+               pane.shade.rgba())
         if key != self._key:  # (kept: while photos scroll, a corner is two small pictures to draw)
             self._key = key
-            self._cut, self._under = self._pictures(pane, dpr, ox, oy, fx, fy, tint)
+            self._cut, self._under = self._pictures(pane, dpr, fx, fy, tint)
         origin = QPointF(-fx / dpr, -fy / dpr)
         p.setCompositionMode(QPainter.CompositionMode_DestinationOut)
         p.drawImage(origin, self._cut)
         p.setCompositionMode(QPainter.CompositionMode_Plus)
         p.drawImage(origin, self._under)
 
-    def _pictures(self, pane: SoftCard, dpr: float, ox: int, oy: int, fx: float, fy: float,
-                  tint: QColor) -> tuple[QImage, QImage]:
+    def _pictures(self, pane: SoftCard, dpr: float, fx: float, fy: float, tint: QColor) -> tuple[QImage, QImage]:
         """cut: how much of each pixel is taken out (everything but the inside of the pane's
         hairline). under: the window without the pane's children, as much of it as was taken out."""
         size = (math.ceil(self.width() * dpr + fx), math.ceil(self.height() * dpr + fy))
-        to_pixels = QTransform.fromTranslate(-self.x(), -self.y()) * QTransform.fromScale(dpr, dpr)             * QTransform.fromTranslate(fx, fy)  # the pane's coordinates to this picture's pixels
+        # the pane's coordinates to this picture's pixels (which are the screen's own)
+        to_pixels = (QTransform.fromTranslate(-self.x(), -self.y()) * QTransform.fromScale(dpr, dpr)
+                     * QTransform.fromTranslate(fx, fy))
 
         def canvas() -> tuple[QImage, QPainter]:
             img = QImage(*size, QImage.Format_ARGB32_Premultiplied)
@@ -207,9 +211,11 @@ class _Corner(QWidget):
         # 150 % a side between two pixels would take a faint line off the photos beside the corner.
         card = to_pixels.map(pane.card_path())
         box, half = card.boundingRect(), dpr / 2
-        left, right = (math.floor(v + ox + 0.5) - ox for v in (box.left() + half, box.right() - half))
-        top, bottom = (math.floor(v + oy + 0.5) - oy for v in (box.top() + half, box.bottom() - half))
-        fit = QTransform.fromTranslate(-box.left(), -box.top())             * QTransform.fromScale((right - left + dpr) / box.width(), (bottom - top + dpr) / box.height())             * QTransform.fromTranslate(left - half, top - half)
+        left, right = math.floor(box.left() + half + 0.5), math.floor(box.right() - half + 0.5)
+        top, bottom = math.floor(box.top() + half + 0.5), math.floor(box.bottom() - half + 0.5)
+        fit = (QTransform.fromTranslate(-box.left(), -box.top())
+               * QTransform.fromScale((right - left + dpr) / box.width(), (bottom - top + dpr) / box.height())
+               * QTransform.fromTranslate(left - half, top - half))
         edge = fit.map(card)
         solid = QColor(0, 0, 0)
         cut, q = canvas()
